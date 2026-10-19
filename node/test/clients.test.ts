@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ClientEnv, CliRunner } from "../src/clients/client.js";
@@ -25,18 +25,23 @@ import {
   isAssayEntry,
   remoteCommand,
   serverEntry,
+  shellQuote,
   type ClientId,
   type InstallInput,
 } from "../src/clients/install-command.js";
-import { readInstalls } from "../src/clients/installs.js";
+import { installsStore, type InstallsLock } from "../src/clients/installs.js";
+import { chooseName, nameRuleL, type NameInputs } from "../src/clients/install-name.js";
 import { UrlRefused, slugWordsFor, type PrivateFiles, type ProfilePort, type ResolvedUrl } from "../src/clients/ports.js";
+import { which } from "../src/clients/client.js";
 import { CLIENTS } from "../src/clients/registry.js";
 import { SIGN_IN_HINT } from "../src/clients/server-name.js";
 import { runAdd } from "../src/commands/add-impl.js";
 import type { InstallDeps } from "../src/commands/context.js";
 import { runList } from "../src/commands/list-impl.js";
 import { runRemove } from "../src/commands/remove-impl.js";
-import { onPath } from "../src/commands/wiring.js";
+import { onPath, wiredDeps } from "../src/commands/wiring.js";
+import { readPaidUrls } from "../src/profile/profile.js";
+import { execFileSync } from "node:child_process";
 import { VERSION } from "../src/version.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
@@ -46,6 +51,8 @@ const vectors = JSON.parse(readFileSync(join(ROOT, "vectors/commands.json"), "ut
   project: { cases: { input: InstallInput; args: string[] }[] };
   add: { cases: { client: ClientId; V: string; url: string; command: string }[] };
   ownership: { cases: { name: string; entry: unknown; ours: boolean }[] };
+  quoting: { cases: { word: string; quoted: string }[] };
+  names: { cases: (NameInputs & { expect?: string; refusal?: string })[] };
 };
 const V = vectors.V;
 const MCP = "https://mcp.assay.ai";
@@ -134,6 +141,7 @@ function resolveUrl(input: string): ResolvedUrl {
   const full = input.startsWith("/") ? `${MCP}${input}` : input;
   const u = new URL(full);
   const dev = u.origin === "http://localhost:3200";
+  const environment = dev ? ("e2e" as const) : ("production" as const);
   if (u.origin !== MCP && !dev) throw new UrlRefused(`${u.origin} is not the Assay MCP origin`);
   const path = u.pathname;
   const pathAndQuery = `${path}${u.search}`;
@@ -145,12 +153,13 @@ function resolveUrl(input: string): ResolvedUrl {
       kind: "ROOT",
       slugWords: slugWordsFor({ kind: "ROOT" }, { tools: tools ? tools.split(",").map((name) => ({ name })) : null }),
       dev,
+      environment,
     };
   }
   const c = /^\/c\/([a-z-]+)$/.exec(path);
-  if (c) return { url: full, pathAndQuery, kind: "CATEGORY", slugWords: slugWordsFor({ kind: "CATEGORY", category: c[1]! }, { tools: null }), dev };
+  if (c) return { url: full, pathAndQuery, kind: "CATEGORY", slugWords: slugWordsFor({ kind: "CATEGORY", category: c[1]! }, { tools: null }), dev, environment };
   const my = /^\/my\/([a-z0-9-]+)$/.exec(path);
-  if (my) return { url: full, pathAndQuery, kind: "MY_TOOLSET", slugWords: slugWordsFor({ kind: "MY_TOOLSET", slug: my[1]! }, { tools: null }), dev };
+  if (my) return { url: full, pathAndQuery, kind: "MY_TOOLSET", slugWords: slugWordsFor({ kind: "MY_TOOLSET", slug: my[1]! }, { tools: null }), dev, environment };
   throw new UrlRefused("not an MCP URL");
 }
 
@@ -175,6 +184,7 @@ function harness(overrides: Partial<InstallDeps> = {}): Harness {
     read: (rel) => store.get(rel) ?? null,
     write: (rel, data) => void store.set(rel, data),
   };
+  const lock: InstallsLock = (fn) => Promise.resolve().then(() => fn(() => undefined));
   const profiles: ProfilePort = {
     isValidName: (n) => /^[a-z0-9][a-z0-9-]{0,31}$/.test(n),
     exists: (n) => profilesPresent.has(n),
@@ -187,7 +197,7 @@ function harness(overrides: Partial<InstallDeps> = {}): Harness {
     clientEnv,
     resolveUrl,
     profiles,
-    files,
+    installs: installsStore(files, lock),
     env: {},
     isTTY: true,
     onPath: () => false,
@@ -258,13 +268,27 @@ describe("install commands equal vectors/commands.json", () => {
     expect(isAssayEntry(c.entry)).toBe(c.ours);
   });
 
-  it("CLI invocations run the vector command (Gemini adds --scope user, its default is project)", () => {
+  it("CLI invocations run exactly the vector command", () => {
     for (const c of vectors.install.filter((v) => CLI_CLIENTS.includes(v.client))) {
       const { bin, argv } = cliInvocation(c.client, c.input);
-      const words = shellSplit(c.command as string);
-      if (c.client === "gemini") expect([bin, ...argv]).toEqual([...words.slice(0, 3), "--scope", "user", ...words.slice(3)]);
-      else expect([bin, ...argv]).toEqual(words);
+      expect([bin, ...argv]).toEqual(shellSplit(c.command as string));
     }
+  });
+
+  it.each(vectors.quoting.cases.map((c) => [c.word, c] as const))("quoting: %s", (_w, c) => {
+    expect(shellQuote(c.word)).toBe(c.quoted);
+  });
+
+  it.each(vectors.names.cases.map((c, i) => [i, c] as const))("names %#", (_i, c) => {
+    const { expect: name, refusal, ...inputs } = c;
+    const got = chooseName(inputs);
+    if (name !== undefined) {
+      expect(got).toEqual({ ok: true, name });
+      if (inputs.scope === "project") expect(name.length).toBeLessThanOrEqual(16);
+    } else {
+      expect(got).toEqual({ ok: false, message: refusal });
+    }
+    expect(nameRuleL(20, "project")).toBe(41);
   });
 
   it("refuses ranges, bad names, credentials in the URL and project log files", () => {
@@ -403,7 +427,7 @@ describe("add", () => {
     const h = harness();
     expect(await runAdd(["/c/weather", "--client", "cursor"], h.deps)).toBe(0);
     expect(h.paid).toEqual([{ profile: "default", url: "/c/weather" }]);
-    expect(readInstalls(h.deps.files)).toEqual([
+    expect(h.deps.installs.read()).toEqual([
       { client: "cursor", scope: "user", name: "assay-weather", url: `${MCP}/c/weather`, profile: "default", configPath: userConfig("cursor") },
     ]);
     expect(h.out.join("")).toContain(`Added assay-weather → ${MCP}/c/weather. Restart Cursor if it is open.`);
@@ -475,8 +499,8 @@ describe("add --scope project", () => {
     expect(entry.env === undefined || JSON.stringify(entry.env) === "{}").toBe(true);
     // R-MU-5 / R-MU-13: never allowed for paid calls from here.
     expect(h.paid).toEqual([]);
-    expect(h.out.join("")).toContain("free-only");
-    expect(readInstalls(h.deps.files)[0]).toMatchObject({ scope: "project", configPath: path });
+    expect(h.out.join("")).toContain("never allows paid calls");
+    expect(h.deps.installs.read()[0]).toMatchObject({ scope: "project", configPath: path });
   });
 
   it("project scope with ASSAY_API_KEY set → refused", async () => {
@@ -576,7 +600,7 @@ describe("remove", () => {
     expect(await runAdd(["/c/weather", "--client", client], h.deps)).toBe(0);
     expect(await runRemove(["assay-weather"], h.deps)).toBe(0);
     expect([...entriesOf(client).keys()]).toEqual(["keep"]);
-    expect(readInstalls(h.deps.files).map((r) => r.name)).toEqual(["keep"]);
+    expect(h.deps.installs.read().map((r) => r.name)).toEqual(["keep"]);
     expect(h.out.join("")).toContain("still signed in");
   });
 
@@ -603,7 +627,7 @@ describe("remove", () => {
     expect(await runAdd(["/", "--client", "windsurf"], h.deps)).toBe(0);
     writeJson(userConfig("windsurf"), { mcpServers: {} });
     expect(await runRemove(["assay"], h.deps)).toBe(0);
-    expect(readInstalls(h.deps.files)).toEqual([]);
+    expect(h.deps.installs.read()).toEqual([]);
     expect(await runRemove(["assay"], h.deps)).toBe(2);
   });
 
@@ -629,27 +653,55 @@ describe("remove", () => {
 // ---- helpers ----------------------------------------------------------------------------
 
 describe("helpers", () => {
-  it("the Codex reader takes an entry with an env table for someone else's", () => {
-    const toml = [
-      "model = \"x\"",
-      "[mcp_servers.assay]",
-      "command = \"npx\"",
-      `args = ["-y", "@assay-ai/mcp@${V}",`,
-      "  \"--name\", \"assay\"]",
-      "[mcp_servers.withenv]",
-      "command = \"npx\"",
-      `args = ["-y", "@assay-ai/mcp@${V}", "--name", "withenv"]`,
-      "[mcp_servers.withenv.env]",
-      "HOME = \"/tmp\"",
-      "[mcp_servers.inline]",
-      "command = \"npx\"",
-      `args = ["-y", "@assay-ai/mcp@${V}", "--name", "inline"]`,
-      "env = { HOME = \"/tmp\" }",
-    ].join("\n");
-    const servers = parseCodexServers(toml);
-    expect(isAssayEntry(servers.get("assay"))).toBe(true);
-    expect(isAssayEntry(servers.get("withenv"))).toBe(false);
-    expect(isAssayEntry(servers.get("inline"))).toBe(false);
+  it("the Codex reader: a real TOML parser, exact ownership, fail closed", () => {
+    const ours = `command = "npx"\nargs = ["-y", "@assay-ai/mcp@${V}", "--name", "assay"]`;
+    const codexOurs = (toml: string, name: string) => CLIENTS.codex.isOurs(parseCodexServers(toml).get(name));
+    expect(codexOurs(`model = "x"\n[mcp_servers.assay]\n${ours}\n`, "assay")).toBe(true);
+    // multi-line array, literal strings
+    expect(codexOurs(`[mcp_servers.assay]\ncommand = 'npx'\nargs = [\n  "-y",\n  '@assay-ai/mcp@${V}',\n  "--name", "assay",\n]\n`, "assay")).toBe(true);
+    // any extra key keeps the entry: env subtable, dotted env key, quoted key, inline env, another key
+    for (const extra of [
+      `${ours}\n[mcp_servers.assay.env]\nHOME = "/tmp"`,
+      `${ours}\nenv.ASSAY_API_KEY = "x"`,
+      `${ours}\n"env" = { X = "1" }`,
+      `${ours}\nenv = {}`,
+      `${ours}\ncwd = "/tmp"`,
+      `${ours}\nstartup_timeout_sec = 5`,
+    ]) {
+      expect(codexOurs(`[mcp_servers.assay]\n${extra}\n`, "assay")).toBe(false);
+    }
+    // names in any valid TOML form are seen
+    expect([...parseCodexServers(`[mcp_servers]\nassay = { command = "npx", args = [] }\n`).keys()]).toEqual(["assay"]);
+    expect([...parseCodexServers(`mcp_servers.assay.command = "npx"\n`).keys()]).toEqual(["assay"]);
+    expect([...parseCodexServers(`[mcp_servers."assay"]\ncommand = "npx"\n`).keys()]).toEqual(["assay"]);
+    expect([...parseCodexServers(`mcp_servers = { assay = { command = "uvx" } }\n`).keys()]).toEqual(["assay"]);
+    // invalid TOML or a non-table mcp_servers is refused
+    expect(() => parseCodexServers(`[mcp_servers.assay\ncommand = "npx"`)).toThrow("not valid TOML");
+    expect(() => parseCodexServers(`mcp_servers = "x"\n`)).toThrow("not a table");
+  });
+
+  it("add sees a Codex name written in another TOML form, and refuses an unreadable config", async () => {
+    const path = join(home, ".codex", "config.toml");
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, `[mcp_servers]\nassay = { command = "uvx", args = ["mine"] }\n`);
+    const h = harness();
+    expect(await runAdd(["/", "--client", "codex", "--name", "assay"], h.deps)).toBe(2);
+    expect(await runAdd(["/", "--client", "codex"], h.deps)).toBe(0);
+    expect(h.calls.at(-1)!.argv.slice(0, 3)).toEqual(["mcp", "add", "assay-2"]);
+    writeFileSync(path, `[mcp_servers.assay\n`);
+    expect(await runAdd(["/c/weather", "--client", "codex"], h.deps)).toBe(1);
+    expect(h.out.join("")).toContain("not valid TOML");
+  });
+
+  it("remove keeps a Codex entry with an extra key and warns", async () => {
+    const h = harness();
+    expect(await runAdd(["/", "--client", "codex"], h.deps)).toBe(0);
+    const path = join(home, ".codex", "config.toml");
+    writeFileSync(path, `${readFileSync(path, "utf8")}env = { X = "1" }\n`);
+    expect(await runRemove(["assay"], h.deps)).toBe(2);
+    expect(h.out.join("")).toContain("warning");
+    expect(parseCodexServers(readFileSync(path, "utf8")).has("assay")).toBe(true);
+    expect(h.calls.filter((c) => c.argv[1] === "remove")).toEqual([]);
   });
 
   it("slug words for default names", () => {
@@ -668,5 +720,240 @@ describe("helpers", () => {
     expect(onPath("claude", bin, "linux")).toBe(true);
     expect(onPath("codex", bin, "linux")).toBe(false);
     expect(onPath("gemini", bin, "linux")).toBe(false);
+  });
+});
+
+// ---- fix round 1: injection, .bak symlinks, races, PATH, CRLF, wiring ---------------------
+
+/** Every word a shell gives `printf` for `line`, so the line is parsed exactly as a user's paste would be. */
+function shellWords(shell: string, line: string): string[] {
+  const out = execFileSync(shell, ["-c", `printf '%s\\0' ${line}`], { encoding: "utf8", env: { PATH: "/usr/bin:/bin" } });
+  return out.split("\0").slice(0, -1);
+}
+
+const SHELLS = ["/bin/sh", "/bin/bash", "/bin/zsh"].filter((s) => existsSync(s));
+const HOSTILE = ["$(id)", "`id`", ";id", "&&id", "|id", "!x", "*", "?", "'", '"', "\n", " ", "\\", ">x", "<x", "~x", "=x", "(x)", "$HOME", "#x", "%0a", "é", "‮"];
+
+/** The printed shell lines for one input: every CLI install, every remote, the add one-liner, VS Code. */
+function printedLines(input: InstallInput): { line: string; url: string; json?: boolean; noName?: boolean }[] {
+  const lines: { line: string; url: string; json?: boolean; noName?: boolean }[] = [];
+  for (const client of CLI_CLIENTS) {
+    lines.push({ line: installCommand(client, input) as string, url: input.url });
+    lines.push({ line: remoteCommand(client, input) as string, url: input.url });
+    lines.push({ line: addCommand(client, input), url: input.url, noName: true });
+  }
+  lines.push({ line: installCommand("vscode", input) as string, url: input.url, json: true });
+  return lines;
+}
+
+function checkRoundTrip(shell: string, input: InstallInput): void {
+  for (const { line, url, json, noName } of printedLines(input)) {
+    const words = shellWords(shell, line);
+    if (json) {
+      expect(words.length).toBe(3);
+      expect((JSON.parse(words[2]!) as { args: string[] }).args).toContain(url);
+    } else {
+      expect(words.filter((w) => w === url)).toHaveLength(1);
+      expect(words).toEqual(shellSplit(line));
+    }
+    if (!noName) expect(json ? JSON.parse(words[2]!).name : words).toContain(input.name);
+  }
+}
+
+describe("printed commands survive the shell (I3)", () => {
+  it.each(SHELLS)("each metacharacter is either refused or comes back as one identical word: %s", (shell) => {
+    let accepted = 0;
+    for (const bad of HOSTILE) {
+      const input: InstallInput = { V, url: `${MCP}/c/a${bad}b`, name: "assay-x" };
+      let ok = true;
+      try {
+        installCommand("claude-code", input);
+      } catch {
+        ok = false;
+      }
+      if (!ok) {
+        for (const client of CLIENT_IDS) expect(() => installCommand(client, input)).toThrow();
+        expect(() => addCommand("cursor", input)).toThrow();
+        continue;
+      }
+      accepted += 1;
+      checkRoundTrip(shell, input);
+    }
+    expect(accepted).toBeGreaterThan(5);
+  });
+
+  it("property: random hostile URLs and names never break out of their word", () => {
+    // mulberry32: a fixed seed, so a failure reproduces
+    let seed = 0x2b11;
+    const rand = (n: number): number => {
+      seed = (seed + 0x6d2b79f5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return (((t ^ (t >>> 14)) >>> 0) / 4294967296) * n | 0;
+    };
+    const safe = ["a", "z", "0", "-", "_", ".", "/", ":", "@", ",", "=", "+", "%"];
+    const shellMeta = ["&", "$", "(", ")", ";", "!", "*", "?", "=", "~"];
+    const alphabet = [...safe, ...safe, ...safe, ...shellMeta, ...shellMeta, ...shellMeta, ...HOSTILE];
+    let accepted = 0;
+    for (let i = 0; i < 200; i += 1) {
+      const tail = Array.from({ length: 1 + rand(6) }, () => alphabet[rand(alphabet.length)]).join("");
+      const name = rand(4) === 0 ? `a${tail}` : "assay-p";
+      const input: InstallInput = { V, url: `${MCP}/c/${tail}`, name };
+      let lines;
+      try {
+        lines = printedLines(input);
+      } catch (err) {
+        expect((err as Error).name).toBe("InstallInputError");
+        continue;
+      }
+      accepted += 1;
+      expect(lines.length).toBeGreaterThan(0);
+      checkRoundTrip(SHELLS[0]!, input);
+    }
+    expect(accepted).toBeGreaterThan(20);
+  });
+});
+
+describe(".bak symlinks are replaced, never followed (I4)", () => {
+  it("project scope", async () => {
+    const victim = join(outside, "victim");
+    writeFileSync(victim, "keep me");
+    mkdirSync(join(project, ".cursor"));
+    writeJson(join(project, ".cursor", "mcp.json"), { mcpServers: {} });
+    symlinkSync(victim, join(project, ".cursor", "mcp.json.bak"));
+    const h = harness();
+    expect(await runAdd(["/", "--client", "cursor", "--scope", "project"], h.deps)).toBe(0);
+    expect(readFileSync(victim, "utf8")).toBe("keep me");
+    const bak = join(project, ".cursor", "mcp.json.bak");
+    expect(lstatSync(bak).isFile()).toBe(true);
+    expect(readJson(bak)).toEqual({ mcpServers: {} });
+    expect(h.out.join("")).toContain(".bak; do not commit it");
+  });
+
+  it("user scope", async () => {
+    const victim = join(outside, "victim");
+    writeFileSync(victim, "keep me");
+    const path = userConfig("claude-desktop");
+    writeJson(path, { mcpServers: {} });
+    symlinkSync(victim, `${path}.bak`);
+    const h = harness();
+    expect(await runAdd(["/", "--client", "claude-desktop"], h.deps)).toBe(0);
+    expect(readFileSync(victim, "utf8")).toBe("keep me");
+    expect(lstatSync(`${path}.bak`).isFile()).toBe(true);
+  });
+});
+
+describe("other fixes", () => {
+  it("project-scope names fit the 16-character budget (I1)", async () => {
+    const h = harness();
+    writeFileSync(join(project, "x"), "");
+    expect(await runAdd(["/my/twitter-kit", "--client", "cursor", "--scope", "project"], h.deps)).toBe(0);
+    expect([...entriesOf("cursor", "project").keys()]).toEqual(["assay-twitter"]);
+    expect(await runAdd(["/", "--client", "cursor", "--scope", "project", "--name", "a-seventeen-chars"], h.deps)).toBe(2);
+    expect(h.out.join("")).toContain("budgets 16 characters");
+    expect(await runAdd(["/my/twitter-kit", "--client", "cursor"], h.deps)).toBe(0);
+    expect([...entriesOf("cursor").keys()]).toEqual(["assay-twitter-kit"]);
+  });
+
+  it.each(CLIENT_IDS)("uninstall re-checks ownership on its own read (M4): %s", async (client) => {
+    const h = harness();
+    expect(await runAdd(["/", "--client", client], h.deps)).toBe(0);
+    const adapter = CLIENTS[client];
+    const target = adapter.target("user", h.deps.clientEnv);
+    // the entry changes between remove's check and the uninstall
+    const path = userConfig(client);
+    if (client === "codex") writeFileSync(path, `[mcp_servers.assay]\ncommand = "uvx"\nargs = ["mine"]\n`);
+    else {
+      const key = client === "vscode" ? "servers" : "mcpServers";
+      writeJson(path, { [key]: { assay: { command: "uvx", args: ["mine"] } } });
+    }
+    await expect(adapter.uninstall(target, "assay", h.deps.clientEnv)).rejects.toThrow("left unchanged");
+    expect(entriesOf(client).has("assay")).toBe(true);
+  });
+
+  it("records the install even when allowing paid calls fails (M5)", async () => {
+    const h = harness();
+    h.deps.profiles.addPaidUrl = () => Promise.reject(new Error("lock busy"));
+    expect(await runAdd(["/c/weather", "--client", "cursor"], h.deps)).toBe(0);
+    expect(h.deps.installs.read()).toHaveLength(1);
+    expect(h.out.join("")).toContain("allow-paid");
+  });
+
+  it("which skips empty and relative PATH entries (M7)", () => {
+    const bin = join(base, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "claude"), "#!/bin/sh\n", { mode: 0o755 });
+    writeFileSync(join(project, "claude"), "#!/bin/sh\n", { mode: 0o755 });
+    const rel = relative(process.cwd(), project);
+    expect(which("claude", `:.:${rel}:${bin}`, "linux")).toBe(join(bin, "claude"));
+    expect(which("claude", `:.:${rel}`, "linux")).toBeNull();
+  });
+
+  it("keeps CRLF line endings (M8)", async () => {
+    const path = userConfig("cursor");
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, '{\r\n  "mcpServers": {}\r\n}\r\n');
+    const h = harness();
+    expect(await runAdd(["/", "--client", "cursor"], h.deps)).toBe(0);
+    const text = readFileSync(path, "utf8");
+    expect(text).toContain("\r\n");
+    expect(text.replace(/\r\n/g, "")).not.toContain("\n");
+  });
+});
+
+describe("wired to the URL parser, {dir} files and the profile store", () => {
+  function wired(isTTY = true) {
+    const out: string[] = [];
+    const calls: { bin: string; argv: string[]; cwd: string }[] = [];
+    const dir = join(base, "cfg");
+    const deps = wiredDeps({
+      dir,
+      home,
+      cwd: project,
+      platform: "linux",
+      env: {},
+      run: fakeCliRunner(calls),
+      isTTY,
+      print: (t) => void out.push(t),
+      ask: () => Promise.resolve(null),
+      onPath: () => false,
+    });
+    return { deps, out, dir };
+  }
+
+  it("add → paid-urls and installs.json under {dir}, list, remove", async () => {
+    const { deps, out, dir } = wired();
+    expect(await runAdd(["/c/weather", "--client", "cursor"], deps)).toBe(0);
+    expect(await runAdd([`${MCP}/?tools=get_weather`, "--client", "cursor"], deps)).toBe(0);
+    // signed out (no tools/list yet): L = 48, so `/c/weather` gets `assay` and `assay-get` (9) just fits
+    expect([...entriesOf("cursor").keys()]).toEqual(["assay", "assay-get"]);
+    expect(readPaidUrls({ dir, name: "default" })).toEqual(["/", "/c/weather", "/?tools=get_weather"]);
+    const installs = join(dir, "installs.json");
+    expect(lstatSync(installs).mode & 0o777).toBe(0o600);
+    expect((JSON.parse(readFileSync(installs, "utf8")) as unknown[]).length).toBe(2);
+    out.length = 0;
+    expect(await runList([], deps)).toBe(0);
+    expect(out.join("")).toMatch(/assay {2}cursor \(user\) {2}→ https:\/\/mcp\.assay\.ai\/c\/weather {2}ok/);
+    expect(await runRemove(["assay"], deps)).toBe(0);
+    expect([...entriesOf("cursor").keys()]).toEqual(["assay-get"]);
+    expect(deps.installs.read().map((r) => r.name)).toEqual(["assay-get"]);
+  });
+
+  it("canonicalises like the server and refuses other origins and unknown paths", async () => {
+    const { deps } = wired();
+    expect(deps.resolveUrl("/c/weather?discovery=auto").url).toBe(`${MCP}/c/weather`);
+    expect(() => deps.resolveUrl("https://evil.example/c/weather")).toThrow(UrlRefused);
+    expect(() => deps.resolveUrl("http://localhost:3200/")).toThrow(UrlRefused);
+    expect(() => deps.resolveUrl("/oauth/authorize")).toThrow(UrlRefused);
+    expect(() => deps.resolveUrl("/c/$(id)")).toThrow(UrlRefused);
+    expect(await runAdd(["/nope/x", "--client", "cursor"], deps)).toBe(2);
+    expect(existsSync(userConfig("cursor"))).toBe(false);
+  });
+
+  it("project scope: only an existing profile; no paid-urls write", async () => {
+    const { deps, dir } = wired();
+    expect(await runAdd(["/c/weather", "--client", "cursor", "--scope", "project", "--profile", "work"], deps)).toBe(2);
+    expect(await runAdd(["/c/weather", "--client", "cursor", "--scope", "project"], deps)).toBe(0);
+    expect(existsSync(join(dir, "profiles", "default.paid-urls.json"))).toBe(false);
   });
 });

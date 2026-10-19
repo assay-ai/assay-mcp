@@ -67,11 +67,3 @@ describe("main", () => {
   });
 });
 
-describe("add, list and remove before the profile store is wired", () => {
-  it.each([["add", "/"], ["list"], ["remove", "assay"]])("%s fails closed (exit 1), nothing on stdout", async (...argv) => {
-    const { out, err } = capture();
-    expect(await main(argv)).toBe(1);
-    expect(out).toEqual([]);
-    expect(err.join("")).toContain("not available in this build yet");
-  });
-});

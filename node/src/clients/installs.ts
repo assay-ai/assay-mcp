@@ -1,4 +1,8 @@
-/** `{dir}/installs.json`: `[{client, scope, name, url, profile, configPath}]` (spec 7.4). No secrets, written by `add`/`remove`. */
+/**
+ * `{dir}/installs.json`: `[{client, scope, name, url, profile, configPath}]` (spec 7.4). No
+ * secrets. Every read-modify-write runs under a lock (the Task 2.5 profile lock, see
+ * `commands/wiring.ts`), so two `add`/`remove` runs never lose each other's record.
+ */
 import { isClientId, type ClientId, type Scope } from "./install-command.js";
 import type { PrivateFiles } from "./ports.js";
 import { isValidName } from "./server-name.js";
@@ -16,6 +20,15 @@ export interface InstallRecord {
 
 export class InstallsError extends Error {
   override readonly name = "InstallsError";
+}
+
+/** Runs `fn` while holding the lock; `assertHeld` throws if the lock was lost, and is called right before the write. */
+export type InstallsLock = <T>(fn: (assertHeld: () => void) => T) => Promise<T>;
+
+export interface InstallsStore {
+  read(): InstallRecord[];
+  /** Read, change and write under the lock. */
+  update(change: (records: InstallRecord[]) => InstallRecord[]): Promise<void>;
 }
 
 function isRecord(v: unknown): v is InstallRecord {
@@ -48,9 +61,21 @@ export function readInstalls(files: PrivateFiles): InstallRecord[] {
   return data;
 }
 
-export function writeInstalls(files: PrivateFiles, records: readonly InstallRecord[]): void {
+function serialize(records: readonly InstallRecord[]): string {
   const clean = records.map(({ client, scope, name, url, profile, configPath }) => ({ client, scope, name, url, profile, configPath }));
-  files.write(INSTALLS_FILE, `${JSON.stringify(clean, null, 2)}\n`);
+  return `${JSON.stringify(clean, null, 2)}\n`;
+}
+
+export function installsStore(files: PrivateFiles, lock: InstallsLock): InstallsStore {
+  return {
+    read: () => readInstalls(files),
+    update: (change) =>
+      lock((assertHeld) => {
+        const next = change(readInstalls(files));
+        assertHeld();
+        files.write(INSTALLS_FILE, serialize(next));
+      }),
+  };
 }
 
 function sameInstall(a: InstallRecord, b: Pick<InstallRecord, "client" | "name" | "configPath">): boolean {
@@ -58,10 +83,10 @@ function sameInstall(a: InstallRecord, b: Pick<InstallRecord, "client" | "name" 
 }
 
 /** Adds or replaces the record for (client, name, configPath). */
-export function recordInstall(files: PrivateFiles, record: InstallRecord): void {
-  writeInstalls(files, [...readInstalls(files).filter((r) => !sameInstall(r, record)), record]);
+export function recordInstall(store: InstallsStore, record: InstallRecord): Promise<void> {
+  return store.update((records) => [...records.filter((r) => !sameInstall(r, record)), record]);
 }
 
-export function forgetInstall(files: PrivateFiles, record: Pick<InstallRecord, "client" | "name" | "configPath">): void {
-  writeInstalls(files, readInstalls(files).filter((r) => !sameInstall(r, record)));
+export function forgetInstall(store: InstallsStore, record: Pick<InstallRecord, "client" | "name" | "configPath">): Promise<void> {
+  return store.update((records) => records.filter((r) => !sameInstall(r, record)));
 }

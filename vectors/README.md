@@ -61,4 +61,5 @@ The spec 7.12 install commands for every client, with `V = 1.2.3` standing in fo
   - `node/test/clients.test.ts` (`node/src/clients/install-command.ts`, and `add`'s written entries, R-MU-9);
   - the README install table, with `1.2.3` replaced by the package version (R-WEB-7, this repo's half);
   - the frontend Connect UI commands (`assay-frontend/src/features/buyer-money/mcp-config.ts`, Part 3).
-- Shell words are single-quoted only when a POSIX shell would change them (a URL with `?` or `&`). The Cursor link percent-encodes its base64 `config`.
+- `quoting`: words outside `[A-Za-z0-9_./:@,=+%-]` are POSIX single-quoted (a URL with `?`, `&`, `$`, `;`, `!`, `*`, parentheses). The Cursor link percent-encodes its base64 `config`. Gemini passes `--scope user` (spec 7.12 amendment).
+- `names`: the server name `add` picks per scope; project-scope names fit the proxy's 16-character no-name budget.

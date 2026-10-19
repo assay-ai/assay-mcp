@@ -1,5 +1,5 @@
 {
-  "note": "Spec 7.12 install commands with V = 1.2.3 (a stand-in: the README uses the package version in its place). Source of truth for node/src/clients/install-command.ts, the README (R-WEB-7) and the Connect UI (R-MU-9, Task 3.x). `command` is the paid-capable user-scope install (a POSIX shell line, or the config object for file clients); `entry` is what lands in the client config under the name; `link` is the one-click install link; `remote` is the free-only remote alternative (null where it is a settings screen). Shell words are single-quoted only when a POSIX shell would otherwise change them. The Cursor link percent-encodes its base64 config.",
+  "note": "Spec 7.12 install commands with V = 1.2.3 (a stand-in: the README uses the package version in its place). Source of truth for node/src/clients/install-command.ts, the README (R-WEB-7) and the Connect UI (R-MU-9, Task 3.x). `command` is the paid-capable user-scope install (a POSIX shell line, or the config object for file clients); `entry` is what lands in the client config under the name; `link` is the one-click install link; `remote` is the free-only remote alternative (null where it is a settings screen). Shell words outside [A-Za-z0-9_./:@,=+%-] are POSIX single-quoted (spec 7.12 amendment: a URL with ? or & is quoted). Gemini passes --scope user, its mcp add defaults to project scope. The Cursor link percent-encodes its base64 config.",
   "V": "1.2.3",
   "install": [
     {
@@ -150,7 +150,7 @@
         "url": "https://mcp.assay.ai/",
         "name": "assay"
       },
-      "command": "gemini mcp add assay npx -y @assay-ai/mcp@1.2.3 --name assay",
+      "command": "gemini mcp add --scope user assay npx -y @assay-ai/mcp@1.2.3 --name assay",
       "entry": {
         "command": "npx",
         "args": [
@@ -161,7 +161,7 @@
         ]
       },
       "link": null,
-      "remote": "gemini mcp add --transport http assay https://mcp.assay.ai/"
+      "remote": "gemini mcp add --transport http --scope user assay https://mcp.assay.ai/"
     },
     {
       "client": "claude-desktop",
@@ -357,7 +357,7 @@
         "url": "https://mcp.assay.ai/my/weather",
         "name": "assay-weather"
       },
-      "command": "gemini mcp add assay-weather npx -y @assay-ai/mcp@1.2.3 --url https://mcp.assay.ai/my/weather --name assay-weather",
+      "command": "gemini mcp add --scope user assay-weather npx -y @assay-ai/mcp@1.2.3 --url https://mcp.assay.ai/my/weather --name assay-weather",
       "entry": {
         "command": "npx",
         "args": [
@@ -370,7 +370,7 @@
         ]
       },
       "link": null,
-      "remote": "gemini mcp add --transport http assay-weather https://mcp.assay.ai/my/weather"
+      "remote": "gemini mcp add --transport http --scope user assay-weather https://mcp.assay.ai/my/weather"
     },
     {
       "client": "claude-desktop",
@@ -570,7 +570,7 @@
         "url": "https://mcp.assay.ai/@acme/weather-kit@3",
         "name": "assay-weather-kit"
       },
-      "command": "gemini mcp add assay-weather-kit npx -y @assay-ai/mcp@1.2.3 --url https://mcp.assay.ai/@acme/weather-kit@3 --name assay-weather-kit",
+      "command": "gemini mcp add --scope user assay-weather-kit npx -y @assay-ai/mcp@1.2.3 --url https://mcp.assay.ai/@acme/weather-kit@3 --name assay-weather-kit",
       "entry": {
         "command": "npx",
         "args": [
@@ -583,7 +583,7 @@
         ]
       },
       "link": null,
-      "remote": "gemini mcp add --transport http assay-weather-kit https://mcp.assay.ai/@acme/weather-kit@3"
+      "remote": "gemini mcp add --transport http --scope user assay-weather-kit https://mcp.assay.ai/@acme/weather-kit@3"
     },
     {
       "client": "claude-desktop",
@@ -783,7 +783,7 @@
         "url": "https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1",
         "name": "assay-get"
       },
-      "command": "gemini mcp add assay-get npx -y @assay-ai/mcp@1.2.3 --url 'https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1' --name assay-get",
+      "command": "gemini mcp add --scope user assay-get npx -y @assay-ai/mcp@1.2.3 --url 'https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1' --name assay-get",
       "entry": {
         "command": "npx",
         "args": [
@@ -796,7 +796,7 @@
         ]
       },
       "link": null,
-      "remote": "gemini mcp add --transport http assay-get 'https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1'"
+      "remote": "gemini mcp add --transport http --scope user assay-get 'https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1'"
     },
     {
       "client": "claude-desktop",
@@ -1079,6 +1079,164 @@
           ]
         },
         "ours": false
+      }
+    ]
+  },
+  "quoting": {
+    "note": "shellQuote: a word outside [A-Za-z0-9_./:@,=+%-] is wrapped in single quotes; every printed command must give the URL back as one identical word in sh, bash and zsh.",
+    "cases": [
+      {
+        "word": "https://mcp.assay.ai/c/$(id)",
+        "quoted": "'https://mcp.assay.ai/c/$(id)'"
+      },
+      {
+        "word": "https://mcp.assay.ai/c/a;b",
+        "quoted": "'https://mcp.assay.ai/c/a;b'"
+      },
+      {
+        "word": "https://mcp.assay.ai/?a=1&b=2",
+        "quoted": "'https://mcp.assay.ai/?a=1&b=2'"
+      },
+      {
+        "word": "https://mcp.assay.ai/c/!x",
+        "quoted": "'https://mcp.assay.ai/c/!x'"
+      },
+      {
+        "word": "https://mcp.assay.ai/c/*",
+        "quoted": "'https://mcp.assay.ai/c/*'"
+      },
+      {
+        "word": "https://mcp.assay.ai/c/(x)",
+        "quoted": "'https://mcp.assay.ai/c/(x)'"
+      },
+      {
+        "word": "https://mcp.assay.ai/c/a$b",
+        "quoted": "'https://mcp.assay.ai/c/a$b'"
+      },
+      {
+        "word": "https://mcp.assay.ai/c/plain-path_1.2@3",
+        "quoted": "https://mcp.assay.ai/c/plain-path_1.2@3"
+      }
+    ]
+  },
+  "names": {
+    "note": "chooseName (Task 2.10 rule per scope). Project scope writes no --name, so the proxy budgets 16 characters: the rule runs with L' = max(L, 41). A typed name is refused, never shortened; the default drops slug words, then gets -2, -3, ...",
+    "cases": [
+      {
+        "scope": "user",
+        "L": 20,
+        "slugWords": [
+          "twitter",
+          "kit"
+        ],
+        "taken": [],
+        "expect": "assay-twitter-kit"
+      },
+      {
+        "scope": "project",
+        "L": 20,
+        "slugWords": [
+          "twitter",
+          "kit"
+        ],
+        "taken": [],
+        "expect": "assay-twitter"
+      },
+      {
+        "scope": "project",
+        "L": 20,
+        "slugWords": [
+          "weather"
+        ],
+        "taken": [],
+        "expect": "assay-weather"
+      },
+      {
+        "scope": "project",
+        "L": 20,
+        "slugWords": [
+          "weather"
+        ],
+        "taken": [
+          "assay-weather"
+        ],
+        "expect": "assay-weather-2"
+      },
+      {
+        "scope": "project",
+        "L": 20,
+        "slugWords": [
+          "weatherforecasts"
+        ],
+        "taken": [],
+        "expect": "assay"
+      },
+      {
+        "scope": "project",
+        "L": 20,
+        "slugWords": [],
+        "taken": [
+          "assay"
+        ],
+        "expect": "assay-2"
+      },
+      {
+        "scope": "project",
+        "L": 48,
+        "slugWords": [
+          "weather"
+        ],
+        "taken": [],
+        "expect": "assay"
+      },
+      {
+        "scope": "project",
+        "L": 50,
+        "slugWords": [
+          "weather"
+        ],
+        "taken": [],
+        "expect": "assay"
+      },
+      {
+        "scope": "user",
+        "L": 20,
+        "slugWords": [],
+        "taken": [],
+        "typed": "a-seventeen-chars",
+        "expect": "a-seventeen-chars"
+      },
+      {
+        "scope": "project",
+        "L": 20,
+        "slugWords": [],
+        "taken": [],
+        "typed": "a-seventeen-chars",
+        "refusal": "`a-seventeen-chars` is too long for a project config: it carries no --name, so assay-mcp budgets 16 characters for the name. Try `a-seventeen`."
+      },
+      {
+        "scope": "project",
+        "L": 20,
+        "slugWords": [],
+        "taken": [],
+        "typed": "sixteen-chars-ok",
+        "expect": "sixteen-chars-ok"
+      },
+      {
+        "scope": "project",
+        "L": 48,
+        "slugWords": [],
+        "taken": [],
+        "typed": "assay-research",
+        "refusal": "`assay-research` is too long for this server: its longest tool is 48 characters, so the name can be at most 9. Try `assay`."
+      },
+      {
+        "scope": "project",
+        "L": 50,
+        "slugWords": [],
+        "taken": [],
+        "typed": "assay-research",
+        "refusal": "`assay-research` is too long for this server: its longest tool is 50 characters, so the name can be at most 7. Try `assay`."
       }
     ]
   }

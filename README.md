@@ -16,7 +16,7 @@ These examples connect the default URL `/`, under the server name `assay`. For a
 |---|---|
 | Claude Code | `claude mcp add --scope user assay -- npx -y @assay-ai/mcp@0.1.0 --name assay` |
 | Codex CLI | `codex mcp add assay -- npx -y @assay-ai/mcp@0.1.0 --name assay` |
-| Gemini CLI | `gemini mcp add assay npx -y @assay-ai/mcp@0.1.0 --name assay` |
+| Gemini CLI | `gemini mcp add --scope user assay npx -y @assay-ai/mcp@0.1.0 --name assay` |
 | VS Code | `code --add-mcp '{"name":"assay","type":"stdio","command":"npx","args":["-y","@assay-ai/mcp@0.1.0","--name","assay"]}'` |
 
 **Cursor** (`~/.cursor/mcp.json`), **Windsurf** (`~/.config/devin/mcp_config.json`) and **Claude Desktop** (`claude_desktop_config.json`):

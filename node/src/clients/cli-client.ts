@@ -17,16 +17,19 @@ export interface CliClientSpec {
   /** Server entries by name from the config file (empty when it does not exist). */
   read(configPath: string): Map<string, unknown>;
   removeArgv(name: string, scope: Scope): string[];
+  /** Exactly what the client stores for what `add` wrote; default {@link isAssayEntry}. */
+  isOurs?(entry: unknown): boolean;
 }
 
-function sameArgs(entry: unknown, expected: readonly string[]): boolean {
-  if (!isAssayEntry(entry)) return false;
+function sameArgs(isOurs: (e: unknown) => boolean, entry: unknown, expected: readonly string[]): boolean {
+  if (!isOurs(entry)) return false;
   const args = (entry as { args: string[] }).args;
   return args.length === expected.length && args.every((a, i) => a === expected[i]);
 }
 
 export function cliClient(spec: CliClientSpec): ClientAdapter {
   const scopes: readonly Scope[] = spec.projectRel ? ["user", "project"] : ["user"];
+  const isOurs = spec.isOurs ?? isAssayEntry;
 
   function target(scope: Scope, env: ClientEnv): Target {
     if (scope === "user") return { scope, configPath: spec.userPath(env), projectRoot: null };
@@ -62,6 +65,7 @@ export function cliClient(spec: CliClientSpec): ClientAdapter {
     entries(t) {
       return spec.read(t.configPath);
     },
+    isOurs,
     async install(t, input, { force }, env) {
       const cwd = cwdOf(t, env);
       if (spec.read(t.configPath).has(input.name)) {
@@ -71,11 +75,14 @@ export function cliClient(spec: CliClientSpec): ClientAdapter {
       const { bin, argv } = cliInvocation(spec.id, input, t.scope);
       await env.run(bin, argv, { cwd });
       const written = spec.read(t.configPath).get(input.name);
-      if (!sameArgs(written, serverEntry(spec.id, input, t.scope).args)) {
+      if (!sameArgs(isOurs, written, serverEntry(spec.id, input, t.scope).args)) {
         throw new ClientError(`${spec.label} did not write the expected entry to ${t.configPath}; check it with \`assay-mcp list\``);
       }
     },
     async uninstall(t, name, env) {
+      const current = spec.read(t.configPath);
+      if (!current.has(name)) return;
+      if (!isOurs(current.get(name))) throw new ClientError(`${spec.label}'s "${name}" is not the entry assay-mcp wrote; left unchanged`);
       await env.run(spec.bin, spec.removeArgv(name, t.scope), { cwd: cwdOf(t, env) });
       if (spec.read(t.configPath).has(name)) throw new ClientError(`${spec.label} still lists "${name}"`);
     },

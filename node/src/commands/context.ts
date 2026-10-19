@@ -1,7 +1,8 @@
 /** What `add`, `list` and `remove` run against. Tests pass their own; `wiring.ts` builds the real one. */
 import type { ClientAdapter, ClientEnv } from "../clients/client.js";
 import type { ClientId } from "../clients/install-command.js";
-import type { PrivateFiles, ProfilePort, UrlResolver } from "../clients/ports.js";
+import type { InstallsStore } from "../clients/installs.js";
+import type { ProfilePort, UrlResolver } from "../clients/ports.js";
 import { parseArgs, type ParseArgsConfig } from "node:util";
 
 export interface InstallDeps {
@@ -9,8 +10,8 @@ export interface InstallDeps {
   clientEnv: ClientEnv;
   resolveUrl: UrlResolver;
   profiles: ProfilePort;
-  /** `{dir}`, for `installs.json`. */
-  files: PrivateFiles;
+  /** `{dir}/installs.json`, written under the lock. */
+  installs: InstallsStore;
   /** The process environment (`ASSAY_API_KEY` is checked for `--scope project`). */
   env: Readonly<Record<string, string | undefined>>;
   /** stdin and stdout are both TTYs. */

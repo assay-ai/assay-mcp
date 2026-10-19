@@ -96,6 +96,8 @@ export interface JsonDoc {
   indent: string;
   bom: boolean;
   trailingNewline: boolean;
+  /** Kept as in the original. */
+  eol: "\n" | "\r\n";
 }
 
 function isPlainObject(v: unknown): v is Record<string, Json> {
@@ -106,9 +108,9 @@ function isPlainObject(v: unknown): v is Record<string, Json> {
 export function readJsonDoc(path: string): JsonDoc {
   const text = readConfigText(path);
   if (text === null || text.trim() === "") {
-    return { data: {}, original: text, indent: "  ", bom: false, trailingNewline: true };
+    return { data: {}, original: text, indent: "  ", bom: false, trailingNewline: true, eol: "\n" };
   }
-  const bom = text.startsWith("﻿");
+  const bom = text.startsWith("\uFEFF");
   const body = bom ? text.slice(1) : text;
   let data: unknown;
   try {
@@ -124,6 +126,7 @@ export function readJsonDoc(path: string): JsonDoc {
     indent: indentMatch?.[1] ?? (body.includes("\n") ? "  " : ""),
     bom,
     trailingNewline: body.endsWith("\n"),
+    eol: body.includes("\r\n") ? "\r\n" : "\n",
   };
 }
 
@@ -141,7 +144,8 @@ export function section(doc: JsonDoc, key: string, path: string): Record<string,
 
 export function serialize(doc: JsonDoc): string {
   const text = doc.indent === "" ? JSON.stringify(doc.data) : JSON.stringify(doc.data, null, doc.indent);
-  return `${doc.bom ? "﻿" : ""}${text}${doc.trailingNewline ? "\n" : ""}`;
+  const out = `${text}${doc.trailingNewline ? "\n" : ""}`;
+  return `${doc.bom ? "\uFEFF" : ""}${doc.eol === "\r\n" ? out.replace(/\n/g, "\r\n") : out}`;
 }
 
 /** Writes `data` to `path` atomically: a new temp file in the same directory, fsync, rename. */

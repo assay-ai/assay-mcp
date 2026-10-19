@@ -136,8 +136,8 @@ export interface CliInvocation {
 }
 
 /**
- * The CLI invocation for `claude-code`, `codex` and `gemini`. User scope is exactly the spec 7.12
- * command, except that Gemini gets `--scope user`: its `mcp add` defaults to project scope.
+ * The CLI invocation for `claude-code`, `codex` and `gemini`: in user scope exactly the spec 7.12
+ * command (Gemini passes `--scope user`, since its `mcp add` defaults to project scope).
  */
 export function cliInvocation(client: ClientId, input: InstallInput, scope: Scope = "user"): CliInvocation {
   const npx = ["npx", ...serverArgs(input, scope)];
@@ -174,7 +174,7 @@ export function installCommand(client: ClientId, input: InstallInput): string | 
     case "codex":
       return shellLine(["codex", "mcp", "add", input.name, "--", "npx", ...serverArgs(input)]);
     case "gemini":
-      return shellLine(["gemini", "mcp", "add", input.name, "npx", ...serverArgs(input)]);
+      return shellLine(["gemini", "mcp", "add", "--scope", "user", input.name, "npx", ...serverArgs(input)]);
     case "vscode":
       return `code --add-mcp ${shellQuote(JSON.stringify(vscodeConfig(input)))}`;
     case "cursor":
@@ -204,7 +204,7 @@ export function remoteCommand(client: ClientId, input: Pick<InstallInput, "url" 
     case "codex":
       return shellLine(["codex", "mcp", "add", input.name, "--url", input.url]);
     case "gemini":
-      return shellLine(["gemini", "mcp", "add", "--transport", "http", input.name, input.url]);
+      return shellLine(["gemini", "mcp", "add", "--transport", "http", "--scope", "user", input.name, input.url]);
     case "cursor":
       return { mcpServers: { [input.name]: { url: input.url } } };
     case "vscode":
@@ -260,4 +260,12 @@ export function entryFlag(entry: unknown, flag: "--url" | "--name" | "--profile"
   const args = (entry as { args: string[] }).args;
   for (let i = 2; i < args.length; i += 2) if (args[i] === flag) return args[i + 1] ?? null;
   return null;
+}
+
+/** {@link isAssayEntry}, and the entry has exactly these keys: what this client stores for what `add` wrote. */
+export function isExactAssayEntry(entry: unknown, keys: readonly string[]): boolean {
+  if (!isAssayEntry(entry)) return false;
+  const actual = Object.keys(entry as object).sort();
+  const expected = [...keys].sort();
+  return actual.length === expected.length && actual.every((k, i) => k === expected[i]);
 }

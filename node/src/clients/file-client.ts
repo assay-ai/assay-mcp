@@ -2,7 +2,7 @@
 import type { ClientAdapter, ClientEnv, Target } from "./client.js";
 import { ClientError } from "./client.js";
 import { projectConfigPath, projectRootOf, readJsonDoc, section, writeJsonDoc } from "./config-file.js";
-import { serverEntry, type ClientId, type Scope } from "./install-command.js";
+import { isExactAssayEntry, serverEntry, type ClientId, type Scope } from "./install-command.js";
 
 export interface FileClientSpec {
   id: ClientId;
@@ -16,6 +16,9 @@ export interface FileClientSpec {
 }
 
 export function fileClient(spec: FileClientSpec): ClientAdapter {
+  // Exactly what `install` stores: VS Code keeps `type`, the others only command and args.
+  const ourKeys = spec.id === "vscode" ? ["type", "command", "args"] : ["command", "args"];
+  const isOurs = (entry: unknown): boolean => isExactAssayEntry(entry, ourKeys);
   const scopes: readonly Scope[] = spec.projectRel ? ["user", "project"] : ["user"];
 
   function target(scope: Scope, env: ClientEnv): Target {
@@ -54,6 +57,7 @@ export function fileClient(spec: FileClientSpec): ClientAdapter {
     target,
     targetOf,
     entries,
+    isOurs,
     async install(t, input, { force }) {
       const doc = readJsonDoc(t.configPath);
       const servers = section(doc, spec.key, t.configPath);
@@ -69,6 +73,7 @@ export function fileClient(spec: FileClientSpec): ClientAdapter {
       const doc = readJsonDoc(t.configPath);
       const servers = section(doc, spec.key, t.configPath);
       if (!Object.hasOwn(servers, name)) return;
+      if (!isOurs(servers[name])) throw new ClientError(`${spec.label}'s "${name}" is not the entry assay-mcp wrote; left unchanged`);
       delete servers[name];
       writeJsonDoc(t.configPath, doc, { newFileMode: 0o600 });
     },

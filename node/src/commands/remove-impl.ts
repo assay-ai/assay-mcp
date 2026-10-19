@@ -3,8 +3,8 @@
  * record. Only an entry `add` wrote (identified by its command, not its name) is removed. It does
  * not sign out.
  */
-import { CLIENT_IDS, isAssayEntry, isClientId } from "../clients/install-command.js";
-import { forgetInstall, readInstalls, type InstallRecord } from "../clients/installs.js";
+import { CLIENT_IDS, isClientId } from "../clients/install-command.js";
+import { forgetInstall, type InstallRecord } from "../clients/installs.js";
 import { isValidName } from "../clients/server-name.js";
 import { EXIT_FATAL, EXIT_OK, EXIT_USAGE } from "../exit-codes.js";
 import { parseFlags, UsageError, type InstallDeps } from "./context.js";
@@ -14,7 +14,7 @@ export async function remove(name: string, clientId: string | undefined, deps: I
   if (clientId !== undefined && !isClientId(clientId)) {
     throw new UsageError(`unknown client "${clientId}". Use one of: ${CLIENT_IDS.join(", ")}`);
   }
-  const matches = readInstalls(deps.files).filter((r) => r.name === name && (clientId === undefined || r.client === clientId));
+  const matches = deps.installs.read().filter((r) => r.name === name && (clientId === undefined || r.client === clientId));
   if (matches.length > 1) {
     throw new UsageError(`"${name}" is installed in more than one place (${matches.map((m) => `${m.client} ${m.scope}`).join(", ")}); pass --client`);
   }
@@ -33,15 +33,17 @@ export async function remove(name: string, clientId: string | undefined, deps: I
   const entries = client.entries(target, deps.clientEnv);
   if (!entries.has(name)) {
     if (matches.length === 0) throw new UsageError(`${client.label} has no server named "${name}"`);
-    forgetInstall(deps.files, record);
+    await forgetInstall(deps.installs, record);
     deps.print(`${name} was already gone from ${client.label}; forgot it.\n`);
     return;
   }
-  if (!isAssayEntry(entries.get(name))) {
-    throw new UsageError(`${client.label}'s "${name}" was not added by assay-mcp (or was changed by hand); left unchanged`);
+  if (!client.isOurs(entries.get(name))) {
+    throw new UsageError(
+      `warning: ${client.label}'s "${name}" is not exactly the entry assay-mcp wrote (another command, an extra key such as env, or a hand edit); left unchanged. Remove it in ${client.label} if you want it gone.`,
+    );
   }
   await client.uninstall(target, name, deps.clientEnv);
-  if (matches.length === 1) forgetInstall(deps.files, record);
+  if (matches.length === 1) await forgetInstall(deps.installs, record);
   deps.print(`Removed ${name} from ${client.label}. You are still signed in; \`assay-mcp logout\` signs out.\n`);
 }
 

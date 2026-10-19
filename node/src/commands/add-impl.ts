@@ -1,9 +1,11 @@
 /** `assay-mcp add <url|/path>` (spec 8.3, Task 2.11). */
+import { existsSync } from "node:fs";
 import type { ClientAdapter } from "../clients/client.js";
-import { CLIENT_IDS, DEFAULT_PROFILE, isClientId, type ClientId, type InstallInput, type Scope } from "../clients/install-command.js";
+import { CLIENT_IDS, DEFAULT_PROFILE, isClientId, type InstallInput, type Scope } from "../clients/install-command.js";
+import { chooseName } from "../clients/install-name.js";
 import { recordInstall } from "../clients/installs.js";
 import { UrlRefused, type ResolvedUrl } from "../clients/ports.js";
-import { SIGNED_OUT_L, SIGN_IN_HINT, defaultName, fits, refusal, unique } from "../clients/server-name.js";
+import { SIGNED_OUT_L, SIGN_IN_HINT } from "../clients/server-name.js";
 import { EXIT_FATAL, EXIT_OK, EXIT_USAGE } from "../exit-codes.js";
 import { parseFlags, UsageError, type InstallDeps } from "./context.js";
 
@@ -100,34 +102,37 @@ export async function add(options: AddOptions, deps: InstallDeps): Promise<void>
   const L = measured ?? SIGNED_OUT_L;
   const taken = [...client.entries(target, deps.clientEnv).keys()];
 
-  let name: string;
-  if (options.name !== undefined) {
-    if (!fits(options.name, L)) {
-      throw new UsageError(`${refusal(options.name, L)}${measured === null ? ` ${SIGN_IN_HINT}` : ""}`);
-    }
-    if (taken.includes(options.name) && !options.force) {
-      throw new UsageError(`${client.label} already has a server named "${options.name}"; pass --force to replace it`);
-    }
-    name = options.name;
-  } else {
-    // defaultName only tells the plain root (`assay`) from everything with a slug (`assay-{slug}`);
-    // the root with `?tools=` has the first tool's word as its slug (spec 9.3).
-    name = unique(defaultName(url.slugWords.length === 0 ? "ROOT" : "CATEGORY", url.slugWords, L), taken, L);
+  const choice = chooseName({ scope: options.scope, L, slugWords: url.slugWords, taken, ...(options.name !== undefined ? { typed: options.name } : {}) });
+  if (!choice.ok) throw new UsageError(`${choice.message}${measured === null ? ` ${SIGN_IN_HINT}` : ""}`);
+  const name = choice.name;
+  if (options.name !== undefined && taken.includes(name) && !options.force) {
+    throw new UsageError(`${client.label} already has a server named "${name}"; pass --force to replace it`);
   }
 
   const input: InstallInput = { V: deps.version, url: url.url, name };
   if (options.profile !== undefined) input.profile = profile;
   if (options.logFile !== undefined) input.logFile = options.logFile;
 
+  const hadFile = existsSync(target.configPath);
   await client.install(target, input, { force: options.force }, deps.clientEnv);
+  // Recorded right after the write, so `list` and `remove` always see what was installed.
+  await recordInstall(deps.installs, { client: client.id, scope: options.scope, name, url: url.url, profile, configPath: target.configPath });
 
-  if (options.scope === "user") {
-    if (deps.isTTY) await deps.profiles.addPaidUrl(profile, url);
-    else deps.print(`Paid calls are not allowed for ${url.url} yet. Run \`assay-mcp allow-paid ${url.url}\` in a terminal.\n`);
+  const allowHint = `Run \`assay-mcp allow-paid ${url.url}\` in a terminal to allow paid calls through it.`;
+  if (options.scope === "user" && deps.isTTY) {
+    try {
+      await deps.profiles.addPaidUrl(profile, url);
+    } catch (err) {
+      deps.print(`Could not allow paid calls for ${url.url} (${(err as Error).message}). ${allowHint}\n`);
+    }
+  } else if (options.scope === "user") {
+    deps.print(`This install did not allow paid calls for ${url.url}. ${allowHint}\n`);
   } else {
-    deps.print(`Project installs are free-only until you run \`assay-mcp allow-paid ${url.url}\` in a terminal.\n`);
+    deps.print(`A project install never allows paid calls by itself. ${allowHint}\n`);
   }
-  recordInstall(deps.files, { client: client.id, scope: options.scope, name, url: url.url, profile, configPath: target.configPath });
+  if (options.scope === "project" && client.kind === "file" && hadFile) {
+    deps.print(`The previous ${target.configPath} is saved as ${target.configPath}.bak; do not commit it.\n`);
+  }
   deps.print(`Added ${name} → ${url.url}. Restart ${client.label} if it is open.\n`);
 }
 
@@ -141,5 +146,3 @@ export async function runAdd(args: readonly string[], deps: InstallDeps): Promis
     return err instanceof UsageError ? EXIT_USAGE : EXIT_FATAL;
   }
 }
-
-export type { ClientId };

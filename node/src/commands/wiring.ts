@@ -1,67 +1,35 @@
 /**
- * The real dependencies of `add`, `list` and `remove`.
+ * The real dependencies of `add`, `list` and `remove`, bound to the URL parser and origin
+ * pinning, the private `{dir}` files, and the profile store and lock.
  *
- * WIRING (when Tasks 2.4 and 2.5 merge): the three `notWired` ports below fail closed until then.
- * - `resolveUrl`: Task 2.4 `resolveDeployment` (origin pinning, dev mode) + `parseMcpAbsoluteUrl`
- *   / `parseMcpUrl` (path form) + `canonicalUrl`; `slugWords` from `slugWordsFor(parsed.path,
- *   parsed.filter)`; `dev` from the resolved deployment. Any refusal throws `UrlRefused`.
- * - `files`: Task 2.4 `readPrivateFile(configDir(), rel)` / `writePrivateFile(configDir(), rel, data)`.
- * - `profiles`: `isValidName` = 2.4 `isValidProfileName`; `exists` = 2.5 `readProfile(...) !== null`;
- *   `addPaidUrl` = 2.5 `addPaidUrl(ref, lock, url.pathAndQuery)` under the profile lock;
- *   `longestTool` = `longestTool({mode: "full", tools})` over `tools/list` with the profile's
- *   token once the proxy can do it (null keeps the signed-out L of 48, the safe side).
+ * Still open (Task 2.12): `longestTool` needs `tools/list` with the profile's token, which the
+ * proxy does not offer yet; null keeps the signed-out L of 48, the safe side.
  */
-import { accessSync, constants } from "node:fs";
 import { userInfo } from "node:os";
-import { delimiter, join } from "node:path";
 import { createInterface } from "node:readline/promises";
-import { execFileRunner } from "../clients/client.js";
-import type { PrivateFiles, ProfilePort, UrlResolver } from "../clients/ports.js";
+import { execFileRunner, which, type CliRunner } from "../clients/client.js";
+import { installsStore, type InstallsLock } from "../clients/installs.js";
+import { UrlRefused, slugWordsFor, type PrivateFiles, type ProfilePort, type UrlResolver } from "../clients/ports.js";
 import { CLIENTS } from "../clients/registry.js";
 import { builtInDeployments } from "../deployments.js";
+import { OriginError, resolveDeployment } from "../profile/deployments.js";
+import { readDevOrigins } from "../profile/dev-origins.js";
+import { withLock, type ProfileRef } from "../profile/lock.js";
+import { parseMcpAbsoluteUrl } from "../profile/mcp-url.js";
+import { configDir, isValidProfileName, readPrivateFile, writePrivateFile } from "../profile/paths.js";
+import { addPaidUrl, paidUrlKey, readProfile, readProfileFor } from "../profile/profile.js";
 import { VERSION } from "../version.js";
 import type { InstallDeps } from "./context.js";
 
-class NotWired extends Error {
-  override readonly name = "NotWired";
-}
+/**
+ * `installs.json` is shared by every profile, so it has its own lock: the profile lock protocol
+ * (spec 8.4) on the name `installs`. A profile of that name only shares the mutual exclusion.
+ */
+export const INSTALLS_LOCK_NAME = "installs";
 
-function notWired(what: string): never {
-  throw new NotWired(`${what} is not available in this build yet`);
-}
-
-const resolveUrl: UrlResolver = () => notWired("MCP URL parsing");
-
-const files: PrivateFiles = {
-  read: () => notWired("the assay-mcp config directory"),
-  write: () => notWired("the assay-mcp config directory"),
-};
-
-/** Must match Task 2.4's `isValidProfileName`; replace with that import when wiring. */
-const PROFILE_NAME = /^[a-z0-9][a-z0-9-]{0,31}$/;
-
-const profiles: ProfilePort = {
-  isValidName: (name) => PROFILE_NAME.test(name),
-  exists: () => notWired("the profile store"),
-  addPaidUrl: () => notWired("the profile store"),
-  longestTool: () => Promise.resolve(null),
-};
-
-/** True when `bin` is an executable file in a `PATH` directory (no shell, nothing run). */
+/** True when `bin` resolves to an executable in an absolute `PATH` directory (nothing is run). */
 export function onPath(bin: string, pathEnv = process.env.PATH ?? "", platform = process.platform): boolean {
-  const names = platform === "win32" ? [`${bin}.exe`, `${bin}.cmd`, bin] : [bin];
-  for (const dir of pathEnv.split(delimiter)) {
-    if (!dir) continue;
-    for (const name of names) {
-      try {
-        accessSync(join(dir, name), constants.X_OK);
-        return true;
-      } catch {
-        // not here
-      }
-    }
-  }
-  return false;
+  return which(bin, pathEnv, platform) !== null;
 }
 
 async function ask(question: string, choices: readonly string[]): Promise<string | null> {
@@ -76,19 +44,89 @@ async function ask(question: string, choices: readonly string[]): Promise<string
   }
 }
 
-export function defaultDeps(): InstallDeps {
+export interface WiringInputs {
+  /** `{dir}`. */
+  dir: string;
+  /** The OS account's home directory (client configs live under it). */
+  home: string;
+  cwd: string;
+  platform: NodeJS.Platform;
+  env: Readonly<Record<string, string | undefined>>;
+  run: CliRunner;
+  isTTY: boolean;
+  print(text: string): void;
+  ask(question: string, choices: readonly string[]): Promise<string | null>;
+  onPath(bin: string): boolean;
+}
+
+export function wiredDeps(w: WiringInputs): InstallDeps {
+  const resolveUrl: UrlResolver = (input) => {
+    let resolved;
+    try {
+      resolved = resolveDeployment({ url: input, env: w.env, devOrigins: readDevOrigins(w.dir), warn: w.print });
+    } catch (err) {
+      if (err instanceof OriginError) throw new UrlRefused(err.message);
+      throw err;
+    }
+    const parsed = parseMcpAbsoluteUrl(resolved.url, resolved.mcp);
+    if (parsed === null) throw new UrlRefused("--url is not an Assay MCP URL");
+    return {
+      url: resolved.url,
+      pathAndQuery: paidUrlKey(resolved),
+      kind: parsed.path.kind,
+      slugWords: slugWordsFor(parsed.path, parsed.filter),
+      dev: resolved.dev,
+      environment: resolved.environment,
+    };
+  };
+
+  const ref = (name: string): ProfileRef => ({ dir: w.dir, name });
+
+  const profiles: ProfilePort = {
+    isValidName: isValidProfileName,
+    exists: (name) => readProfile(ref(name)) !== null,
+    addPaidUrl: async (name, url) => {
+      await withLock(ref(name), (lock) => {
+        readProfileFor(ref(name), url.environment);
+        addPaidUrl(ref(name), lock, url.pathAndQuery);
+      });
+    },
+    longestTool: () => Promise.resolve(null),
+  };
+
+  const files: PrivateFiles = {
+    read: (rel) => readPrivateFile(w.dir, rel),
+    write: (rel, data) => writePrivateFile(w.dir, rel, data),
+  };
+  const lock: InstallsLock = (fn) => withLock(ref(INSTALLS_LOCK_NAME), (l) => fn(() => l.assertHeld()));
+
   return {
     clients: CLIENTS,
-    clientEnv: { home: userInfo().homedir, platform: process.platform, cwd: process.cwd(), env: process.env, run: execFileRunner },
+    clientEnv: { home: w.home, platform: w.platform, cwd: w.cwd, env: w.env, run: w.run },
     resolveUrl,
     profiles,
-    files,
-    env: process.env,
-    isTTY: Boolean(process.stdin.isTTY && process.stdout.isTTY),
-    onPath: (bin) => onPath(bin),
-    ask,
-    print: (text) => process.stderr.write(text),
+    installs: installsStore(files, lock),
+    env: w.env,
+    isTTY: w.isTTY,
+    onPath: w.onPath,
+    ask: w.ask,
+    print: w.print,
     version: VERSION,
     productionOrigin: builtInDeployments().production.mcp,
   };
+}
+
+export function defaultDeps(): InstallDeps {
+  return wiredDeps({
+    dir: configDir(),
+    home: userInfo().homedir,
+    cwd: process.cwd(),
+    platform: process.platform,
+    env: process.env,
+    run: execFileRunner,
+    isTTY: Boolean(process.stdin.isTTY && process.stdout.isTTY),
+    print: (text) => void process.stderr.write(text),
+    ask,
+    onPath: (bin) => onPath(bin),
+  });
 }

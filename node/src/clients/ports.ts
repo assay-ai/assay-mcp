@@ -1,12 +1,10 @@
 /**
- * The narrow interfaces `add`, `list` and `remove` need from code that lands with other tasks:
- * - the MCP URL parser and canonical form (Task 2.4, `profile/mcp-url.ts` + `profile/deployments.ts`);
- * - the private `{dir}` file store (Task 2.4, `profile/paths.ts`: `configDir`, `readPrivateFile`,
- *   `writePrivateFile`);
- * - profiles and `paid-urls.json` under the profile lock (Task 2.5, `profile/profile.ts`);
- * - `tools/list` on the URL with the profile's token (the proxy tasks).
- * `commands/wiring.ts` binds them; until those branches meet, each unbound port fails closed.
+ * The narrow interfaces `add`, `list` and `remove` run against. `commands/wiring.ts` binds them
+ * to the URL parser and origin pinning (`profile/mcp-url.ts`, `profile/deployments.ts`), the
+ * private `{dir}` files (`profile/paths.ts`) and the profile store and lock (`profile/profile.ts`,
+ * `profile/lock.ts`); tests bind them to temp directories and fakes.
  */
+import type { Environment } from "../deployments.js";
 import type { UrlKind } from "./server-name.js";
 
 /** A `--url` after the server URL parser accepted and canonicalised it. */
@@ -20,6 +18,8 @@ export interface ResolvedUrl {
   slugWords: string[];
   /** True when the origin is a dev origin (dev mode), not the built-in production MCP origin. */
   dev: boolean;
+  /** The built-in deployment the URL selected. */
+  environment: Environment;
 }
 
 export class UrlRefused extends Error {

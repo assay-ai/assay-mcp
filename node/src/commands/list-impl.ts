@@ -1,6 +1,6 @@
 /** `assay-mcp list`: `installs.json`, each checked against the client's config (spec 8.3). */
-import { entryFlag, isAssayEntry } from "../clients/install-command.js";
-import { readInstalls, type InstallRecord } from "../clients/installs.js";
+import { entryFlag } from "../clients/install-command.js";
+import type { InstallRecord } from "../clients/installs.js";
 import { EXIT_FATAL, EXIT_OK, EXIT_USAGE } from "../exit-codes.js";
 import { parseFlags, UsageError, type InstallDeps } from "./context.js";
 
@@ -18,14 +18,14 @@ export function statusOf(record: InstallRecord, deps: InstallDeps): InstallStatu
   } catch {
     return "unreadable";
   }
-  if (!isAssayEntry(entry)) return "changed";
+  if (!client.isOurs(entry)) return "changed";
   const url = entryFlag(entry, "--url");
   if (url !== null && url !== record.url) return "changed";
   return "ok";
 }
 
 export function listInstalls(deps: InstallDeps): { record: InstallRecord; status: InstallStatus }[] {
-  return readInstalls(deps.files).map((record) => ({ record, status: statusOf(record, deps) }));
+  return deps.installs.read().map((record) => ({ record, status: statusOf(record, deps) }));
 }
 
 export async function runList(args: readonly string[], deps: InstallDeps): Promise<number> {
