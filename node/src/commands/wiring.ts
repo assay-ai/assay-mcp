@@ -2,8 +2,9 @@
  * The real dependencies of `add`, `list` and `remove`, bound to the URL parser and origin
  * pinning, the private `{dir}` files, and the profile store and lock.
  *
- * Still open (Task 2.12): `longestTool` needs `tools/list` with the profile's token, which the
- * proxy does not offer yet; null keeps the signed-out L of 48, the safe side.
+ * `longestTool` (Task 2.12) measures L(u) through `tools/list` on the URL with the profile's
+ * token (or the env API key); when signed out or on any failure it is null, which keeps the
+ * signed-out L of 48, the safe side.
  */
 import { userInfo } from "node:os";
 import { createInterface } from "node:readline/promises";
@@ -12,7 +13,10 @@ import { installsStore, type InstallsLock } from "../clients/installs.js";
 import { UrlRefused, slugWordsFor, type PrivateFiles, type ProfilePort, type UrlResolver } from "../clients/ports.js";
 import { CLIENTS } from "../clients/registry.js";
 import { builtInDeployments } from "../deployments.js";
+import { apiKey } from "../oauth/api-key.js";
+import { currentAccess } from "../oauth/tokens.js";
 import { OriginError, resolveDeployment } from "../profile/deployments.js";
+import { openOsKeychain, type OsKeychain } from "../profile/keychain.js";
 import { readDevOrigins } from "../profile/dev-origins.js";
 import { withLock, type ProfileRef } from "../profile/lock.js";
 import { parseMcpAbsoluteUrl } from "../profile/mcp-url.js";
@@ -20,6 +24,7 @@ import { configDir, isValidProfileName, readPrivateFile, writePrivateFile } from
 import { addPaidUrl, paidUrlKey, readProfile, readProfileFor } from "../profile/profile.js";
 import { VERSION } from "../version.js";
 import type { InstallDeps } from "./context.js";
+import { measureLongestTool } from "./measure-tools.js";
 
 /**
  * `installs.json` is shared by every profile, so it has its own lock: the profile lock protocol
@@ -57,10 +62,42 @@ export interface WiringInputs {
   print(text: string): void;
   ask(question: string, choices: readonly string[]): Promise<string | null>;
   onPath(bin: string): boolean;
+  /** L(u) with the profile's token; null (the signed-out 48) when not given. */
+  longestTool?: ProfilePort["longestTool"];
 }
 
-export function wiredDeps(w: WiringInputs): InstallDeps {
-  const resolveUrl: UrlResolver = (input) => {
+/**
+ * L(u) from `tools/list` on the URL, authenticated like `serve` would be: the env API key
+ * (`ASSAY_API_KEY`, or `ASSAY_DEV_API_KEY` in dev mode), else the profile's OAuth token
+ * (refreshed under the lock if needed). Null when signed out or on any failure.
+ */
+export function tokenLongestTool(w: {
+  dir: string;
+  env: Readonly<Record<string, string | undefined>>;
+  openKeychain: () => Promise<OsKeychain>;
+  timeoutMs?: number;
+}): ProfilePort["longestTool"] {
+  return async (profile, url) => {
+    try {
+      const deployment = resolveDeployment({ url: url.url, env: w.env, devOrigins: readDevOrigins(w.dir), warn: () => {} });
+      let bearer = apiKey(deployment, w.env);
+      if (bearer === null) {
+        const os = await w.openKeychain();
+        await os.probe();
+        const keychain = os.forScope({ profile, environment: deployment.environment });
+        bearer = await currentAccess({ profile: { dir: w.dir, name: profile }, deployment, keychain });
+      }
+      if (bearer === null) return null;
+      return await measureLongestTool(deployment, deployment.url, bearer, w.timeoutMs !== undefined ? { timeoutMs: w.timeoutMs } : {});
+    } catch {
+      return null;
+    }
+  };
+}
+
+/** `<url|/path>` → the canonical URL, through origin pinning (dev mode included) and the server URL parser. */
+export function urlResolver(w: Pick<WiringInputs, "dir" | "env" | "print">): UrlResolver {
+  return (input) => {
     let resolved;
     try {
       resolved = resolveDeployment({ url: input, env: w.env, devOrigins: readDevOrigins(w.dir), warn: w.print });
@@ -79,6 +116,10 @@ export function wiredDeps(w: WiringInputs): InstallDeps {
       environment: resolved.environment,
     };
   };
+}
+
+export function wiredDeps(w: WiringInputs): InstallDeps {
+  const resolveUrl = urlResolver(w);
 
   const ref = (name: string): ProfileRef => ({ dir: w.dir, name });
 
@@ -91,7 +132,7 @@ export function wiredDeps(w: WiringInputs): InstallDeps {
         addPaidUrl(ref(name), lock, url.pathAndQuery);
       });
     },
-    longestTool: () => Promise.resolve(null),
+    longestTool: w.longestTool ?? (() => Promise.resolve(null)),
   };
 
   const files: PrivateFiles = {
@@ -117,8 +158,9 @@ export function wiredDeps(w: WiringInputs): InstallDeps {
 }
 
 export function defaultDeps(): InstallDeps {
+  const dir = configDir();
   return wiredDeps({
-    dir: configDir(),
+    dir,
     home: userInfo().homedir,
     cwd: process.cwd(),
     platform: process.platform,
@@ -128,5 +170,6 @@ export function defaultDeps(): InstallDeps {
     print: (text) => void process.stderr.write(text),
     ask,
     onPath: (bin) => onPath(bin),
+    longestTool: tokenLongestTool({ dir, env: process.env, openKeychain: openOsKeychain }),
   });
 }

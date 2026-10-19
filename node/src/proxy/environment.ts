@@ -1,5 +1,5 @@
-import { profileFile, readPrivateFile } from "../profile/paths.js";
 import type { ProfileRef } from "../profile/lock.js";
+import { readSettings } from "../profile/settings.js";
 
 /**
  * Environment checks at `serve` start (ruling 2.4-N1, spec §11 T13).
@@ -8,8 +8,8 @@ import type { ProfileRef } from "../profile/lock.js";
  * - `NODE_TLS_REJECT_UNAUTHORIZED=0` (certificate checks off) is refused, always;
  * - an env HTTP proxy (`NODE_USE_ENV_PROXY`, `--use-env-proxy`, `HTTPS_PROXY`, `HTTP_PROXY`,
  *   lowercase forms included) is refused unless the user opted in through the 0600 profile
- *   file `profiles/{profile}.settings.json` (`{"version":1,"allowEnvProxy":true}`), never
- *   through env;
+ *   file `profiles/{profile}.settings.json` (`{"version":1,"allowEnvProxy":true}`), written
+ *   only by `assay-mcp settings set --allow-env-proxy on` on a TTY, never through env;
  * - `NODE_EXTRA_CA_CERTS` gets a warning.
  * `NODE_OPTIONS=--require` runs before any proxy code: it is the MCP client's approval
  * boundary (accepted risk, §11 T13).
@@ -28,16 +28,13 @@ export interface ProfileSettings {
 }
 
 /**
- * The profile's settings file. Missing, unreadable, loose (not 0600, wrong owner, symlink)
- * or malformed reads as "nothing allowed": the check fails closed.
+ * The profile's settings file, through the one parser `settings set` and `settings` use
+ * (`profile/settings.ts` `readSettings`, review R1-N2). Missing, unreadable, loose (not 0600,
+ * wrong owner, symlink) or malformed reads as "nothing allowed": the check fails closed.
  */
 export function readProfileSettings(profile: ProfileRef): ProfileSettings {
   try {
-    const text = readPrivateFile(profile.dir, profileFile(profile.name, "settings"));
-    if (text === null) return { allowEnvProxy: false };
-    const v = JSON.parse(text) as Record<string, unknown> | null;
-    if (typeof v !== "object" || v === null || v.version !== 1) return { allowEnvProxy: false };
-    return { allowEnvProxy: v.allowEnvProxy === true };
+    return { allowEnvProxy: readSettings(profile).allowEnvProxy };
   } catch {
     return { allowEnvProxy: false };
   }
@@ -51,7 +48,7 @@ export function checkEnvironment(
   env: Readonly<Record<string, string | undefined>>,
   execArgv: readonly string[],
   settings: () => ProfileSettings,
-  settingsPath: string,
+  profileName: string,
 ): EnvironmentVerdict {
   const refusals: string[] = [];
   const warnings: string[] = [];
@@ -64,7 +61,7 @@ export function checkEnvironment(
   if (proxyVars.length > 0 && !settings().allowEnvProxy) {
     refusals.push(
       `${proxyVars.join(", ")} would send Assay traffic through an HTTP proxy from the environment; assay-mcp refuses to. ` +
-        `To allow it for this profile, set "allowEnvProxy": true in ${settingsPath} (a 0600 file: {"version":1,"allowEnvProxy":true}).`,
+        `To allow it for this profile, run in a terminal: assay-mcp settings set --allow-env-proxy on${profileName === "default" ? "" : ` --profile ${profileName}`}`,
     );
   }
   if (set(env.NODE_EXTRA_CA_CERTS)) {

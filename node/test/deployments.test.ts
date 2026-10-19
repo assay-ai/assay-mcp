@@ -13,7 +13,7 @@ import {
 } from "../src/deployments.js";
 
 const table = builtInDeployments();
-const ESCROW = "eip155:46630:0x1D2625efD87c2fc10b8563f3F0890072845Fcf41";
+const ESCROW = "eip155:46630:0x1eDb0E45747cfEf778bDB4f4418319efc0DD814f";
 const ASSET = "eip155:46630/erc20:0xDbbC156dD414f43f2c952C1Be0f16A0B9a826Cd3";
 
 function hostOf(url: string): string {
@@ -146,16 +146,16 @@ describe("deployments.json", () => {
 
 describe("CAIP parsing", () => {
   it("refuses wrong forms and bad checksums", () => {
-    expect(parseCaip10("0x1D2625efD87c2fc10b8563f3F0890072845Fcf41")).toBeNull();
-    expect(parseCaip10("eip155:46630:0x1d2625efd87c2fc10b8563f3f0890072845fcf4")).toBeNull();
-    expect(parseCaip10("eip155:46630:0x1D2625efD87c2fc10b8563f3F0890072845FCF41")).toBeNull();
+    expect(parseCaip10("0x1eDb0E45747cfEf778bDB4f4418319efc0DD814f")).toBeNull();
+    expect(parseCaip10("eip155:46630:0x1edb0e45747cfef778bdb4f4418319efc0dd814")).toBeNull();
+    expect(parseCaip10("eip155:46630:0x1eDb0E45747cfEf778bDB4f4418319efc0DD814F")).toBeNull();
     expect(parseCaip19Erc20("eip155:46630:0xDbbC156dD414f43f2c952C1Be0f16A0B9a826Cd3")).toBeNull();
     expect(parseCaip19Erc20("eip155:46630/erc721:0xDbbC156dD414f43f2c952C1Be0f16A0B9a826Cd3")).toBeNull();
   });
 
   it("refuses an escrow on another chain than its network key", () => {
     const d = structuredClone(table.e2e);
-    d.networks["eip155:46630"]!.escrow = "eip155:1:0x1D2625efD87c2fc10b8563f3F0890072845Fcf41";
+    d.networks["eip155:46630"]!.escrow = "eip155:1:0x1eDb0E45747cfEf778bDB4f4418319efc0DD814f";
     expect(validateDeployment("e2e", d)).toContain("e2e.networks.eip155:46630.escrow: chain does not match eip155:46630");
   });
 

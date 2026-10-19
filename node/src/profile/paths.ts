@@ -11,6 +11,7 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  unlinkSync,
   writeSync,
   type Stats,
 } from "node:fs";
@@ -259,4 +260,17 @@ export function writePrivateFile(dir: string, rel: string, data: string): void {
       closeSync(dfd);
     }
   }
+}
+
+/**
+ * Deletes a regular file inside `{dir}`; a symlink on the way or at the path is refused
+ * ({@link safeJoin}). Returns false when there was nothing to delete.
+ */
+export function deletePrivateFile(dir: string, rel: string): boolean {
+  const path = safeJoin(dir, rel);
+  const st = lstatOrNull(path);
+  if (st === null) return false;
+  if (!st.isFile()) throw new ProfilePathError(`${path} is not a regular file`);
+  unlinkSync(path);
+  return true;
 }

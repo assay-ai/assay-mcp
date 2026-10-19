@@ -43,6 +43,8 @@ Conventions in the guard vectors: amounts, caps and spend are atomic units as de
 
 Every digest and signature in `binding.json` and `vouchers.json` was recomputed independently with foundry `cast` (EIP-712 built by hand with `cast abi-encode` and `cast keccak`, and `cast wallet sign --data`), and accepted by the backend's EVM verifier (`buildVoucherMessage`, `verifyVoucherSignature`, `delegateBindingTypedData`, `verifyDelegateBindingSignature`).
 
+The `built-in-escrow` and `short-timeout-utf8-max-safe-seq` vouchers sign for the built-in `eip155:46630` escrow of `deployments.json`, so a redeploy of the escrow regenerates them (their domain separator equals the escrow's on-chain `DOMAIN_SEPARATOR()`). `backend-cast-golden` and the binding digests do not depend on the escrow.
+
 The signing key in `binding.json` and `vouchers.json` is **test only**: the well-known public anvil/hardhat default account 0. The addresses in `guards.json` are the public anvil/hardhat default accounts 0 to 4, also test only. Never fund them or use them for anything real.
 
 ## lock-protocol.json

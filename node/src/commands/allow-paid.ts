@@ -1,6 +1,7 @@
-import { notImplemented } from "./not-implemented.js";
+import { defaultProfileDeps } from "./profile-context.js";
+import { runPaidUrlChange } from "./paid-urls.js";
 
-/** `assay-mcp allow-paid`. Stub until its task lands. */
+/** `assay-mcp allow-paid <url>` (TTY only). */
 export function run(args: readonly string[]): Promise<number> {
-  return notImplemented("allow-paid", args);
+  return runPaidUrlChange("allow-paid", args, defaultProfileDeps());
 }
