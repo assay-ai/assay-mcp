@@ -110,7 +110,7 @@ function requestHashBytes(value: unknown): Hex {
 
 /**
  * Builds the wire voucher and the EIP-712 typed data the delegate key signs, from a rail-B
- * requirement (a port of `agent-cli` `buildVoucher`), for an already resolved network.
+ * requirement, for an already resolved network.
  *
  * Internal: production code reaches it only through `buildVoucher` in `voucher.ts`, which
  * resolves the network from the built-in table. `ResolvedNetwork` is branded, so a hand-built
