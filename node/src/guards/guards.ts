@@ -111,10 +111,13 @@ function erc20(value: unknown): { chain: string; address: string } | null {
   return m ? { chain: m[1]!, address: m[2]!.toLowerCase() } : null;
 }
 
+/**
+ * The same asset, as the signer compares it: the exact CAIP-19 string (checksummed address), and
+ * a readable erc20 id. Never looser than the signer, so a payment the guards accept is never
+ * refused at signing time (after the user was asked to confirm it).
+ */
 function sameAsset(a: unknown, b: unknown): boolean {
-  const x = erc20(a);
-  const y = erc20(b);
-  return x !== null && y !== null && x.chain === y.chain && x.address === y.address;
+  return typeof a === "string" && a === b && erc20(a) !== null;
 }
 
 /**
@@ -194,7 +197,8 @@ function g2(ctx: GuardContext, req: Req): Refusal | Pick<Checked, "chainId" | "d
   if (!sameAsset(money.asset, net.asset) || erc20(net.asset)!.chain !== chain[1]) {
     return refuse("G2", "G2_ASSET", "the asset is not the built-in asset");
   }
-  if (!Number.isInteger(net.decimals) || money.decimals !== net.decimals) {
+  // The signer's bound on built-in decimals (`network.internal.ts`).
+  if (!Number.isInteger(net.decimals) || net.decimals < 0 || net.decimals > 36 || money.decimals !== net.decimals) {
     return refuse("G2", "G2_DECIMALS", "the asset decimals are not the built-in decimals");
   }
   const amount = uint(money.amount, MAX_UINT64);

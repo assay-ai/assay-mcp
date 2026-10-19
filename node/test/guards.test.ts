@@ -220,6 +220,24 @@ describe("guardAndBuild (M1)", () => {
     expect(r.typedData.domain).toMatchObject({ chainId: 46630, verifyingContract: getAddress(base.network!.escrow.split(":")[2]!) });
   });
 
+  // A guard looser than the signer would let a payment reach the confirmation prompt and then be
+  // refused at signing time. Every passing vector must also sign.
+  it.each(cases.filter((c) => c.expect.ok).map((c) => [c.name, c] as const))(
+    "the passing vector %s also signs",
+    (_, c) => {
+      const full = apply(base, c.changes);
+      const rest = Object.fromEntries(Object.entries(full).filter(([k]) => k !== "network")) as Omit<GuardContext, "network">;
+      const r = guardAndBuild(rest, full.nowSeconds, "production");
+      expect(r.ok).toBe(true);
+    },
+  );
+
+  it("refuses an issuedAt the signer would refuse before running the guards", () => {
+    const withPrompt = { ...ctx, limits: { ...ctx.limits, confirmAbove: "0.05" } };
+    expect(() => guardAndBuild(withPrompt, 0, "production")).toThrow(/issuedAt/);
+    expect(() => guardAndBuild(withPrompt, 1.5, "production")).toThrow(/issuedAt/);
+  });
+
   it("returns the guard refusal and builds nothing", () => {
     const r = guardAndBuild(apply(ctx, find("seq 2^53").changes), base.nowSeconds, "production");
     expect(r).toMatchObject({ ok: false, guard: "G9" });

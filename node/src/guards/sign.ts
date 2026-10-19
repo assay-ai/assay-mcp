@@ -33,6 +33,10 @@ export function guardAndBuild(
   issuedAtSeconds: number,
   env: Environment,
 ): GuardedVoucher | Exclude<GuardResult, { ok: true }> {
+  // Checked before the guards, so a payment the signer would refuse never reaches a prompt.
+  if (!Number.isSafeInteger(issuedAtSeconds) || issuedAtSeconds <= 0) {
+    throw new SignerRefusal("the voucher", "issuedAt", "is not a positive integer");
+  }
   let requirement: unknown;
   try {
     requirement = deepFreeze(structuredClone(ctx.requirement));

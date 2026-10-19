@@ -427,6 +427,66 @@
     },
     {
       "guard": "G2",
+      "name": "the built-in asset with a lower-case address",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "requirement",
+            "amount",
+            "asset"
+          ],
+          "value": "eip155:46630/erc20:0xdbbc156dd414f43f2c952c1be0f16a0b9a826cd3"
+        }
+      ],
+      "expect": {
+        "ok": false,
+        "guard": "G2",
+        "code": "G2_ASSET"
+      }
+    },
+    {
+      "guard": "G2",
+      "name": "the built-in asset with an upper-case address",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "requirement",
+            "amount",
+            "asset"
+          ],
+          "value": "eip155:46630/erc20:0xDBBC156DD414F43F2C952C1BE0F16A0B9A826CD3"
+        }
+      ],
+      "expect": {
+        "ok": false,
+        "guard": "G2",
+        "code": "G2_ASSET"
+      }
+    },
+    {
+      "guard": "G2",
+      "name": "the built-in asset under an upper-case namespace",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "requirement",
+            "amount",
+            "asset"
+          ],
+          "value": "eip155:46630/ERC20:0xDbbC156dD414f43f2c952C1Be0f16A0B9a826Cd3"
+        }
+      ],
+      "expect": {
+        "ok": false,
+        "guard": "G2",
+        "code": "G2_ASSET"
+      }
+    },
+    {
+      "guard": "G2",
       "name": "asset decimals 18",
       "changes": [
         {
@@ -620,7 +680,7 @@
     },
     {
       "guard": "G3",
-      "name": "quote asset in lower case",
+      "name": "quote asset in lower case (compared exactly)",
       "changes": [
         {
           "op": "set",
@@ -632,7 +692,9 @@
         }
       ],
       "expect": {
-        "ok": true
+        "ok": false,
+        "guard": "G3",
+        "code": "G3_QUOTE_ASSET"
       }
     },
     {
