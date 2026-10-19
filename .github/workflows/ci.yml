@@ -163,7 +163,7 @@ jobs:
   examples:
     # Spec §10.3 and §12.3 row 10: both SDK examples against the e2e backend (Postgres, Redis and
     # the backend built from a pinned commit; the same pattern as the proxy's integration job),
-    # with a development origin in code. Needs the backend read token and the LLM keys as secrets,
+    # with a development origin in code. Needs the LLM keys as secrets (the backend repository is public),
     # and is skipped cleanly (a notice, never a failure, never a secret printed) when any is absent,
     # as on fork pull requests. The paid call needs an anvil fork with staked providers, which this
     # backend does not have: the paid path is proven by the stubbed-loop test (sdk/node/test/examples.test.ts).
@@ -176,11 +176,11 @@ jobs:
       BACKEND_DIR: ${{ github.workspace }}/backend
       COMPOSE_FILE: sdk/node/examples/ci/backend.compose.yml
       HUMAN_TOKEN: mcp_demo_token_evm_buyer
-      HAS_SECRETS: ${{ secrets.ASSAY_BACKEND_READ_TOKEN != '' && secrets.ANTHROPIC_API_KEY != '' && secrets.OPENAI_API_KEY != '' && vars.ANTHROPIC_MODEL != '' && vars.OPENAI_MODEL != '' }}
+      HAS_SECRETS: ${{ secrets.ANTHROPIC_API_KEY != '' && secrets.OPENAI_API_KEY != '' && vars.ANTHROPIC_MODEL != '' && vars.OPENAI_MODEL != '' }}
     steps:
       - name: Secrets present
         if: env.HAS_SECRETS != 'true'
-        run: echo "::notice::The backend read token, an LLM key or a model variable is not set; the examples job is skipped."
+        run: echo "::notice::An LLM key or a model variable is not set; the examples job is skipped."
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: env.HAS_SECRETS == 'true'
         with:
@@ -190,7 +190,6 @@ jobs:
         with:
           repository: assay-ai/assay-backend
           ref: ${{ env.BACKEND_SHA }}
-          token: ${{ secrets.ASSAY_BACKEND_READ_TOKEN }}
           path: backend
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -258,9 +257,8 @@ jobs:
   integration:
     # Spec §12.1 through the proxy (Task 2.17): node/test/integration/equivalence.test.ts and the
     # OAuth e2e test, against the Part 1+2 backend built from the commit below, with Postgres
-    # and Redis (node/test/integration/backend.compose.yml). The backend repository is private:
-    # the job needs a read-only token in the ASSAY_BACKEND_READ_TOKEN secret and is skipped
-    # without one (fork pull requests). The paid path needs an anvil fork with staked providers
+    # and Redis (node/test/integration/backend.compose.yml). The backend repository is public, so
+    # the job needs no secret and always runs. The paid path needs an anvil fork with staked providers
     # and skips here (see the test's header).
     name: integration
     runs-on: ubuntu-latest
@@ -273,31 +271,21 @@ jobs:
       # A person's session from the backend's own demo seed (scripts/mcp/seed/credentials.json),
       # on the backend's default chain.
       HUMAN_TOKEN: mcp_demo_token_broke
-      HAS_BACKEND_TOKEN: ${{ secrets.ASSAY_BACKEND_READ_TOKEN != '' }}
     steps:
-      - name: Backend token present
-        if: env.HAS_BACKEND_TOKEN != 'true'
-        run: echo "::notice::ASSAY_BACKEND_READ_TOKEN is not set; the integration job is skipped."
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: env.HAS_BACKEND_TOKEN == 'true'
         with:
           persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: env.HAS_BACKEND_TOKEN == 'true'
         with:
           repository: assay-ai/assay-backend
           ref: ${{ env.BACKEND_SHA }}
-          token: ${{ secrets.ASSAY_BACKEND_READ_TOKEN }}
           path: backend
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        if: env.HAS_BACKEND_TOKEN == 'true'
         with:
           node-version: "22"
       - run: npm ci --ignore-scripts
-        if: env.HAS_BACKEND_TOKEN == 'true'
       - name: Start Postgres, Redis and the backend
-        if: env.HAS_BACKEND_TOKEN == 'true'
         shell: bash
         run: |
           # Per-run test secrets, never stored. The later compose steps (seed, SQL, logs, stop)
@@ -326,13 +314,11 @@ jobs:
           done
           curl -sf -o /dev/null http://localhost:3200/.well-known/oauth-protected-resource || { docker compose logs backend | tail -100; exit 1; }
       - name: Seed the demo identities, verification policies and catalogue bindings
-        if: env.HAS_BACKEND_TOKEN == 'true'
         run: |
           node node/test/integration/seed-sql.mjs "$BACKEND_DIR/scripts/mcp/seed/credentials.json" "$HUMAN_TOKEN" | docker compose exec -T postgres psql -q -U postgres -d assay_mcp_it -v ON_ERROR_STOP=1
           docker compose exec -T backend yarn -s mcp:policies
           docker compose exec -T backend yarn -s demo:seed
       - name: Equivalence through the proxy, and OAuth e2e
-        if: env.HAS_BACKEND_TOKEN == 'true'
         working-directory: node
         env:
           ASSAY_MCP_E2E: "1"
@@ -342,8 +328,8 @@ jobs:
           ASSAY_MCP_E2E_SQL: docker compose -f ${{ github.workspace }}/node/test/integration/backend.compose.yml exec -T postgres psql -q -U postgres -d assay_mcp_it -v ON_ERROR_STOP=1
         run: npx vitest run test/integration test/oauth-e2e.test.ts
       - name: Backend logs
-        if: failure() && env.HAS_BACKEND_TOKEN == 'true'
+        if: failure()
         run: docker compose logs backend | tail -300
       - name: Stop
-        if: always() && env.HAS_BACKEND_TOKEN == 'true'
+        if: always()
         run: docker compose down -v
