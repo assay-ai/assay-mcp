@@ -2,7 +2,7 @@
   "name": "@assay-ai/mcp",
   "version": "0.1.0",
   "description": "Local stdio MCP proxy for Assay. Keeps the agent's payment key on your machine and signs its own payments.",
-  "license": "UNLICENSED",
+  "license": "SEE LICENSE IN LICENSE",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/assay-ai/assay-mcp.git",
@@ -13,7 +13,8 @@
     "assay-mcp": "dist/cli.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "LICENSE"
   ],
   "engines": {
     "node": ">=20"

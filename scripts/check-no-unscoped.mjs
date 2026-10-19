@@ -9,9 +9,9 @@ import { fileURLToPath } from "node:url";
 // Built from parts so that this file does not match itself.
 export const FORBIDDEN = ["npx", "-y", "assay-mcp"].join(" ");
 
-/** True when the text contains the forbidden form, at any whitespace between the words. */
+/** True when the text runs the unscoped package through npx, pnpm dlx, yarn dlx or bunx. */
 export function containsUnscoped(text) {
-  return /npx\s+-y\s+assay-mcp(?![\w-])/.test(text);
+  return /(?:npx(?:\s+(?:-y|--yes))?|pnpm\s+dlx|yarn\s+dlx|bunx)\s+assay-mcp(?![\w-])/.test(text);
 }
 
 export function listRepoFiles(root) {

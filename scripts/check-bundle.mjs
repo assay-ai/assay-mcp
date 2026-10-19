@@ -20,7 +20,7 @@ export function checkBundle(code) {
   const patterns = [
     ["require", new RegExp(String.raw`\b(?:__require|require)\(` + literal, "g")],
     ["dynamic import", new RegExp(String.raw`\bimport\(` + literal, "g")],
-    ["static import", /^\s*(?:import|export)\b[^"'\n;]*?\bfrom\s*(["'])([^"']+)\1/gm],
+    ["static import", /^\s*(?:import|export)\b[^"';]*?\bfrom\s*(["'])([^"']+)\1/gm],
     ["side-effect import", /^\s*import\s*(["'])([^"']+)\1/gm],
   ];
   for (const [kind, re] of patterns) {
@@ -33,6 +33,7 @@ export function checkBundle(code) {
     errors.push(`non-literal ${m[0].trim()}`);
   }
   if (/\bcreateRequire\b/.test(code)) errors.push("createRequire is not allowed");
+  if (/\bdlopen\b/.test(code)) errors.push("dlopen is not allowed");
   return errors;
 }
 
