@@ -13,7 +13,7 @@ import {
   KEYCHAIN_SERVICE,
   KeychainError,
   keyringBackendFrom,
-  loadOsKeyring,
+  realKeychainSmokeTest,
   LOCKED_KEYCHAIN_MESSAGE,
   NO_KEYCHAIN_MESSAGE,
   probeKeychain,
@@ -239,18 +239,8 @@ describe.runIf(realKeychain || expectFailure !== undefined)("real OS keychain (g
   }
 
   it.runIf(realKeychain)("round-trips through @napi-rs/keyring", async () => {
-    const backend = await loadOsKeyring();
-    await probeKeychain(backend);
-    const service = `${KEYCHAIN_SERVICE}.smoke-test`;
     const account = `smoke-${randomBytes(4).toString("hex")}@e2e/access_token`;
-    const value = randomBytes(16).toString("hex");
-    try {
-      await backend.set(service, account, value);
-      expect(await backend.get(service, account)).toBe(value);
-    } finally {
-      expect(await backend.delete(service, account)).toBe(true);
-    }
-    expect(await backend.get(service, account)).toBeNull();
+    expect(await realKeychainSmokeTest(account, randomBytes(16).toString("hex"))).toBe(true);
     expect(await runProbe()).toEqual({ code: 0, stderr: "" });
   });
 
