@@ -239,6 +239,24 @@ describe("spend record (G7)", () => {
     expect((await record(500_000n, "5")).total).toBe(5_000_000n);
   });
 
+  it("applies a perDay lowered on disk after the caller read its limits", async () => {
+    await record(100n, "5");
+    await withLock(profile, (lock) => writeLimits(profile, lock, { perCall: "0.50", perDay: "0.0001", confirmAbove: null, providers: null }));
+    await expect(record(1n, "5")).rejects.toBeInstanceOf(SpendLimitError); // 100 + 1 > 100 base units
+    expect(readState(profile).signed).toHaveLength(1);
+  });
+
+  it("fails closed when limits.json is invalid or has loose permissions", async () => {
+    await record(1n, "5");
+    const file = join(profilesDir(), "default.limits.json");
+    writeFileSync(file, "{", { mode: 0o600 });
+    await expect(record(1n, "5")).rejects.toThrow(ProfileStateError);
+    writeFileSync(file, JSON.stringify({ ...DEFAULT_LIMITS }), { mode: 0o600 });
+    chmodSync(file, 0o644);
+    if (process.platform !== "win32") await expect(record(1n, "5")).rejects.toThrow();
+    expect(readState(profile).signed).toHaveLength(1);
+  });
+
   it("requires the limits", async () => {
     await expect(recordUnderLock(profile, 1n, undefined as never)).rejects.toThrow(TypeError);
     await expect(recordUnderLock(profile, 1n, { decimals: 6 } as never)).rejects.toThrow(TypeError);
@@ -288,10 +306,28 @@ describe("spend record (G7)", () => {
 
 describe("spend record across processes", () => {
   let child: { dir: string; file: string };
+  let limitsChild: { dir: string; file: string };
   beforeAll(async () => {
     child = await bundleFixture(join(here, "fixtures/spend-child.ts"));
+    limitsChild = await bundleFixture(join(here, "fixtures/limits-child.ts"));
   });
-  afterAll(() => rmSync(child.dir, { recursive: true, force: true }));
+  afterAll(() => {
+    rmSync(child.dir, { recursive: true, force: true });
+    rmSync(limitsChild.dir, { recursive: true, force: true });
+  });
+
+  it("a perDay lowered by another process between the guard check and the record is refused", async () => {
+    await record(100n, "5"); // the guard saw perDay 5 and let the call start
+    const outcome = await new Promise<string>((resolve, reject) => {
+      const c = fork(limitsChild.file, [profile.dir, profile.name, "0.0001"], { stdio: ["ignore", "ignore", "pipe", "ipc"] });
+      let result: string | null = null;
+      c.on("message", (m) => (result = String(m)));
+      c.on("exit", () => (result === null ? reject(new Error("no result")) : resolve(result)));
+    });
+    expect(outcome).toBe("lowered");
+    await expect(record(1n, "5")).rejects.toBeInstanceOf(SpendLimitError);
+    expect(sumSpend(readState(profile).signed)).toBe(100n);
+  }, 60_000);
 
   it("10 processes against perDay: exactly the cap is recorded", async () => {
     // Each records 100 base units; perDay is 450 base units ($0.00045 at 6 decimals).
