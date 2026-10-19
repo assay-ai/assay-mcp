@@ -7,7 +7,8 @@ Language-neutral test vectors, shared by every implementation (`node/`, `sdk/nod
 - payment requirements and every local guard (G1 to G12), passing and failing;
 - `seq` bounds: `2^53 - 1` passes, `2^53` and `2^64 - 1` are refused;
 - the profile lock protocol;
-- server names and tool aliases.
+- server names and tool aliases;
+- install commands, links and config entries per client.
 
 The vector files are added with the features that use them.
 
@@ -37,3 +38,17 @@ Notes for consumers (fix round 1):
 Every digest and signature was recomputed independently with foundry `cast` (EIP-712 built by hand with `cast abi-encode` and `cast keccak`, and `cast wallet sign --data`), and accepted by the backend's EVM verifier (`buildVoucherMessage`, `verifyVoucherSignature`, `delegateBindingTypedData`, `verifyDelegateBindingSignature`).
 
 The signing key in both files is **test only**: the well-known public anvil/hardhat default account 0. Never fund it or use it for anything real.
+
+## commands.json
+
+The spec 7.12 install commands for every client, with `V = 1.2.3` standing in for the version.
+
+- `install`: per client and URL, the paid-capable user-scope `command` (a POSIX shell line, or the config object for Cursor, Windsurf and Claude Desktop), the `entry` that lands in the client config under the server name, the one-click `link` (Cursor, VS Code) and the free-only `remote` alternative.
+- `project`: the args `add --scope project` writes (R-MU-4): the pinned package, `--url` and a non-default `--profile` only.
+- `add`: the `npx -y @assay-ai/mcp@V add {url} --client {id}` one-liner.
+- `ownership`: which stored entries `remove` treats as written by `assay-mcp` (by command and args, never by name).
+- Consumers:
+  - `node/test/clients.test.ts` (`node/src/clients/install-command.ts`, and `add`'s written entries, R-MU-9);
+  - the README install table, with `1.2.3` replaced by the package version (R-WEB-7, this repo's half);
+  - the frontend Connect UI commands (`assay-frontend/src/features/buyer-money/mcp-config.ts`, Part 3).
+- Shell words are single-quoted only when a POSIX shell would change them (a URL with `?` or `&`). The Cursor link percent-encodes its base64 `config`.

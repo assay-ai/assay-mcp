@@ -1,0 +1,672 @@
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { ClientEnv, CliRunner } from "../src/clients/client.js";
+import { parseCodexServers } from "../src/clients/codex.js";
+import {
+  CLIENT_IDS,
+  addCommand,
+  cliInvocation,
+  installCommand,
+  installLink,
+  isAssayEntry,
+  remoteCommand,
+  serverEntry,
+  type ClientId,
+  type InstallInput,
+} from "../src/clients/install-command.js";
+import { readInstalls } from "../src/clients/installs.js";
+import { UrlRefused, slugWordsFor, type PrivateFiles, type ProfilePort, type ResolvedUrl } from "../src/clients/ports.js";
+import { CLIENTS } from "../src/clients/registry.js";
+import { SIGN_IN_HINT } from "../src/clients/server-name.js";
+import { runAdd } from "../src/commands/add-impl.js";
+import type { InstallDeps } from "../src/commands/context.js";
+import { runList } from "../src/commands/list-impl.js";
+import { runRemove } from "../src/commands/remove-impl.js";
+import { onPath } from "../src/commands/wiring.js";
+import { VERSION } from "../src/version.js";
+
+const ROOT = fileURLToPath(new URL("../../", import.meta.url));
+const vectors = JSON.parse(readFileSync(join(ROOT, "vectors/commands.json"), "utf8")) as {
+  V: string;
+  install: { client: ClientId; input: InstallInput; command: unknown; entry: unknown; link: string | null; remote: unknown }[];
+  project: { cases: { input: InstallInput; args: string[] }[] };
+  add: { cases: { client: ClientId; V: string; url: string; command: string }[] };
+  ownership: { cases: { name: string; entry: unknown; ours: boolean }[] };
+};
+const V = vectors.V;
+const MCP = "https://mcp.assay.ai";
+const FILE_CLIENTS: ClientId[] = ["cursor", "vscode", "windsurf", "claude-desktop"];
+const CLI_CLIENTS: ClientId[] = ["claude-code", "codex", "gemini"];
+
+// ---- fixtures ---------------------------------------------------------------------------
+
+let base: string;
+let home: string;
+let project: string;
+let outside: string;
+
+beforeEach(() => {
+  base = realpathSync(mkdtempSync(join(tmpdir(), "assay-mcp-clients-")));
+  home = join(base, "home");
+  project = join(base, "project");
+  outside = join(base, "outside");
+  for (const d of [home, project, outside]) mkdirSync(d, { recursive: true });
+});
+
+afterEach(() => {
+  rmSync(base, { recursive: true, force: true });
+});
+
+function readJson(path: string): Record<string, unknown> {
+  return JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+}
+
+function writeJson(path: string, data: unknown, indent = 2): void {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(data, null, indent)}\n`);
+}
+
+/** Simulates the real CLIs' writes, so the adapters read back what a client would store. */
+function fakeCliRunner(calls: { bin: string; argv: string[]; cwd: string }[]): CliRunner {
+  return (bin, argv, { cwd }) => {
+    calls.push({ bin, argv: [...argv], cwd });
+    const a = [...argv];
+    if (bin === "claude" || bin === "gemini") {
+      const scopeAt = a.indexOf("--scope");
+      const scope = a[scopeAt + 1]!;
+      a.splice(scopeAt, 2);
+      const path =
+        bin === "claude"
+          ? scope === "user" ? join(home, ".claude.json") : join(cwd, ".mcp.json")
+          : scope === "user" ? join(home, ".gemini", "settings.json") : join(cwd, ".gemini", "settings.json");
+      const doc = existsSync(path) ? readJson(path) : {};
+      const servers = (doc.mcpServers ?? {}) as Record<string, unknown>;
+      if (a[1] === "add") {
+        const name = a[2]!;
+        const rest = a.slice(3);
+        if (rest[0] === "--") rest.shift();
+        if (Object.hasOwn(servers, name)) return Promise.reject(new Error(`${name} already exists`));
+        servers[name] = bin === "claude" ? { type: "stdio", command: rest[0], args: rest.slice(1), env: {} } : { command: rest[0], args: rest.slice(1) };
+      } else {
+        delete servers[a[2]!];
+      }
+      writeJson(path, { ...doc, mcpServers: servers });
+      return Promise.resolve();
+    }
+    if (bin === "codex") {
+      const path = join(home, ".codex", "config.toml");
+      const text = existsSync(path) ? readFileSync(path, "utf8") : "";
+      if (a[1] === "add") {
+        const name = a[2]!;
+        const [command, ...args] = a.slice(4);
+        mkdirSync(dirname(path), { recursive: true });
+        writeFileSync(path, `${text}\n[mcp_servers.${name}]\ncommand = ${JSON.stringify(command)}\nargs = ${JSON.stringify(args)}\n`);
+      } else {
+        const out: string[] = [];
+        let skip = false;
+        for (const line of text.split("\n")) {
+          if (line.startsWith("[")) skip = line === `[mcp_servers.${a[2]}]`;
+          if (!skip) out.push(line);
+        }
+        writeFileSync(path, out.join("\n"));
+      }
+      return Promise.resolve();
+    }
+    return Promise.reject(new Error(`unexpected ${bin}`));
+  };
+}
+
+function resolveUrl(input: string): ResolvedUrl {
+  const full = input.startsWith("/") ? `${MCP}${input}` : input;
+  const u = new URL(full);
+  const dev = u.origin === "http://localhost:3200";
+  if (u.origin !== MCP && !dev) throw new UrlRefused(`${u.origin} is not the Assay MCP origin`);
+  const path = u.pathname;
+  const pathAndQuery = `${path}${u.search}`;
+  if (path === "/") {
+    const tools = u.searchParams.get("tools");
+    return {
+      url: full,
+      pathAndQuery,
+      kind: "ROOT",
+      slugWords: slugWordsFor({ kind: "ROOT" }, { tools: tools ? tools.split(",").map((name) => ({ name })) : null }),
+      dev,
+    };
+  }
+  const c = /^\/c\/([a-z-]+)$/.exec(path);
+  if (c) return { url: full, pathAndQuery, kind: "CATEGORY", slugWords: slugWordsFor({ kind: "CATEGORY", category: c[1]! }, { tools: null }), dev };
+  const my = /^\/my\/([a-z0-9-]+)$/.exec(path);
+  if (my) return { url: full, pathAndQuery, kind: "MY_TOOLSET", slugWords: slugWordsFor({ kind: "MY_TOOLSET", slug: my[1]! }, { tools: null }), dev };
+  throw new UrlRefused("not an MCP URL");
+}
+
+interface Harness {
+  deps: InstallDeps;
+  out: string[];
+  calls: { bin: string; argv: string[]; cwd: string }[];
+  paid: { profile: string; url: string }[];
+  store: Map<string, string>;
+  profilesPresent: Set<string>;
+  measured: { L: number | null };
+}
+
+function harness(overrides: Partial<InstallDeps> = {}): Harness {
+  const out: string[] = [];
+  const calls: Harness["calls"] = [];
+  const paid: Harness["paid"] = [];
+  const store = new Map<string, string>();
+  const profilesPresent = new Set<string>(["default"]);
+  const measured = { L: 20 as number | null };
+  const files: PrivateFiles = {
+    read: (rel) => store.get(rel) ?? null,
+    write: (rel, data) => void store.set(rel, data),
+  };
+  const profiles: ProfilePort = {
+    isValidName: (n) => /^[a-z0-9][a-z0-9-]{0,31}$/.test(n),
+    exists: (n) => profilesPresent.has(n),
+    addPaidUrl: (profile, url) => (paid.push({ profile, url: url.pathAndQuery }), Promise.resolve()),
+    longestTool: () => Promise.resolve(measured.L),
+  };
+  const clientEnv: ClientEnv = { home, platform: "linux", cwd: project, env: {}, run: fakeCliRunner(calls) };
+  const deps: InstallDeps = {
+    clients: CLIENTS,
+    clientEnv,
+    resolveUrl,
+    profiles,
+    files,
+    env: {},
+    isTTY: true,
+    onPath: () => false,
+    ask: () => Promise.resolve(null),
+    print: (t) => void out.push(t),
+    version: V,
+    productionOrigin: MCP,
+    ...overrides,
+  };
+  return { deps, out, calls, paid, store, profilesPresent, measured };
+}
+
+function userConfig(client: ClientId): string {
+  return CLIENTS[client].target("user", { home, platform: "linux", cwd: project, env: {}, run: () => Promise.resolve() }).configPath;
+}
+
+function entriesOf(client: ClientId, scope: "user" | "project" = "user"): Map<string, unknown> {
+  const env: ClientEnv = { home, platform: "linux", cwd: project, env: {}, run: () => Promise.resolve() };
+  const adapter = CLIENTS[client];
+  return adapter.entries(adapter.target(scope, env), env);
+}
+
+/** The command and args an entry runs, whatever extra keys the client stores. */
+function runPart(entry: unknown): { command: unknown; args: unknown } {
+  const e = entry as { command: unknown; args: unknown };
+  return { command: e.command, args: e.args };
+}
+
+/** Splits a vector shell line the way a POSIX shell would (single quotes only). */
+function shellSplit(line: string): string[] {
+  const words: string[] = [];
+  for (const m of line.matchAll(/'((?:[^']|'\\'')*)'|(\S+)/g)) words.push(m[1] !== undefined ? m[1].replace(/'\\''/g, "'") : m[2]!);
+  return words;
+}
+
+// ---- vectors -----------------------------------------------------------------------------
+
+describe("install commands equal vectors/commands.json", () => {
+  it("covers every client for every URL case", () => {
+    const clients = new Set(vectors.install.map((c) => c.client));
+    expect([...clients].sort()).toEqual([...CLIENT_IDS].sort());
+  });
+
+  it.each(vectors.install.map((c) => [`${c.client} ${c.input.url}`, c] as const))("%s", (_label, c) => {
+    expect(installCommand(c.client, c.input)).toEqual(c.command);
+    expect(serverEntry(c.client, c.input)).toEqual(c.entry);
+    expect(installLink(c.client, c.input)).toEqual(c.link);
+    expect(remoteCommand(c.client, c.input)).toEqual(c.remote);
+  });
+
+  it("pins the package exactly and never uses the unscoped form", () => {
+    for (const c of vectors.install) {
+      const text = JSON.stringify(c);
+      expect(text).toContain(`@assay-ai/mcp@${V}`);
+      expect(text).not.toContain(["npx", "-y", "assay-mcp"].join(" "));
+    }
+  });
+
+  it("project-scope args", () => {
+    for (const c of vectors.project.cases) expect(serverEntry("cursor", c.input, "project").args).toEqual(c.args);
+  });
+
+  it("add one-liners", () => {
+    for (const c of vectors.add.cases) expect(addCommand(c.client, { V: c.V, url: c.url })).toBe(c.command);
+  });
+
+  it.each(vectors.ownership.cases.map((c) => [c.name, c] as const))("ownership: %s", (_n, c) => {
+    expect(isAssayEntry(c.entry)).toBe(c.ours);
+  });
+
+  it("CLI invocations run the vector command (Gemini adds --scope user, its default is project)", () => {
+    for (const c of vectors.install.filter((v) => CLI_CLIENTS.includes(v.client))) {
+      const { bin, argv } = cliInvocation(c.client, c.input);
+      const words = shellSplit(c.command as string);
+      if (c.client === "gemini") expect([bin, ...argv]).toEqual([...words.slice(0, 3), "--scope", "user", ...words.slice(3)]);
+      else expect([bin, ...argv]).toEqual(words);
+    }
+  });
+
+  it("refuses ranges, bad names, credentials in the URL and project log files", () => {
+    const ok: InstallInput = { V, url: `${MCP}/`, name: "assay" };
+    expect(() => installCommand("codex", { ...ok, V: "^1.2.3" })).toThrow();
+    expect(() => installCommand("codex", { ...ok, V: "latest" })).toThrow();
+    expect(() => installCommand("codex", { ...ok, name: "Assay" })).toThrow();
+    expect(() => installCommand("codex", { ...ok, url: "https://user:pw@mcp.assay.ai/" })).toThrow();
+    expect(() => installCommand("codex", { ...ok, url: "https://mcp.assay.ai/'$(id)'" })).toThrow();
+    expect(() => serverEntry("cursor", { ...ok, logFile: "/var/log/assay.log" }, "project")).toThrow();
+    expect(() => serverEntry("cursor", { ...ok, logFile: "relative.log" })).toThrow();
+  });
+});
+
+describe("README install commands equal vectors/commands.json (R-WEB-7, repo half)", () => {
+  const readme = readFileSync(join(ROOT, "README.md"), "utf8");
+  const withVersion = (s: string) => s.split(`@assay-ai/mcp@${V}`).join(`@assay-ai/mcp@${VERSION}`);
+  const root = (client: ClientId) => vectors.install.find((c) => c.client === client && c.input.url === `${MCP}/`)!;
+
+  it.each(["claude-code", "codex", "gemini", "vscode"] as ClientId[])("%s", (client) => {
+    expect(readme).toContain(`\`${withVersion(root(client).command as string)}\``);
+  });
+
+  it("the JSON block is the Cursor, Windsurf and Claude Desktop config", () => {
+    const block = /```json\n([\s\S]*?)```/.exec(readme);
+    expect(block).not.toBeNull();
+    const parsed = JSON.parse(block![1]!);
+    for (const client of ["cursor", "windsurf", "claude-desktop"] as ClientId[]) {
+      expect(parsed).toEqual(JSON.parse(withVersion(JSON.stringify(root(client).command))));
+    }
+  });
+
+  it("the add one-liner", () => {
+    expect(readme).toContain(withVersion(vectors.add.cases[0]!.command));
+  });
+
+  it("lists every client id", () => {
+    for (const id of CLIENT_IDS) expect(readme).toContain(`\`${id}\``);
+  });
+});
+
+// ---- add ------------------------------------------------------------------------------
+
+describe("add", () => {
+  it.each(CLIENT_IDS)("R-MU-9: %s entry equals the Connect UI vector for the same client", async (client) => {
+    for (const url of [`${MCP}/`, `${MCP}/my/weather`]) {
+      const h = harness();
+      const vector = vectors.install.find((c) => c.client === client && c.input.url === url)!;
+      expect(await runAdd([url, "--client", client, "--name", vector.input.name], h.deps)).toBe(0);
+      const stored = entriesOf(client).get(vector.input.name);
+      expect(isAssayEntry(stored)).toBe(true);
+      if (client === "vscode") expect(stored).toEqual(vector.entry);
+      else expect(runPart(stored)).toEqual(runPart(vector.entry));
+      rmSync(home, { recursive: true, force: true });
+      mkdirSync(home);
+    }
+  });
+
+  it.each(FILE_CLIENTS)("merge keeps other servers and keys: %s", async (client) => {
+    const path = userConfig(client);
+    const key = client === "vscode" ? "servers" : "mcpServers";
+    const other = { command: "uvx", args: ["other-server"], env: { TOKEN: "x" } };
+    const original = { theme: "dark", [key]: { other }, z: [1, 2] };
+    writeJson(path, original, 4);
+    const before = readFileSync(path, "utf8");
+    const h = harness();
+    expect(await runAdd(["/c/weather", "--client", client], h.deps)).toBe(0);
+    const after = readJson(path);
+    expect(after.theme).toBe("dark");
+    expect(after.z).toEqual([1, 2]);
+    const servers = after[key] as Record<string, unknown>;
+    expect(servers.other).toEqual(other);
+    expect(Object.keys(servers)).toEqual(["other", "assay-weather"]);
+    expect(readFileSync(path, "utf8")).toMatch(/^\{\n {4}"theme"/);
+    expect(readFileSync(`${path}.bak`, "utf8")).toBe(before);
+    expect(readdirSync(dirname(path)).filter((f) => f.endsWith(".tmp"))).toEqual([]);
+  });
+
+  it.each(CLI_CLIENTS)("merge keeps other servers: %s", async (client) => {
+    const h = harness();
+    expect(await runAdd(["/", "--client", client, "--name", "other"], h.deps)).toBe(0);
+    expect(await runAdd(["/c/weather", "--client", client], h.deps)).toBe(0);
+    expect([...entriesOf(client).keys()].sort()).toEqual(["assay-weather", "other"]);
+  });
+
+  it.each(CLIENT_IDS)("--force needed for an existing name: %s", async (client) => {
+    const h = harness();
+    expect(await runAdd(["/", "--client", client, "--name", "assay"], h.deps)).toBe(0);
+    expect(await runAdd(["/c/weather", "--client", client, "--name", "assay"], h.deps)).toBe(2);
+    expect(h.out.join("")).toContain("--force");
+    expect(entriesOf(client).get("assay")).toSatisfy((e: unknown) => !JSON.stringify(e).includes("/c/weather"));
+    expect(await runAdd(["/c/weather", "--client", client, "--name", "assay", "--force"], h.deps)).toBe(0);
+    expect(JSON.stringify(entriesOf(client).get("assay"))).toContain(`${MCP}/c/weather`);
+  });
+
+  it.each(CLIENT_IDS)("the adapter itself refuses an existing name without force: %s", async (client) => {
+    const h = harness();
+    expect(await runAdd(["/", "--client", client, "--name", "assay"], h.deps)).toBe(0);
+    const adapter = CLIENTS[client];
+    const target = adapter.target("user", h.deps.clientEnv);
+    const input = { V, url: `${MCP}/c/weather`, name: "assay" };
+    await expect(adapter.install(target, input, { force: false }, h.deps.clientEnv)).rejects.toThrow("--force");
+    expect(JSON.stringify(entriesOf(client).get("assay"))).not.toContain("/c/weather");
+  });
+
+  it("a default name that is taken gets -2", async () => {
+    const h = harness();
+    expect(await runAdd(["/c/weather", "--client", "cursor"], h.deps)).toBe(0);
+    expect(await runAdd(["/c/weather", "--client", "cursor"], h.deps)).toBe(0);
+    expect([...entriesOf("cursor").keys()]).toEqual(["assay-weather", "assay-weather-2"]);
+  });
+
+  it("names: the default drops to assay for the root, and a typed name that does not fit is refused", async () => {
+    const h = harness();
+    expect(await runAdd(["/", "--client", "cursor"], h.deps)).toBe(0);
+    expect([...entriesOf("cursor").keys()]).toEqual(["assay"]);
+    h.measured.L = 40;
+    expect(await runAdd(["/c/weather", "--client", "cursor", "--name", "a-very-long-server-name"], h.deps)).toBe(2);
+    expect(h.out.join("")).toContain("is too long for this server: its longest tool is 40 characters, so the name can be at most 17.");
+    h.measured.L = null;
+    expect(await runAdd(["/c/weather", "--client", "cursor", "--name", "a-very-long-server-name"], h.deps)).toBe(2);
+    expect(h.out.join("")).toContain("its longest tool is 48 characters");
+    expect(h.out.join("")).toContain(SIGN_IN_HINT);
+    expect(await runAdd(["/c/weather", "--client", "cursor", "--name", "Bad_Name"], h.deps)).toBe(2);
+  });
+
+  it("refuses another origin, and a dev origin in project scope", async () => {
+    const h = harness();
+    expect(await runAdd(["https://evil.example/c/weather", "--client", "cursor"], h.deps)).toBe(2);
+    expect(await runAdd(["http://localhost:3200/c/weather", "--client", "cursor", "--scope", "project"], h.deps)).toBe(2);
+    expect(existsSync(join(project, ".cursor"))).toBe(false);
+    expect(existsSync(userConfig("cursor"))).toBe(false);
+  });
+
+  it("user scope on a TTY allows the URL for paid calls and records the install", async () => {
+    const h = harness();
+    expect(await runAdd(["/c/weather", "--client", "cursor"], h.deps)).toBe(0);
+    expect(h.paid).toEqual([{ profile: "default", url: "/c/weather" }]);
+    expect(readInstalls(h.deps.files)).toEqual([
+      { client: "cursor", scope: "user", name: "assay-weather", url: `${MCP}/c/weather`, profile: "default", configPath: userConfig("cursor") },
+    ]);
+    expect(h.out.join("")).toContain(`Added assay-weather → ${MCP}/c/weather. Restart Cursor if it is open.`);
+  });
+
+  it("without a TTY the URL is not allowed for paid calls", async () => {
+    const h = harness({ isTTY: false });
+    expect(await runAdd(["/c/weather", "--client", "cursor"], h.deps)).toBe(0);
+    expect(h.paid).toEqual([]);
+    expect(h.out.join("")).toContain("allow-paid");
+  });
+
+  it("writes no secret and no env into user-scope configs", async () => {
+    const h = harness({ env: { ASSAY_API_KEY: "assay_sk_live_secretvalue" } });
+    for (const client of CLIENT_IDS) expect(await runAdd(["/", "--client", client], h.deps)).toBe(0);
+    for (const client of CLIENT_IDS) {
+      const text = readFileSync(userConfig(client), "utf8");
+      expect(text).not.toContain("assay_sk_live_");
+      const entry = entriesOf(client).get("assay") as Record<string, unknown>;
+      expect(entry.env === undefined || JSON.stringify(entry.env) === "{}").toBe(true);
+    }
+  });
+
+  it("client: the only client CLI on PATH, else ask on a TTY, else fail with the list", async () => {
+    let h = harness({ onPath: (bin) => bin === "codex" });
+    expect(await runAdd(["/"], h.deps)).toBe(0);
+    expect(h.calls[0]!.bin).toBe("codex");
+
+    h = harness({ onPath: () => true, ask: () => Promise.resolve("cursor") });
+    expect(await runAdd(["/"], h.deps)).toBe(0);
+    expect(entriesOf("cursor").has("assay")).toBe(true);
+
+    h = harness({ onPath: () => false, isTTY: false });
+    expect(await runAdd(["/"], h.deps)).toBe(2);
+    expect(h.out.join("")).toContain(CLIENT_IDS.join(", "));
+  });
+
+  it("usage errors", async () => {
+    const h = harness();
+    expect(await runAdd([], h.deps)).toBe(2);
+    expect(await runAdd(["/", "--client", "notepad"], h.deps)).toBe(2);
+    expect(await runAdd(["/", "--client", "cursor", "--scope", "global"], h.deps)).toBe(2);
+    expect(await runAdd(["/", "--client", "cursor", "--name", "a", "--name", "b"], h.deps)).toBe(2);
+    expect(await runAdd(["/", "--client", "cursor", "--bogus"], h.deps)).toBe(2);
+    expect(await runAdd(["/", "--client", "windsurf", "--scope", "project"], h.deps)).toBe(2);
+    expect(await runAdd(["/", "--client", "codex", "--scope", "project"], h.deps)).toBe(2);
+  });
+});
+
+// ---- project scope ----------------------------------------------------------------------
+
+describe("add --scope project", () => {
+  const PROJECT_FILES: Partial<Record<ClientId, string>> = {
+    cursor: ".cursor/mcp.json",
+    vscode: ".vscode/mcp.json",
+    "claude-code": ".mcp.json",
+    gemini: ".gemini/settings.json",
+  };
+
+  it.each(Object.keys(PROJECT_FILES) as ClientId[])("project scope file contains no token, no dev origin, no log-file: %s", async (client) => {
+    const h = harness({ env: { ASSAY_DEV_API_KEY: "assay_sk_live_devsecret", ASSAY_MCP_DEV_ORIGINS: "http://localhost:3200" } });
+    h.profilesPresent.add("work");
+    expect(await runAdd(["/c/weather", "--client", client, "--scope", "project", "--profile", "work"], h.deps)).toBe(0);
+    const path = join(project, PROJECT_FILES[client]!);
+    const text = readFileSync(path, "utf8");
+    expect(text).not.toMatch(/assay_(sk_live|at|rt|ac)_|localhost|log-file|--name|HOME|APPDATA|XDG/);
+    const entry = entriesOf(client, "project").get("assay-weather") as Record<string, unknown>;
+    expect(entry.args).toEqual(["-y", `@assay-ai/mcp@${V}`, "--url", `${MCP}/c/weather`, "--profile", "work"]);
+    expect(entry.env === undefined || JSON.stringify(entry.env) === "{}").toBe(true);
+    // R-MU-5 / R-MU-13: never allowed for paid calls from here.
+    expect(h.paid).toEqual([]);
+    expect(h.out.join("")).toContain("free-only");
+    expect(readInstalls(h.deps.files)[0]).toMatchObject({ scope: "project", configPath: path });
+  });
+
+  it("project scope with ASSAY_API_KEY set → refused", async () => {
+    const h = harness({ env: { ASSAY_API_KEY: "assay_sk_live_abc" } });
+    expect(await runAdd(["/c/weather", "--client", "cursor", "--scope", "project"], h.deps)).toBe(2);
+    expect(h.out.join("")).toContain("ASSAY_API_KEY");
+    expect(existsSync(join(project, ".cursor"))).toBe(false);
+    expect(h.store.size).toBe(0);
+  });
+
+  it("refuses --log-file and unknown profiles", async () => {
+    const h = harness();
+    expect(await runAdd(["/", "--client", "cursor", "--scope", "project", "--log-file", "/var/tmp/a.log"], h.deps)).toBe(2);
+    expect(await runAdd(["/", "--client", "cursor", "--scope", "project", "--profile", "nobody"], h.deps)).toBe(2);
+    expect(existsSync(join(project, ".cursor"))).toBe(false);
+  });
+
+  it("never follows a project config outside the project root", async () => {
+    symlinkSync(outside, join(project, ".cursor"));
+    symlinkSync(join(outside, "x.json"), join(project, ".mcp.json"));
+    const h = harness();
+    expect(await runAdd(["/", "--client", "cursor", "--scope", "project"], h.deps)).toBe(1);
+    expect(await runAdd(["/", "--client", "claude-code", "--scope", "project"], h.deps)).toBe(1);
+    expect(readdirSync(outside)).toEqual([]);
+    expect(h.calls).toEqual([]);
+  });
+});
+
+// ---- safety of file edits ---------------------------------------------------------------
+
+describe("config file edits", () => {
+  it("refuses a symlinked config file", async () => {
+    const real = join(outside, "mcp.json");
+    writeJson(real, { mcpServers: {} });
+    mkdirSync(join(home, ".cursor"));
+    symlinkSync(real, join(home, ".cursor", "mcp.json"));
+    const h = harness();
+    expect(await runAdd(["/", "--client", "cursor"], h.deps)).toBe(1);
+    expect(h.out.join("")).toContain("symbolic link");
+    expect(readJson(real)).toEqual({ mcpServers: {} });
+    expect(lstatSync(join(home, ".cursor", "mcp.json")).isSymbolicLink()).toBe(true);
+  });
+
+  it("refuses JSON with comments and leaves it untouched", async () => {
+    const path = userConfig("vscode");
+    mkdirSync(dirname(path), { recursive: true });
+    const text = '{\n  // mine\n  "servers": {}\n}\n';
+    writeFileSync(path, text);
+    const h = harness();
+    expect(await runAdd(["/", "--client", "vscode"], h.deps)).toBe(1);
+    expect(readFileSync(path, "utf8")).toBe(text);
+    expect(existsSync(`${path}.bak`)).toBe(false);
+  });
+
+  it("creates a missing config with no .bak", async () => {
+    const h = harness();
+    expect(await runAdd(["/", "--client", "claude-desktop"], h.deps)).toBe(0);
+    const path = userConfig("claude-desktop");
+    expect(readJson(path)).toEqual({ mcpServers: { assay: { command: "npx", args: ["-y", `@assay-ai/mcp@${V}`, "--name", "assay"] } } });
+    expect(existsSync(`${path}.bak`)).toBe(false);
+  });
+});
+
+// ---- list and remove --------------------------------------------------------------------
+
+describe("list", () => {
+  it("checks each install against the client config", async () => {
+    const h = harness();
+    expect(await runAdd(["/", "--client", "cursor"], h.deps)).toBe(0);
+    expect(await runAdd(["/c/weather", "--client", "claude-code"], h.deps)).toBe(0);
+    expect(await runAdd(["/my/notes", "--client", "vscode"], h.deps)).toBe(0);
+    // removed by hand, changed by hand
+    writeJson(userConfig("cursor"), { mcpServers: {} });
+    const vs = readJson(userConfig("vscode"));
+    (vs.servers as Record<string, unknown>)["assay-notes"] = { type: "stdio", command: "node", args: ["x.js"] };
+    writeJson(userConfig("vscode"), vs);
+    h.out.length = 0;
+    expect(await runList([], h.deps)).toBe(0);
+    const text = h.out.join("");
+    expect(text).toMatch(/assay {2}cursor \(user\) {2}→ https:\/\/mcp\.assay\.ai\/ {2}missing/);
+    expect(text).toMatch(/assay-weather {2}claude-code \(user\) {2}→ https:\/\/mcp\.assay\.ai\/c\/weather {2}ok/);
+    expect(text).toMatch(/assay-notes {2}vscode \(user\) .* changed/);
+  });
+
+  it("says when there is nothing", async () => {
+    const h = harness();
+    expect(await runList([], h.deps)).toBe(0);
+    expect(h.out.join("")).toContain("No Assay servers");
+    expect(await runList(["extra"], h.deps)).toBe(2);
+  });
+});
+
+describe("remove", () => {
+  it.each(CLIENT_IDS)("removes only its entry and the record, keeps others: %s", async (client) => {
+    const h = harness();
+    expect(await runAdd(["/", "--client", client, "--name", "keep"], h.deps)).toBe(0);
+    expect(await runAdd(["/c/weather", "--client", client], h.deps)).toBe(0);
+    expect(await runRemove(["assay-weather"], h.deps)).toBe(0);
+    expect([...entriesOf(client).keys()]).toEqual(["keep"]);
+    expect(readInstalls(h.deps.files).map((r) => r.name)).toEqual(["keep"]);
+    expect(h.out.join("")).toContain("still signed in");
+  });
+
+  it("refuses an entry assay-mcp did not write, even under a recorded name", async () => {
+    const h = harness();
+    expect(await runAdd(["/", "--client", "cursor"], h.deps)).toBe(0);
+    const path = userConfig("cursor");
+    writeJson(path, { mcpServers: { assay: { command: "npx", args: ["-y", "someone-else"] } } });
+    expect(await runRemove(["assay"], h.deps)).toBe(2);
+    expect(readJson(path)).toEqual({ mcpServers: { assay: { command: "npx", args: ["-y", "someone-else"] } } });
+    // an unrecorded name with --client: same rule
+    writeJson(path, { mcpServers: { mine: { command: "uvx", args: ["mine"] } } });
+    expect(await runRemove(["mine", "--client", "cursor"], h.deps)).toBe(2);
+    expect(Object.keys((readJson(path).mcpServers as object))).toEqual(["mine"]);
+  });
+
+  it("removes an unrecorded entry of ours with --client, and forgets one already removed by hand", async () => {
+    const h = harness();
+    expect(await runAdd(["/", "--client", "cursor"], h.deps)).toBe(0);
+    h.store.clear();
+    expect(await runRemove(["assay", "--client", "cursor"], h.deps)).toBe(0);
+    expect(entriesOf("cursor").size).toBe(0);
+
+    expect(await runAdd(["/", "--client", "windsurf"], h.deps)).toBe(0);
+    writeJson(userConfig("windsurf"), { mcpServers: {} });
+    expect(await runRemove(["assay"], h.deps)).toBe(0);
+    expect(readInstalls(h.deps.files)).toEqual([]);
+    expect(await runRemove(["assay"], h.deps)).toBe(2);
+  });
+
+  it("needs --client when the name is in several clients", async () => {
+    const h = harness();
+    expect(await runAdd(["/", "--client", "cursor"], h.deps)).toBe(0);
+    expect(await runAdd(["/", "--client", "windsurf"], h.deps)).toBe(0);
+    expect(await runRemove(["assay"], h.deps)).toBe(2);
+    expect(await runRemove(["assay", "--client", "windsurf"], h.deps)).toBe(0);
+    expect(entriesOf("cursor").has("assay")).toBe(true);
+  });
+
+  it("removes a project install from its project, whatever the current directory", async () => {
+    const h = harness();
+    expect(await runAdd(["/", "--client", "claude-code", "--scope", "project"], h.deps)).toBe(0);
+    h.deps.clientEnv.cwd = outside;
+    expect(await runRemove(["assay"], h.deps)).toBe(0);
+    expect(h.calls.at(-1)).toMatchObject({ bin: "claude", argv: ["mcp", "remove", "--scope", "project", "assay"], cwd: project });
+    expect(readJson(join(project, ".mcp.json")).mcpServers).toEqual({});
+  });
+});
+
+// ---- helpers ----------------------------------------------------------------------------
+
+describe("helpers", () => {
+  it("the Codex reader takes an entry with an env table for someone else's", () => {
+    const toml = [
+      "model = \"x\"",
+      "[mcp_servers.assay]",
+      "command = \"npx\"",
+      `args = ["-y", "@assay-ai/mcp@${V}",`,
+      "  \"--name\", \"assay\"]",
+      "[mcp_servers.withenv]",
+      "command = \"npx\"",
+      `args = ["-y", "@assay-ai/mcp@${V}", "--name", "withenv"]`,
+      "[mcp_servers.withenv.env]",
+      "HOME = \"/tmp\"",
+      "[mcp_servers.inline]",
+      "command = \"npx\"",
+      `args = ["-y", "@assay-ai/mcp@${V}", "--name", "inline"]`,
+      "env = { HOME = \"/tmp\" }",
+    ].join("\n");
+    const servers = parseCodexServers(toml);
+    expect(isAssayEntry(servers.get("assay"))).toBe(true);
+    expect(isAssayEntry(servers.get("withenv"))).toBe(false);
+    expect(isAssayEntry(servers.get("inline"))).toBe(false);
+  });
+
+  it("slug words for default names", () => {
+    expect(slugWordsFor({ kind: "ROOT" }, { tools: null })).toEqual([]);
+    expect(slugWordsFor({ kind: "ROOT" }, { tools: [{ name: "get_weather" }] })).toEqual(["get"]);
+    expect(slugWordsFor({ kind: "PUBLIC_TOOLSET", slug: "twitter-kit" }, { tools: null })).toEqual(["twitter", "kit"]);
+    expect(slugWordsFor({ kind: "HANDLE", handle: "acme" }, { tools: null })).toEqual(["acme"]);
+    expect(slugWordsFor({ kind: "UNLISTED_TOOLSET" }, { tools: null })).toEqual([]);
+  });
+
+  it("onPath finds executables without running anything", () => {
+    const bin = join(base, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "claude"), "#!/bin/sh\n", { mode: 0o755 });
+    writeFileSync(join(bin, "codex"), "not executable", { mode: 0o644 });
+    expect(onPath("claude", bin, "linux")).toBe(true);
+    expect(onPath("codex", bin, "linux")).toBe(false);
+    expect(onPath("gemini", bin, "linux")).toBe(false);
+  });
+});

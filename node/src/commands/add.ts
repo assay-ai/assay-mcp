@@ -1,6 +1,7 @@
-import { notImplemented } from "./not-implemented.js";
+import { runAdd } from "./add-impl.js";
+import { defaultDeps } from "./wiring.js";
 
-/** `assay-mcp add`. Stub until its task lands. */
+/** `assay-mcp add` (spec 8.3). */
 export function run(args: readonly string[]): Promise<number> {
-  return notImplemented("add", args);
+  return runAdd(args, defaultDeps());
 }
