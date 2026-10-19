@@ -1,0 +1,478 @@
+{
+  "description": "Server-name rule (spec 8.3.1, O5). A name s fits a URL when overhead + len(s) + L <= budget. Shared by node/ and the Connect UI.",
+  "rule": {
+    "budget": 64,
+    "overhead": 7,
+    "signedOutL": 48,
+    "signInTool": "assay_sign_in",
+    "noNameBudget": 16,
+    "maxLength": 56,
+    "signedOutHint": "Sign in first (`assay-mcp login`) to allow a longer name.",
+    "pattern": "^[a-z][a-z0-9-]*$",
+    "note": "Anchors are whole-string: a trailing newline is invalid. L values in the cases below are arbitrary unless a case says root (L 13). Tool names are ASCII [A-Za-z0-9_-]; L is measured in UTF-8 bytes."
+  },
+  "searchMetaTools": [
+    "search_tools",
+    "get_tool",
+    "call_tool"
+  ],
+  "maxLength": [
+    {
+      "name": "root, search mode, no pins (L 13: assay_sign_in counts)",
+      "L": 13,
+      "max": 44
+    },
+    {
+      "name": "/c/weather, full mode, longest 20",
+      "L": 20,
+      "max": 37
+    },
+    {
+      "name": "signed out",
+      "L": 48,
+      "max": 9
+    },
+    {
+      "name": "tool as long as the budget allows",
+      "L": 57,
+      "max": 0
+    }
+  ],
+  "valid": [
+    {
+      "name": "assay",
+      "ok": true
+    },
+    {
+      "name": "assay-twitter-kit",
+      "ok": true
+    },
+    {
+      "name": "a1",
+      "ok": true
+    },
+    {
+      "name": "_",
+      "ok": false
+    },
+    {
+      "name": "assay_weather",
+      "ok": false
+    },
+    {
+      "name": "Assay",
+      "ok": false
+    },
+    {
+      "name": "1assay",
+      "ok": false
+    },
+    {
+      "name": "-assay",
+      "ok": false
+    },
+    {
+      "name": "",
+      "ok": false
+    },
+    {
+      "name": "a b",
+      "ok": false
+    },
+    {
+      "name": "assay-weather-forecast-climate-data-tool-box-for-all-teams",
+      "ok": false
+    },
+    {
+      "name": "assay\n",
+      "ok": false
+    },
+    {
+      "name": "café",
+      "ok": false
+    },
+    {
+      "name": "ａssay",
+      "ok": false
+    },
+    {
+      "name": "assay-",
+      "ok": true,
+      "note": "valid by the pattern"
+    },
+    {
+      "name": "a--b",
+      "ok": true,
+      "note": "valid by the pattern"
+    },
+    {
+      "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ok": true
+    },
+    {
+      "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ok": false
+    }
+  ],
+  "fits": [
+    {
+      "name": "assay-weather",
+      "L": 20,
+      "fits": true
+    },
+    {
+      "name": "assay-weather",
+      "L": 44,
+      "fits": true
+    },
+    {
+      "name": "assay-weather",
+      "L": 45,
+      "fits": false
+    },
+    {
+      "name": "assay",
+      "L": 48,
+      "fits": true
+    },
+    {
+      "name": "assay-weather",
+      "L": 48,
+      "fits": false
+    },
+    {
+      "name": "_",
+      "L": 12,
+      "fits": false
+    },
+    {
+      "name": "assay",
+      "L": 52,
+      "fits": true
+    },
+    {
+      "name": "assay",
+      "L": 53,
+      "fits": false
+    },
+    {
+      "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "L": 1,
+      "fits": true
+    },
+    {
+      "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "L": 2,
+      "fits": false
+    },
+    {
+      "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "L": 1,
+      "fits": false
+    }
+  ],
+  "longestTool": [
+    {
+      "name": "search, no pins: meta tools and assay_sign_in",
+      "mode": "search",
+      "pinned": [],
+      "L": 13
+    },
+    {
+      "name": "search, a 20-character pin",
+      "mode": "search",
+      "pinned": [
+        "get_weather_forecast_x"
+      ],
+      "L": 22
+    },
+    {
+      "name": "search, a short pin",
+      "mode": "search",
+      "pinned": [
+        "ping"
+      ],
+      "L": 13
+    },
+    {
+      "name": "full, every tool in view",
+      "mode": "full",
+      "tools": [
+        "get_weather",
+        "get_weather_forecast_hourly"
+      ],
+      "L": 27
+    },
+    {
+      "name": "full, assay_sign_in still counted",
+      "mode": "full",
+      "tools": [
+        "ping"
+      ],
+      "L": 13
+    },
+    {
+      "name": "signed out",
+      "mode": "signedOut",
+      "L": 48
+    },
+    {
+      "name": "full, non-ASCII counted in UTF-8 bytes",
+      "mode": "full",
+      "tools": [
+        "café_weather_forecast"
+      ],
+      "L": 22
+    },
+    {
+      "name": "full, no tools",
+      "mode": "full",
+      "tools": [],
+      "L": 13
+    }
+  ],
+  "defaultName": [
+    {
+      "name": "root",
+      "urlKind": "ROOT",
+      "slugWords": [],
+      "L": 13,
+      "expect": "assay"
+    },
+    {
+      "name": "root ignores words",
+      "urlKind": "ROOT",
+      "slugWords": [
+        "weather"
+      ],
+      "L": 13,
+      "expect": "assay"
+    },
+    {
+      "name": "category",
+      "urlKind": "CATEGORY",
+      "slugWords": [
+        "weather"
+      ],
+      "L": 20,
+      "expect": "assay-weather"
+    },
+    {
+      "name": "toolset slug",
+      "urlKind": "MY_TOOLSET",
+      "slugWords": [
+        "twitter",
+        "kit"
+      ],
+      "L": 40,
+      "expect": "assay-twitter-kit"
+    },
+    {
+      "name": "drops trailing words",
+      "urlKind": "HANDLE",
+      "slugWords": [
+        "twitter",
+        "kit",
+        "pro"
+      ],
+      "L": 40,
+      "expect": "assay-twitter-kit"
+    },
+    {
+      "name": "drops to one word",
+      "urlKind": "PUBLIC_TOOLSET",
+      "slugWords": [
+        "twitter",
+        "kit"
+      ],
+      "L": 44,
+      "expect": "assay-twitter"
+    },
+    {
+      "name": "falls back to assay",
+      "urlKind": "UNLISTED_TOOLSET",
+      "slugWords": [
+        "twitter",
+        "kit"
+      ],
+      "L": 46,
+      "expect": "assay"
+    },
+    {
+      "name": "signed out",
+      "urlKind": "CATEGORY",
+      "slugWords": [
+        "weather"
+      ],
+      "L": 48,
+      "expect": "assay"
+    },
+    {
+      "name": "no words",
+      "urlKind": "CATEGORY",
+      "slugWords": [],
+      "L": 20,
+      "expect": "assay"
+    },
+    {
+      "name": "invalid word makes the slug invalid",
+      "urlKind": "CATEGORY",
+      "slugWords": [
+        "my_kit",
+        "b"
+      ],
+      "L": 20,
+      "expect": "assay"
+    },
+    {
+      "name": "non-ASCII word",
+      "urlKind": "CATEGORY",
+      "slugWords": [
+        "café"
+      ],
+      "L": 20,
+      "expect": "assay"
+    }
+  ],
+  "unique": [
+    {
+      "name": "free",
+      "base": "assay-weather",
+      "taken": [],
+      "L": 20,
+      "expect": "assay-weather"
+    },
+    {
+      "name": "collision",
+      "base": "assay-weather",
+      "taken": [
+        "assay-weather"
+      ],
+      "L": 20,
+      "expect": "assay-weather-2"
+    },
+    {
+      "name": "second collision",
+      "base": "assay-weather",
+      "taken": [
+        "assay-weather",
+        "assay-weather-2"
+      ],
+      "L": 20,
+      "expect": "assay-weather-3"
+    },
+    {
+      "name": "trimmed to the budget",
+      "base": "abcdefghijkl",
+      "taken": [
+        "abcdefghijkl"
+      ],
+      "L": 45,
+      "expect": "abcdefghij-2"
+    },
+    {
+      "name": "trimmed, no trailing dash",
+      "base": "abcdefghi-kl",
+      "taken": [
+        "abcdefghi-kl"
+      ],
+      "L": 45,
+      "expect": "abcdefghi-2"
+    }
+  ],
+  "refusal": [
+    {
+      "name": "typed 40-character name on L 20",
+      "typed": "assay-weather-forecast-climate-data-tool",
+      "L": 20,
+      "message": "`assay-weather-forecast-climate-data-tool` is too long for this server: its longest tool is 20 characters, so the name can be at most 37. Try `assay-weather-forecast-climate-data`.",
+      "kind": "tooLong"
+    },
+    {
+      "name": "one long word falls back to assay",
+      "typed": "weatherforecastingservice",
+      "L": 45,
+      "message": "`weatherforecastingservice` is too long for this server: its longest tool is 45 characters, so the name can be at most 12. Try `assay`.",
+      "kind": "tooLong"
+    },
+    {
+      "name": "signed out bound (hint is appended by the caller)",
+      "typed": "assay-weather",
+      "L": 48,
+      "message": "`assay-weather` is too long for this server: its longest tool is 48 characters, so the name can be at most 9. Try `assay`.",
+      "kind": "tooLong"
+    },
+    {
+      "name": "empty name is invalid",
+      "typed": "",
+      "L": 13,
+      "kind": "invalid",
+      "message": "`` is not a valid name: use lowercase letters, digits and `-`, starting with a letter."
+    },
+    {
+      "name": "underscore is invalid",
+      "typed": "_",
+      "L": 13,
+      "kind": "invalid",
+      "message": "`_` is not a valid name: use lowercase letters, digits and `-`, starting with a letter."
+    },
+    {
+      "name": "uppercase is invalid",
+      "typed": "Assay",
+      "L": 13,
+      "kind": "invalid",
+      "message": "`Assay` is not a valid name: use lowercase letters, digits and `-`, starting with a letter."
+    },
+    {
+      "name": "no name fits",
+      "typed": "abc",
+      "L": 60,
+      "kind": "tooLong",
+      "message": "`abc` is too long for this server: its longest tool is 60 characters, so no name fits."
+    }
+  ],
+  "alias": [
+    {
+      "name": "fits, unchanged",
+      "server": "assay-weather",
+      "tool": "get_weather",
+      "expect": "get_weather"
+    },
+    {
+      "name": "exactly at the cap, unchanged",
+      "server": "assay",
+      "tool": "get_historical_weather_forecast_hourly_v2_with_extra",
+      "expect": "get_historical_weather_forecast_hourly_v2_with_extra"
+    },
+    {
+      "name": "one over the cap",
+      "server": "assay-weather-forecast-service",
+      "tool": "get_historical_weather_forecast_hourly_v2",
+      "expect": "get_historical_weath_vam3sv"
+    },
+    {
+      "name": "base32 of sha256, lowercase",
+      "server": "assay-weather-forecast-service",
+      "tool": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expect": "aaaaaaaaaaaaaaaaaaaa_hjkpyd"
+    },
+    {
+      "name": "56-character server leaves no room: no alias",
+      "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "tool": "get_weather",
+      "expect": null
+    },
+    {
+      "name": "server of 50 leaves 0 prefix characters",
+      "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "tool": "get_weather_forecast",
+      "expect": null
+    },
+    {
+      "name": "non-ASCII tool has no alias",
+      "server": "assay",
+      "tool": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+      "expect": null
+    }
+  ]
+}
