@@ -267,7 +267,7 @@ describe("F1 sign-in", () => {
     await signIn(profile(), deployment, {}, { keychain, log, openBrowser: browser().open });
     const first = readProfile(profile())!.credentialId;
     await withLock(profile(), (lock) => keychain.set(lock, "delegate_key", "0x" + "11".repeat(32)));
-    await signIn(profile(), deployment, { device: "Laptop‮\u0007 two" }, { keychain, log, openBrowser: browser().open });
+    await signIn(profile(), deployment, { device: "Laptop‮\u0007 two", force: true }, { keychain, log, openBrowser: browser().open });
     const q = as.authorizeParams[1]!;
     expect(q.get("assay_replaces")).toBe(first);
     expect(q.get("assay_device")).toBe("Laptop two");

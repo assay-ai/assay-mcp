@@ -1,7 +1,8 @@
 /**
  * `assay-mcp login [--profile <name>] [--url <url|/path>]`: F1 from a terminal.
  *
- * The sign-in runs under the profile lock (Task 2.7 `signIn`); the link is printed to stderr
+ * The sign-in is Task 2.7/2.8 `signIn` with `force`: an explicit login always completes, and
+ * replaces a stored grant through `assay_replaces`; the link is printed to stderr
  * before the browser opens, so it can be copied when no browser opens. `--url` only selects
  * the deployment (dev mode, same rules as `serve`); it defaults to the profile's own.
  */
@@ -27,13 +28,14 @@ export async function login(args: readonly string[], deps: ProfileDeps): Promise
   const keychain = await profileKeychain(deps, profile, deployment);
   const ref = profileRef(deps, profile);
 
+  // An explicit login always completes a fresh sign-in; a grant already stored is replaced
+  // through `assay_replaces` (F5), even if another process refreshes it meanwhile.
   if (await hasGrant({ profile: ref, deployment, keychain })) {
     const id = readProfile(ref)?.credentialId;
-    deps.print(`Already signed in${id ? ` (credential ${id.slice(0, 8)})` : ""}. Run \`assay-mcp logout\` first to sign in again.\n`);
-    return EXIT_OK;
+    deps.print(`Signing in again; this replaces the current sign-in${id ? ` (credential ${id.slice(0, 8)})` : ""}.\n`);
   }
 
-  const result = await signIn(ref, deployment, {}, {
+  const result = await signIn(ref, deployment, { force: true }, {
     keychain,
     log: deps.log,
     onLink: (link) => deps.print(`Approve in your browser: ${link}\n`),

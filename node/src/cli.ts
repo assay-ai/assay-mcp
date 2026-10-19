@@ -37,7 +37,7 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
 };
 
 export const USAGE = `Usage:
-  assay-mcp [serve] [--url <url|/path>] [--profile <name>] [--no-paid] [--log-level <level>] [--log-file <path>]
+  assay-mcp [serve] [--url <url|/path>] [--name <name>] [--profile <name>] [--no-paid] [--log-level <level>] [--log-file <path>]
   assay-mcp add <url|/path> [--client <id>] [--name <name>] [--scope user|project] [--profile <name>] [--force]
   assay-mcp list
   assay-mcp remove <name> [--client <id>] [--scope user|project]

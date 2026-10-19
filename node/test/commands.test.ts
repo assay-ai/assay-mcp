@@ -375,10 +375,32 @@ describe("login and logout (fake AS)", () => {
     expect(keyring.writeSignals.every((s) => s instanceof AbortSignal)).toBe(true);
     expect(output()).not.toMatch(TOKEN_PATTERN);
 
+    // An explicit login while signed in signs in again and replaces the grant (F5).
     printed = [];
-    expect(await runLogin([], deps({ env: E2E_ENV }))).toBe(0);
-    expect(output()).toContain("Already signed in");
-    expect(as.authorizeParams).toHaveLength(1);
+    expect(await runLogin([], deps({ env: E2E_ENV, signIn: { openBrowser: browser } }))).toBe(0);
+    expect(output()).toContain(`Signing in again; this replaces the current sign-in (credential ${grant.credentialId.slice(0, 8)}).`);
+    expect(as.authorizeParams).toHaveLength(2);
+    expect(as.authorizeParams[1]!.get("assay_replaces")).toBe(grant.credentialId);
+    expect(readProfile(ref())!.credentialId).toBe(as.grants[1]!.credentialId);
+  });
+
+  it("R1-M4: a forced login completes even when a sibling's refresh rotates the token meanwhile", async () => {
+    const old = as.seedGrant();
+    await seedProfile("e2e");
+    seedSecret("default", "e2e", "refresh_token", old.refreshToken);
+    seedSecret("default", "e2e", "access_token", JSON.stringify({ token: old.accessToken, expiresAt: old.expiresAt }));
+    const rotating = (url: string) => {
+      // A sibling process refreshes while the browser is open: the stored pair changes.
+      seedSecret("default", "e2e", "refresh_token", "assay_rt_rotated_by_a_sibling");
+      return browser(url);
+    };
+    expect(await runLogin([], deps({ env: E2E_ENV, signIn: { openBrowser: rotating } }))).toBe(0);
+    expect(as.tokenCalls("authorization_code")).toHaveLength(1);
+    expect(as.authorizeParams[0]!.get("assay_replaces")).toBe(CRED);
+    const fresh = as.grants.at(-1)!;
+    expect(output()).toContain(`Signed in (credential ${fresh.credentialId.slice(0, 8)}).`);
+    expect(readProfile(ref())!.credentialId).toBe(fresh.credentialId);
+    expect(keyring.entries.get(`${KEYCHAIN_SERVICE}\u0000default@e2e/refresh_token`)).not.toBe("assay_rt_rotated_by_a_sibling");
   });
 
   it("login maps LOCK_TIMEOUT to the -32001 text and exits 1", async () => {
@@ -815,7 +837,17 @@ describe("R-MCP-7: no command emits the delegate key or a token", () => {
       await runDevAllow([E2E_MCP], tty);
       await runEnablePaid([], plain);
       await runDoctor([], plain);
-      await runLogin([], plain);
+      await runLogin([], {
+        ...plain,
+        signIn: {
+          openBrowser: (url) => {
+            opened.push(url);
+            const target = as.approve(url);
+            setImmediate(() => void realFetch(target).then((r) => r.text()).catch(() => {}));
+            return Promise.resolve(true);
+          },
+        },
+      });
       await runLogout([], plain);
       expect(stdout).not.toHaveBeenCalled();
 
