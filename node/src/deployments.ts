@@ -105,7 +105,24 @@ export function validateDeployment(env: Environment, d: Deployment, allowPlaceho
     if (!Number.isInteger(n.decimals) || n.decimals < 0 || n.decimals > 36) errors.push(`${where}.decimals: invalid`);
     const minRpc = DEV_ENVIRONMENTS.includes(env) ? 1 : 2;
     if (!Array.isArray(n.rpc) || n.rpc.length < minRpc) errors.push(`${where}.rpc: needs at least ${minRpc}`);
-    else n.rpc.forEach((r, i) => checkUrl(errors, `${where}.rpc[${i}]`, r, allowPlaceholder));
+    else {
+      n.rpc.forEach((r, i) => checkUrl(errors, `${where}.rpc[${i}]`, r, allowPlaceholder));
+      if (!DEV_ENVIRONMENTS.includes(env)) {
+        // Outside dev: https only, and the RPCs must be different hosts, so that two agreeing
+        // answers are two independent answers (chain reads, G4).
+        const hosts = new Set<string>();
+        const filled = n.rpc.filter((r) => typeof r === "string" && !isPlaceholder(r));
+        for (const r of filled) {
+          if (!r.startsWith("https://")) errors.push(`${where}.rpc: ${r} must be https`);
+          try {
+            hosts.add(new URL(r).hostname.toLowerCase());
+          } catch {
+            // checkUrl reported it.
+          }
+        }
+        if (hosts.size !== filled.length) errors.push(`${where}.rpc: RPCs must be distinct hosts`);
+      }
+    }
   }
   return errors;
 }
