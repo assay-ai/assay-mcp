@@ -5,8 +5,9 @@
  *
  * The file is written only by `assay-mcp settings set` on a TTY, after a confirmation, as a
  * 0600 file in the 0700 profile directory, under the profile lock. Never through env, a flag
- * of `serve`, or a project config. `serve` reads it through `readPrivateFile`, so a loose,
- * foreign or symlinked file counts as "nothing allowed".
+ * of `serve`, or a project config. `serve` reads it through `readSettings` below (one parser,
+ * review R1-N2) and treats any refusal, including a loose, foreign or symlinked file, as
+ * "nothing allowed".
  */
 import type { LockHandle, ProfileRef } from "./lock.js";
 import { profileFile, readPrivateFile, writePrivateFile } from "./paths.js";

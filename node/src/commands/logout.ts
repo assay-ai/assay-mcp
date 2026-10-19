@@ -6,12 +6,15 @@
  *    one stored), which ends the grant;
  * 2. delete the tokens and the delegate key from the keychain;
  * 3. delete the profile files except `limits.json` and `paid-urls.json` (the user's own
- *    choices, kept for the next sign-in).
+ *    choices, kept for the next sign-in);
+ * 4. delete the "sign-in in progress" marker when it is ours or its process is gone. A live
+ *    marker of another process is kept: that sign-in finishes or expires on its own.
  * Sibling processes then get 401 and fall back to pre-sign-in mode on their own (F7 step 4).
  * The on-chain grant of the deleted key is not touched: the user is told how to stop it.
  */
 import { EXIT_OK } from "../exit-codes.js";
 import { clientIdOf, postForm, REQUEST_TIMEOUT_MS } from "../oauth/endpoints.js";
+import { clearDeadMarker } from "../oauth/signin-marker.js";
 import { ENVIRONMENTS, type Environment } from "../deployments.js";
 import type { ResolvedDeployment } from "../profile/deployments.js";
 import { LockError, withLock, type LockHandle } from "../profile/lock.js";
@@ -92,6 +95,7 @@ export async function logout(args: readonly string[], deps: ProfileDeps): Promis
     }
     lock.assertHeld();
     for (const kind of LOGOUT_DELETES) deletePrivateFile(deps.dir, profileFile(profile, kind));
+    clearDeadMarker(ref, lock);
     return hadKey;
   };
 

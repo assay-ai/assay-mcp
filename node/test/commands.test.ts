@@ -4,7 +4,7 @@
  * fake chain. Never the real keychain, real client configs or the real profile directory.
  */
 import { createServer, type Server } from "node:http";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -40,6 +40,8 @@ import { configDir, profileFile, writePrivateFile } from "../src/profile/paths.j
 import { testHome } from "./setup/temp-home.js";
 import { addPaidUrl, createProfile, readLimits, readPaidUrls, readProfile, updateProfile } from "../src/profile/profile.js";
 import { readSettings } from "../src/profile/settings.js";
+import { checkEnvironment, readProfileSettings } from "../src/proxy/environment.js";
+import { spawnSync } from "node:child_process";
 import { isInteractive, requireTty, TtyRequired } from "../src/tty.js";
 import { E2E_MCP, FakeAs } from "./helpers/fake-as.js";
 import { MemoryKeyring } from "./helpers/memory-keyring.js";
@@ -476,6 +478,29 @@ describe("login and logout (fake AS)", () => {
     expect(readProfile(ref())).toBeNull();
   });
 
+  it("R1-N3: logout removes a sign-in marker of a dead pid or of this process, and leaves another live process's marker", async () => {
+    const markerPath = join(dir, profileFile("default", "signin"));
+    const writeMarker = (pid: number) =>
+      withLock(ref(), (lock) => {
+        lock.assertHeld();
+        writePrivateFile(dir, profileFile("default", "signin"), `${JSON.stringify({ version: 1, pid, startedAt: Date.now(), token: "marker-token", passive: false })}\n`);
+      });
+    // A child that has already exited: its pid no longer runs.
+    const dead = spawnSync(process.execPath, ["-e", ""]).pid!;
+    for (const pid of [dead, process.pid]) {
+      await seedFull();
+      await writeMarker(pid);
+      expect(await runLogout([], deps({ env: E2E_ENV }))).toBe(0);
+      expect(existsSync(markerPath)).toBe(false);
+    }
+    // The parent process is alive and is not this process: its pending sign-in is left alone.
+    await seedFull();
+    await writeMarker(process.ppid);
+    expect(await runLogout([], deps({ env: E2E_ENV }))).toBe(0);
+    expect(existsSync(markerPath)).toBe(true);
+    expect(readProfile(ref())).toBeNull();
+  });
+
   /** A signed-in profile with a payment key and every profile file. */
   async function seedFull(refreshToken = "assay_rt_seeded_token_value", accessToken = "assay_at_seeded_token_value") {
     await seedProfile("e2e", { delegate: true, paid: ["/c/weather"] });
@@ -722,6 +747,9 @@ describe("settings (env-proxy opt-in)", () => {
     // The exact shape `serve` reads (Task 2.8 environment.ts): {"version":1,"allowEnvProxy":true}.
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ version: 1, allowEnvProxy: true });
     expect(readSettings(ref()).allowEnvProxy).toBe(true);
+    // R1-N2: serve's reader accepts exactly what settings set wrote, and the check then passes.
+    expect(readProfileSettings(ref()).allowEnvProxy).toBe(true);
+    expect(checkEnvironment({ HTTPS_PROXY: "http://proxy.example.com:8080" }, [], () => readProfileSettings(ref()), "default").refusals).toEqual([]);
     printed = [];
     expect(await runSettings([], deps())).toBe(0);
     expect(output()).toContain("allowed");
@@ -730,6 +758,31 @@ describe("settings (env-proxy opt-in)", () => {
     expect(await runSettings(["set", "--allow-env-proxy", "off"], deps({ isTTY: true }))).toBe(0);
     expect(confirmAsked).toEqual([]);
     expect(readSettings(ref()).allowEnvProxy).toBe(false);
+    expect(readProfileSettings(ref()).allowEnvProxy).toBe(false);
+    expect(checkEnvironment({ HTTPS_PROXY: "http://proxy.example.com:8080" }, [], () => readProfileSettings(ref()), "default").refusals).toHaveLength(1);
+  });
+
+  it("R1-N2: settings and serve share one parser; serve fails closed where settings refuses", async () => {
+    const cases: [string, boolean | "refused"][] = [
+      ['{"version":1,"allowEnvProxy":true}', true],
+      ['{"version":1,"allowEnvProxy":false}', false],
+      ['{"version":1,"allowEnvProxy":"true"}', "refused"],
+      ['{"version":1,"allowEnvProxy":1}', "refused"],
+      ['{"version":2,"allowEnvProxy":true}', "refused"],
+      ['{"allowEnvProxy":true}', "refused"],
+      ["[true]", "refused"],
+      ["null", "refused"],
+      ["{not json", "refused"],
+    ];
+    for (const [text, want] of cases) {
+      await withLock(ref(), (lock) => {
+        lock.assertHeld();
+        writePrivateFile(dir, profileFile("default", "settings"), text);
+      });
+      if (want === "refused") expect(() => readSettings(ref()), text).toThrow();
+      else expect(readSettings(ref()).allowEnvProxy, text).toBe(want);
+      expect(readProfileSettings(ref()).allowEnvProxy, text).toBe(want === true);
+    }
   });
 
   it("a declined confirmation (a plain yes) or a bad value writes nothing", async () => {
@@ -1063,6 +1116,23 @@ describe("global guard (review I2)", () => {
     mkdirSync(watched);
     expect(() => again()).toThrow(/changed the real profile directory/);
     expect(fingerprintDir(watched)).toContain("watched d");
+  });
+
+  it("R1-N1: catches a write through a profile directory that is itself a symlink", () => {
+    const target = join(base, "real-target");
+    mkdirSync(target);
+    const link = join(base, "linked-profile");
+    symlinkSync(target, link);
+    const teardown = guard(link);
+    writeFileSync(join(link, "default.json"), "{}");
+    expect(() => teardown()).toThrow(/changed the real profile directory/);
+    // The resolved path is part of the fingerprint: re-pointing the link is a change too.
+    const other = join(base, "other-target");
+    mkdirSync(other);
+    const repoint = guard(link);
+    unlinkSync(link);
+    symlinkSync(other, link);
+    expect(() => repoint()).toThrow(/changed the real profile directory/);
   });
 
   it("every default dependency points at the temporary home", async () => {
