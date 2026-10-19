@@ -25,7 +25,7 @@ export interface AssayClientOptions {
 export interface AssayTool {
   name: string;
   description: string;
-  inputSchema: Record<string, unknown>;
+  inputSchema: { type: "object"; [key: string]: unknown };
 }
 
 /** A guard's refusal to sign a payment. */

@@ -175,7 +175,7 @@ export class AssayClient {
       const page = await client.listTools(cursor ? { cursor } : undefined);
       this.#quotes.setAll(quotesFromList(page));
       for (const t of page.tools) {
-        tools.push({ name: t.name, description: t.description ?? "", inputSchema: t.inputSchema as Record<string, unknown> });
+        tools.push({ name: t.name, description: t.description ?? "", inputSchema: t.inputSchema as AssayTool["inputSchema"] });
       }
       cursor = page.nextCursor;
     } while (cursor);

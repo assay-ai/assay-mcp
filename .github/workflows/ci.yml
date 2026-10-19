@@ -4,6 +4,12 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      backend_sha:
+        description: "examples job: the assay-backend commit to test against (full SHA)"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -153,3 +159,96 @@ jobs:
           if [ -n "${ASSAY_CI_KEYCHAIN:-}" ]; then
             security delete-keychain "$ASSAY_CI_KEYCHAIN" || true
           fi
+
+  examples:
+    # Spec §10.3 and §12.3 row 10: both SDK examples against the e2e backend (Postgres, Redis and
+    # the backend built from a pinned commit; the same pattern as the proxy's integration job),
+    # with a development origin in code. Needs the backend read token and the LLM keys as secrets,
+    # and is skipped cleanly (a notice, never a failure, never a secret printed) when any is absent,
+    # as on fork pull requests. The paid call needs an anvil fork with staked providers, which this
+    # backend does not have: the paid path is proven by the stubbed-loop test (sdk/node/test/examples.test.ts).
+    # Model ids are repository variables, never defaults in the examples.
+    name: examples
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      BACKEND_SHA: ${{ inputs.backend_sha || 'e91dc15e74aa617f42ddd78931b6c249470b6172' }}
+      BACKEND_DIR: ${{ github.workspace }}/backend
+      COMPOSE_FILE: sdk/node/examples/ci/backend.compose.yml
+      HUMAN_TOKEN: mcp_demo_token_evm_buyer
+      HAS_SECRETS: ${{ secrets.ASSAY_BACKEND_READ_TOKEN != '' && secrets.ANTHROPIC_API_KEY != '' && secrets.OPENAI_API_KEY != '' && vars.ANTHROPIC_MODEL != '' && vars.OPENAI_MODEL != '' }}
+    steps:
+      - name: Secrets present
+        if: env.HAS_SECRETS != 'true'
+        run: echo "::notice::The backend read token, an LLM key or a model variable is not set; the examples job is skipped."
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.HAS_SECRETS == 'true'
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.HAS_SECRETS == 'true'
+        with:
+          repository: assay-ai/assay-backend
+          ref: ${{ env.BACKEND_SHA }}
+          token: ${{ secrets.ASSAY_BACKEND_READ_TOKEN }}
+          path: backend
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: env.HAS_SECRETS == 'true'
+        with:
+          node-version: "22"
+      - run: npm ci --ignore-scripts
+        if: env.HAS_SECRETS == 'true'
+      - name: Start Postgres, Redis and the backend
+        if: env.HAS_SECRETS == 'true'
+        shell: bash
+        run: |
+          OAUTH_REQUEST_COOKIE_SECRET="$(openssl rand -hex 32)"
+          CREDENTIAL_VAULT_KEKS="[{\"keyId\":\"ci-1\",\"key\":\"$(openssl rand -hex 32)\"}]"
+          PROVIDER_REQUEST_SIGNING_KEYS="[{\"keyId\":\"ci-1\",\"secretKey\":\"$(openssl rand -hex 32)\"}]"
+          echo "::add-mask::$OAUTH_REQUEST_COOKIE_SECRET"
+          export OAUTH_REQUEST_COOKIE_SECRET CREDENTIAL_VAULT_KEKS PROVIDER_REQUEST_SIGNING_KEYS
+          docker compose up -d --build --wait postgres redis
+          docker compose up -d --build backend
+          for i in $(seq 1 120); do
+            if curl -sf -o /dev/null http://localhost:3000/api/v1/chains && curl -sf -o /dev/null http://localhost:3200/.well-known/oauth-protected-resource; then
+              echo "backend up"; break
+            fi
+            sleep 5
+          done
+          curl -sf -o /dev/null http://localhost:3200/.well-known/oauth-protected-resource || { docker compose logs backend | tail -100; exit 1; }
+      - name: Seed the demo identities
+        if: env.HAS_SECRETS == 'true'
+        run: node sdk/node/examples/ci/seed-sql.mjs "$BACKEND_DIR/scripts/mcp/seed/credentials.json" "$HUMAN_TOKEN" | docker compose exec -T postgres psql -q -U postgres -d assay_mcp_it -v ON_ERROR_STOP=1
+      - name: Mint an API key for the demo agent
+        if: env.HAS_SECRETS == 'true'
+        shell: bash
+        run: |
+          AGENT_ID="$(node -e 'const c=require(process.argv[1])[process.argv[2]];process.stdout.write(c.agentId)' "$BACKEND_DIR/scripts/mcp/seed/credentials.json" "$HUMAN_TOKEN")"
+          KEY="$(curl -sf -X POST "http://localhost:3000/api/v1/agents/$AGENT_ID/credentials" -H "authorization: Bearer $HUMAN_TOKEN" -H 'content-type: application/json' -d '{"name":"sdk examples"}' | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).data.token))')"
+          echo "::add-mask::$KEY"
+          echo "ASSAY_API_KEY=$KEY" >> "$GITHUB_ENV"
+      - name: Anthropic example
+        if: env.HAS_SECRETS == 'true'
+        working-directory: sdk/node
+        env:
+          ASSAY_URL: http://localhost:3200/?free=1
+          ASSAY_DEV_ORIGIN: http://localhost:3200
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL }}
+        run: node run-example.mjs anthropic-messages
+      - name: OpenAI example
+        if: env.HAS_SECRETS == 'true'
+        working-directory: sdk/node
+        env:
+          ASSAY_URL: http://localhost:3200/?free=1
+          ASSAY_DEV_ORIGIN: http://localhost:3200
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+        run: node run-example.mjs openai-responses
+      - name: Backend logs
+        if: failure() && env.HAS_SECRETS == 'true'
+        run: docker compose logs backend | tail -300
+      - name: Stop
+        if: always() && env.HAS_SECRETS == 'true'
+        run: docker compose down -v
