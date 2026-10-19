@@ -49,7 +49,7 @@ export interface VoucherRequirement {
   delegate?: string | null;
 }
 
-/** The voucher as it goes on the wire in `_meta["x402/voucher"].voucher`. */
+/** The voucher as it goes on the wire in `_meta["assay/voucher"].voucher`. */
 export interface WireVoucher {
   payer: string;
   payTo: string;
