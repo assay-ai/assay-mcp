@@ -4,11 +4,14 @@ import { VERSION } from "../src/version.js";
 
 const COMMAND_NAMES = [
   "serve", "add", "list", "remove", "login", "logout", "status",
-  "enable-paid", "limits", "allow-paid", "disallow-paid", "dev-allow",
+  "enable-paid", "limits", "allow-paid", "disallow-paid", "dev-allow", "settings", "doctor",
 ];
 
 /** Commands that are no longer stubs. */
-const IMPLEMENTED = ["add", "list", "remove"];
+const IMPLEMENTED = [
+  "add", "list", "remove", "login", "logout", "status", "enable-paid", "limits",
+  "allow-paid", "disallow-paid", "dev-allow", "settings", "doctor",
+];
 
 afterEach(() => {
   vi.restoreAllMocks();

@@ -5,6 +5,7 @@ import * as add from "./commands/add.js";
 import * as allowPaid from "./commands/allow-paid.js";
 import * as devAllow from "./commands/dev-allow.js";
 import * as disallowPaid from "./commands/disallow-paid.js";
+import * as doctor from "./commands/doctor.js";
 import * as enablePaid from "./commands/enable-paid.js";
 import * as limits from "./commands/limits.js";
 import * as list from "./commands/list.js";
@@ -12,6 +13,7 @@ import * as login from "./commands/login.js";
 import * as logout from "./commands/logout.js";
 import * as remove from "./commands/remove.js";
 import * as serve from "./commands/serve.js";
+import * as settings from "./commands/settings.js";
 import * as status from "./commands/status.js";
 
 export type Command = (args: readonly string[]) => Promise<number>;
@@ -30,6 +32,8 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
   "allow-paid": allowPaid.run,
   "disallow-paid": disallowPaid.run,
   "dev-allow": devAllow.run,
+  settings: settings.run,
+  doctor: doctor.run,
 };
 
 export const USAGE = `Usage:
@@ -37,11 +41,14 @@ export const USAGE = `Usage:
   assay-mcp add <url|/path> [--client <id>] [--name <name>] [--scope user|project] [--profile <name>] [--force]
   assay-mcp list
   assay-mcp remove <name> [--client <id>] [--scope user|project]
-  assay-mcp login | logout | status [--profile <name>]
+  assay-mcp login [--profile <name>] [--url <url|/path>]
+  assay-mcp logout | status [--profile <name>]
   assay-mcp enable-paid [--profile <name>]
   assay-mcp limits [set --per-call <usd> --per-day <usd> [--confirm-above <usd>|off] [--providers <0x...,...>|off]] [--profile <name>]
   assay-mcp allow-paid <url> | disallow-paid <url> [--profile <name>]
   assay-mcp dev allow <origin>
+  assay-mcp settings [set --allow-env-proxy on|off] [--profile <name>]
+  assay-mcp doctor [--profile <name>]
   assay-mcp --version
 `;
 
