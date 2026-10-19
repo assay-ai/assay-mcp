@@ -77,6 +77,41 @@ describe("redact", () => {
   });
 });
 
+describe("redact: N2 gaps", () => {
+  const SECRET_PARAMS = ["code_verifier", "refresh_token", "code", "request", "state", "access_token"];
+
+  it("redacts a secret param at the very start of a form body", () => {
+    for (const p of SECRET_PARAMS) {
+      expect(redact(`${p}=Zx9kQ2opaque-Value_1&grant_type=x`), p).toBe(`${p}=[redacted]&grant_type=x`);
+    }
+  });
+
+  it("pins case-insensitive query redaction", () => {
+    expect(redact("https://mcp.example.test/cb?CODE=Zx9kQ2&State=Pq7opaque&Code_Verifier=Aa1")).toBe(
+      "https://mcp.example.test/cb?CODE=[redacted]&State=[redacted]&Code_Verifier=[redacted]",
+    );
+  });
+
+  it("redacts a bare Basic credential but not prose", () => {
+    expect(redact("sent Basic dXNlcjpwYXNz next")).toBe("sent Basic [redacted] next");
+    expect(redact("sent Basic dXNlcjpwYXNzMTIz== next")).toBe("sent Basic [redacted] next");
+    expect(redact("a Basic Configuration step")).toBe("a Basic Configuration step");
+  });
+
+  it("redacts secret keys inside JSON text, quoted or escaped", () => {
+    for (const k of SECRET_PARAMS) {
+      expect(redact(`{"${k}":"Zx9kQ2opaque","n":1}`), k).toBe(`{"${k}":"[redacted]","n":1}`);
+      expect(redact(`body: "{\\"${k}\\": \\"Zx9kQ2opaque\\"}"`), k).not.toContain("Zx9kQ2opaque");
+    }
+  });
+
+  it("keeps ordinary prose and transaction hashes", () => {
+    const tx = `0x${"ab12".repeat(16)}`;
+    expect(redact("the code is fine and the state of the request: ok")).toBe("the code is fine and the state of the request: ok");
+    expect(redact(`tx ${tx}`)).toBe("tx [redacted]");
+  });
+});
+
 describe("logger", () => {
   it("defaults to warn and parses levels", () => {
     expect(DEFAULT_LOG_LEVEL).toBe("warn");

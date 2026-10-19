@@ -59,6 +59,31 @@ describe("a crashing process", () => {
       });
     }
   });
+  it("bin.ts main() rejection: one redacted line, exit 1, no stack", async () => {
+    const stub = `export async function main() { throw new TypeError("fetch failed ${TOKEN} ${KEY}", { cause: new Error("${KEY}") }); }`;
+    await build({
+      entryPoints: [resolve(__dirname, "../src/bin.ts")],
+      bundle: true,
+      platform: "node",
+      format: "esm",
+      outfile: join(dir, "bin-reject.mjs"),
+      logLevel: "silent",
+      plugins: [
+        {
+          name: "stub-cli",
+          setup(b) {
+            b.onResolve({ filter: /\/cli\.js$/ }, () => ({ path: "stub-cli", namespace: "stub" }));
+            b.onLoad({ filter: /.*/, namespace: "stub" }, () => ({ contents: stub, loader: "js" }));
+          },
+        },
+      ],
+    });
+    const r = spawnSync(process.execPath, [join(dir, "bin-reject.mjs")], { encoding: "utf8" });
+    expect(r.status).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe("assay-mcp: TypeError: fetch failed [redacted] [redacted]\n");
+  });
+
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
   it.each(Object.keys(scripts))("%s: stdout empty, stderr one redacted line, exit 1", (name) => {
