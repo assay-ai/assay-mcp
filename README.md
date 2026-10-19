@@ -86,15 +86,22 @@ assay-mcp [serve] [--url <url|/path>] [--profile <name>] [--no-paid] [--log-leve
 assay-mcp add <url|/path> [--client <id>] [--name <name>] [--scope user|project] [--profile <name>] [--force]
 assay-mcp list
 assay-mcp remove <name> [--client <id>] [--scope user|project]
-assay-mcp login | logout | status [--profile <name>]
+assay-mcp login [--profile <name>] [--url <url|/path>]
+assay-mcp logout | status [--profile <name>]
 assay-mcp enable-paid [--profile <name>]
 assay-mcp limits [set --per-call <usd> --per-day <usd> [--confirm-above <usd>|off] [--providers <0x...,...>|off]] [--profile <name>]
 assay-mcp allow-paid <url> | disallow-paid <url> [--profile <name>]
 assay-mcp dev allow <origin>
+assay-mcp settings [set --allow-env-proxy on|off] [--profile <name>]
+assay-mcp doctor [--profile <name>]
 assay-mcp --version
 ```
 
 Exit codes: 0 at the end of input, 1 on a fatal startup error, 2 on a usage error.
+
+`limits set`, `allow-paid`, `disallow-paid`, `dev allow` and `settings set` run only in an interactive terminal; anything else (an agent, a script, your MCP app) is refused with exit code 2. `settings set --allow-env-proxy on` (which asks you to type the profile name) lets `assay-mcp` use an HTTP proxy from its environment, which it refuses by default because a project config can set that environment. `doctor` checks project configs and this terminal for settings that change how `assay-mcp` runs.
+
+On Windows, `assay-mcp add` runs a client CLI (`claude`, `codex`, `gemini`) only from your home directory and refuses a project-scope install through it; use `--scope user` or a file client. It also refuses a CLI path or URL with characters outside plain ASCII letters, digits and URL punctuation (for example a user name with accents, or `%`), because `cmd.exe` would interpret them; add the server in that client's own settings instead.
 
 ## Repository layout
 

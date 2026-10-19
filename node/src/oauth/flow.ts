@@ -33,7 +33,8 @@ import { activateMarker, claimMarker, releaseMarker } from "./signin-marker.js";
  * `force`) and claim the "sign-in in progress" marker (`signin-marker.ts`), so a second
  * process starts no browser flow of its own; then, after the callback, to re-read the keychain
  * again (a grant stored meanwhile wins and this code is dropped unexchanged, so one profile
- * never gets two grants) and exchange and store. In between:
+ * never gets two grants; an explicit re-login, `force`, always completes and replaces it) and
+ * exchange and store. In between:
  * 1. re-read the profile; `assay_replaces` defaults to the credential id it holds (F5);
  * 2. PKCE S256 verifier and a 256-bit `state`; the loopback listener on `127.0.0.1`;
  * 3. the authorize URL is built here from the pinned issuer (PRM `authorization_servers` and
@@ -218,6 +219,8 @@ export function launcherEnv(platform: NodeJS.Platform, env: NodeJS.ProcessEnv): 
   }
   const copy = { ...env };
   delete copy.BROWSER;
+  // Windows: never search the cwd for a bare program name (as for client CLIs).
+  if (platform === "win32") copy.NoDefaultCurrentDirectoryInExePath = "1";
   return copy;
 }
 
@@ -379,7 +382,10 @@ export async function signIn(profile: ProfileRef, deployment: ResolvedDeployment
       profile,
       async (lock) => {
         const now = await deps.keychain.get("refresh_token");
-        if (now !== null && now !== heldRefresh) {
+        // An explicit re-login (`force`) always completes: a sibling's refresh rotating the
+        // stored token meanwhile does not drop it; the new grant replaces the old one through
+        // `assay_replaces` (F5).
+        if (now !== null && now !== heldRefresh && options.force !== true) {
           log.info("signed in by another process; this sign-in's code is not used");
           return { credentialId: readProfileFor(profile, deployment.environment)?.credentialId ?? null, existing: true };
         }

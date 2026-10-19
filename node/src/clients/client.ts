@@ -4,8 +4,9 @@
  * through `execFile` (never a shell) and are only read directly.
  */
 import { execFile } from "node:child_process";
-import { accessSync, constants, statSync } from "node:fs";
-import { delimiter, isAbsolute, join } from "node:path";
+import { accessSync, constants, existsSync, statSync } from "node:fs";
+import { userInfo } from "node:os";
+import { delimiter, isAbsolute, join, win32 } from "node:path";
 import type { ClientId, InstallInput, Scope } from "./install-command.js";
 
 /** Where one install lives: its scope and absolute config path (and project root, for project scope). */
@@ -80,23 +81,136 @@ export function which(bin: string, pathEnv: string = process.env.PATH ?? "", pla
   return null;
 }
 
+/** The absolute `cmd.exe`: `C:\\Windows\\System32` first, else `SystemRoot` only in the form `X:\\Windows` (as for the browser launcher). */
+export function windowsCmdExe(env: Readonly<Record<string, string | undefined>>, exists: (path: string) => boolean = existsSync): string | null {
+  const fixed = "C:\\Windows\\System32\\cmd.exe";
+  if (exists(fixed)) return fixed;
+  const root = env.SystemRoot ?? "";
+  if (/^[A-Za-z]:\\Windows$/.test(root)) {
+    const candidate = win32.join(root, "System32", "cmd.exe");
+    if (exists(candidate)) return candidate;
+  }
+  return null;
+}
+
 /**
- * The default runner: the binary resolved to an absolute path first ({@link which}), then
- * `execFile` without a shell, output captured (never written to stdout).
+ * Characters a `cmd.exe` argument may hold inside double quotes. Inside quotes `&|<>()` are
+ * literal; `"` would end the quote, `%` and `!` expand variables, `^` escapes, and control
+ * characters end the line, so all of those are refused (never escaped).
  */
-export const execFileRunner: CliRunner = (bin, argv, { cwd }) =>
-  new Promise((resolve, reject) => {
-    const path = which(bin);
-    if (path === null) {
-      reject(new ClientError(`${bin} was not found on PATH`));
-      return;
-    }
-    execFile(path, [...argv], { cwd, shell: false, timeout: CLI_TIMEOUT_MS, windowsHide: true }, (error, stdout, stderr) => {
-      if (error) {
-        const output = `${String(stderr)}${String(stdout)}`.trim().slice(0, 2000);
-        reject(new ClientError(`${bin} ${argv.slice(0, 2).join(" ")} failed${output ? `: ${output}` : ""}`));
-      } else {
-        resolve();
+const CMD_SAFE_ARG = /^[A-Za-z0-9 _\-.,:/\\@=+?&#~()]*$/;
+
+export interface Invocation {
+  file: string;
+  args: string[];
+  /** Windows only: pass `args` as written (the quoting below is already final). */
+  windowsVerbatimArguments: boolean;
+}
+
+/**
+ * How to run the resolved binary `path` with `argv`, without a shell and never through `PATH`
+ * or the working directory:
+ * - POSIX and Windows `.exe`: the absolute file itself, `execFile` quoting.
+ * - Windows `.cmd`/`.bat` shims (npm installs `claude.cmd`, `codex.cmd`, `gemini.cmd`), which
+ *   Node refuses to start without a shell (CVE-2024-27980): the absolute `cmd.exe` with
+ *   `/d /s /c "…"` (no AutoRun, verbatim line), every word double-quoted, and any word with a
+ *   character outside {@link CMD_SAFE_ARG} refused.
+ * - Anything else on Windows is refused.
+ */
+export function invocationFor(
+  path: string,
+  argv: readonly string[],
+  platform: NodeJS.Platform = process.platform,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+  exists: (path: string) => boolean = existsSync,
+): Invocation {
+  if (platform !== "win32") return { file: path, args: [...argv], windowsVerbatimArguments: false };
+  if (!win32.isAbsolute(path)) throw new ClientError(`${path} is not an absolute path`);
+  const ext = win32.extname(path).toLowerCase();
+  if (ext === ".exe") return { file: path, args: [...argv], windowsVerbatimArguments: false };
+  if (ext !== ".cmd" && ext !== ".bat") throw new ClientError(`${path} is not a program assay-mcp can start (.exe or .cmd)`);
+  const cmd = windowsCmdExe(env, exists);
+  if (cmd === null) throw new ClientError("cmd.exe was not found in the Windows system directory");
+  for (const word of [path, ...argv]) {
+    if (!CMD_SAFE_ARG.test(word) || word.endsWith("\\")) throw new ClientError(`refusing to pass "${word}" through cmd.exe`);
+  }
+  const line = [path, ...argv].map((w) => `"${w}"`).join(" ");
+  return { file: cmd, args: ["/d", "/s", "/c", `"${line}"`], windowsVerbatimArguments: true };
+}
+
+/** Set in the environment of every Windows child: `cmd.exe` then never searches the cwd for a bare name (npm shims run `node`). */
+export const NO_CWD_EXE_SEARCH = "NoDefaultCurrentDirectoryInExePath";
+
+export interface RunnerDeps {
+  platform: NodeJS.Platform;
+  env: Readonly<Record<string, string | undefined>>;
+  /** Resolves a client CLI to an absolute path from absolute `PATH` entries only ({@link which}). */
+  which(bin: string): string | null;
+  execFile: typeof execFile;
+  exists(path: string): boolean;
+  /** Windows only: the directories a client CLI may run in (the home and profile directories). */
+  safeCwds: readonly string[];
+}
+
+/**
+ * A runner: the binary resolved to an absolute path first (a bare or relative result is
+ * refused), then `execFile` without a shell (a `.cmd` shim through the absolute `cmd.exe`,
+ * see {@link invocationFor}), output captured (never written to stdout).
+ *
+ * On Windows every child gets `NoDefaultCurrentDirectoryInExePath=1` and runs only in the
+ * home or profile directory, never a project directory: `cmd.exe` (and the npm shims it runs)
+ * would otherwise find a `node.exe` planted in the project before the real one. So
+ * project-scope installs through a client CLI are refused on Windows.
+ */
+export function makeRunner(deps: RunnerDeps): CliRunner {
+  return (bin, argv, { cwd }) =>
+    new Promise((resolve, reject) => {
+      const path = deps.which(bin);
+      const absolute = deps.platform === "win32" ? path !== null && win32.isAbsolute(path) : path !== null && isAbsolute(path);
+      if (path === null || !absolute) {
+        reject(new ClientError(`${bin} was not found on PATH`));
+        return;
       }
+      let inv: Invocation;
+      let env: NodeJS.ProcessEnv | undefined;
+      try {
+        if (deps.platform === "win32") {
+          const norm = (p: string) => win32.resolve(p).toLowerCase();
+          if (!deps.safeCwds.some((d) => norm(d) === norm(cwd))) {
+            throw new ClientError(
+              `on Windows, assay-mcp runs ${bin} only from your home directory; a project-scope install through ${bin} is not supported there. Use --scope user, or a file client (cursor, vscode).`,
+            );
+          }
+          env = { ...deps.env, [NO_CWD_EXE_SEARCH]: "1" };
+        }
+        inv = invocationFor(path, argv, deps.platform, deps.env, deps.exists);
+      } catch (err) {
+        reject(err);
+        return;
+      }
+      deps.execFile(
+        inv.file,
+        inv.args,
+        { cwd, shell: false, timeout: CLI_TIMEOUT_MS, windowsHide: true, windowsVerbatimArguments: inv.windowsVerbatimArguments, ...(env ? { env } : {}) },
+        (error, stdout, stderr) => {
+          if (error) {
+            const output = `${String(stderr)}${String(stdout)}`.trim().slice(0, 2000);
+            reject(new ClientError(`${bin} ${argv.slice(0, 2).join(" ")} failed${output ? `: ${output}` : ""}`));
+          } else {
+            resolve();
+          }
+        },
+      );
     });
-  });
+}
+
+/** The runner `add` and `remove` use: the real `PATH`, `execFile` and home directory. */
+export const execFileRunner: CliRunner = (bin, argv, options) =>
+  makeRunner({
+    platform: process.platform,
+    env: process.env,
+    which: (b) => which(b),
+    execFile,
+    exists: existsSync,
+    safeCwds: [userInfo().homedir],
+  })(bin, argv, options);

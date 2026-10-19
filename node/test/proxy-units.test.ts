@@ -99,6 +99,11 @@ describe("environment checks (2.4-N1)", () => {
       expect(checkEnvironment(env, [], yes, "s").refusals).toHaveLength(0);
     },
   );
+  it("the env-proxy refusal points to the TTY command that writes the opt-in", () => {
+    expect(checkEnvironment({ HTTPS_PROXY: "x" }, [], none, "default").refusals[0]).toContain("run in a terminal: assay-mcp settings set --allow-env-proxy on");
+    expect(checkEnvironment({ HTTPS_PROXY: "x" }, [], none, "work").refusals[0]).toMatch(/settings set --allow-env-proxy on --profile work$/);
+  });
+
   it("reads the settings only when a proxy is set, and warns on extra CAs", () => {
     let reads = 0;
     const v = checkEnvironment({ NODE_EXTRA_CA_CERTS: "/x.pem" }, [], () => (reads++, { allowEnvProxy: false }), "s");

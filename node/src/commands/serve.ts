@@ -11,7 +11,7 @@ import { OriginError, resolveDeployment, type ResolvedDeployment } from "../prof
 import { readDevOrigins } from "../profile/dev-origins.js";
 import { KeychainError, openOsKeychain, reportKeychainError, type OsKeychain } from "../profile/keychain.js";
 import type { LockOptions, ProfileRef } from "../profile/lock.js";
-import { configDir, isValidProfileName, profileFile, safeJoin } from "../profile/paths.js";
+import { configDir, isValidProfileName } from "../profile/paths.js";
 import { checkEnvironment, readProfileSettings } from "../proxy/environment.js";
 import { Proxy, type ToolResultHook } from "../proxy/proxy.js";
 import { readLines, StdoutWriter } from "../proxy/stdio.js";
@@ -129,7 +129,7 @@ export async function serve(args: readonly string[], deps: ServeDeps = {}): Prom
   const dir = deps.configDir ?? configDir();
   const profile: ProfileRef = { dir, name: parsed.profile };
 
-  const verdict = checkEnvironment(env, deps.execArgv ?? process.execArgv, () => readProfileSettings(profile), safeJoin(dir, profileFile(profile.name, "settings")));
+  const verdict = checkEnvironment(env, deps.execArgv ?? process.execArgv, () => readProfileSettings(profile), profile.name);
   for (const w of verdict.warnings) stderr(`assay-mcp: warning: ${w}\n`);
   if (verdict.refusals.length > 0) {
     for (const r of verdict.refusals) stderr(`assay-mcp: ${r}\n`);
