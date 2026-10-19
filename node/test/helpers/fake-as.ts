@@ -62,6 +62,8 @@ export class FakeAs {
   misbehave: Partial<Record<string, "stall" | "drip" | "reset" | "huge">> = {};
   /** Overrides `expires_in` on issued pairs. */
   expiresIn: number | null = null;
+  /** The `agentLabel` `GET /agents/me/delegate` answers with (the owner's name for the agent). */
+  agentLabel: unknown = "research-bot";
   readonly requests: SeenRequest[] = [];
   readonly authorizeParams: URLSearchParams[] = [];
   readonly grants: Grant[] = [];
@@ -195,7 +197,7 @@ export class FakeAs {
       const bearer = /^Bearer (\S+)$/.exec(req.headers.authorization ?? "")?.[1] ?? "";
       if (!this.use(bearer)) return json(401, { statusCode: 401, message: "MCP_CREDENTIAL_INVALID" });
       const row = this.access.get(bearer)!;
-      return json(200, { data: { credentialId: row.grant.credentialId, delegate: null, boundAt: null }, statusCode: 200, message: "Success" });
+      return json(200, { data: { credentialId: row.grant.credentialId, agentLabel: this.agentLabel, delegate: null, boundAt: null }, statusCode: 200, message: "Success" });
     }
     json(404, { error: "not_found" });
   }

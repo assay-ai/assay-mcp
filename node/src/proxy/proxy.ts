@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { SIGN_IN_TOOL } from "../clients/server-name.js";
 import { silentLogger, type Logger } from "../log/logger.js";
-import { identifyCredential, SignInError, signInBusyError, type SignInResult } from "../oauth/flow.js";
+import { identifyAgent, SignInError, signInBusyError, type SignInResult } from "../oauth/flow.js";
 import { currentAccess, hasGrant, RefreshError, refreshUnderLock, type TokenContext } from "../oauth/tokens.js";
 import type { ResolvedDeployment } from "../profile/deployments.js";
 import { KeychainError, type Keychain } from "../profile/keychain.js";
@@ -564,19 +564,21 @@ export class Proxy {
 
   private async recordCredential(token: string): Promise<void> {
     const { deployment, profile } = this.o;
-    const id = await identifyCredential(deployment, token, this.o.log ?? silentLogger);
-    if (id === null) return;
+    const identity = await identifyAgent(deployment, token, this.o.log ?? silentLogger);
+    if (identity === null) return;
+    const { credentialId: id, agentLabel } = identity;
+    const stale = (r: { credentialId: string; agentLabel: string } | null) => r?.credentialId !== id || (agentLabel !== null && r.agentLabel !== agentLabel);
     try {
       const record = readProfileFor(profile, deployment.environment);
-      if (record?.credentialId !== id) {
+      if (stale(record)) {
         await withLock(
           profile,
           (lock) => {
             const fresh = readProfileFor(profile, deployment.environment);
             if (fresh === null) {
-              createProfile(profile, lock, { environment: deployment.environment, credentialId: id, agentLabel: "agent", createdAt: new Date().toISOString() });
-            } else if (fresh.credentialId !== id) {
-              updateProfile(profile, lock, (current) => ({ ...current, credentialId: id }));
+              createProfile(profile, lock, { environment: deployment.environment, credentialId: id, agentLabel: agentLabel ?? "agent", createdAt: new Date().toISOString() });
+            } else if (stale(fresh)) {
+              updateProfile(profile, lock, (current) => ({ ...current, credentialId: id, ...(agentLabel !== null ? { agentLabel } : {}) }));
             }
           },
           this.o.lockOptions,

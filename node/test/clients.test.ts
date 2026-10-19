@@ -248,7 +248,14 @@ describe("install commands equal vectors/commands.json", () => {
     expect(remoteCommand(c.client, c.input)).toEqual(c.remote);
   });
 
-  it("pins the package exactly and never uses the unscoped form", () => {
+  it("a dev origin's / keeps --url; only the production / omits it", () => {
+    const base = { V: "1.2.3", name: "assay" };
+    expect(serverEntry("cursor", { ...base, url: "https://mcp.assay.ai/" }).args).toEqual(["-y", "@goassay-ai/mcp@1.2.3", "--name", "assay"]);
+    expect(serverEntry("cursor", { ...base, url: "http://localhost:3200/" }).args).toEqual(["-y", "@goassay-ai/mcp@1.2.3", "--url", "http://localhost:3200/", "--name", "assay"]);
+    expect(serverEntry("vscode", { ...base, url: "http://localhost:3200/" }).args).toContain("--url");
+  });
+
+    it("pins the package exactly and never uses the unscoped form", () => {
     for (const c of vectors.install) {
       const text = JSON.stringify(c);
       expect(text).toContain(`@goassay-ai/mcp@${V}`);

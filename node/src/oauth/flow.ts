@@ -266,16 +266,33 @@ export function openBrowser(
   });
 }
 
+/** The credential an access token belongs to, and its agent's label (for display only). */
+export interface CredentialIdentity {
+  readonly credentialId: string;
+  readonly agentLabel: string | null;
+}
+
+/** Characters never shown in a terminal: C0/C1 controls, bidi controls, line/paragraph separators. */
+const UNPRINTABLE = /[\u0000-\u001f\u007f-\u009f\u200e\u200f\u2028-\u202e\u2066-\u2069]/g;
+
+/** An agent label fit for `status`: unprintable characters dropped, 1–128 characters, else `null`. */
+export function displayAgentLabel(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const label = value.replace(UNPRINTABLE, "").trim();
+  if (label.length === 0) return null;
+  return label.length > 128 ? `${label.slice(0, 127)}…` : label;
+}
+
 /**
- * The credential id of an access token: `GET {API}/agents/me/delegate` (`{data: {credentialId}}`
- * through the API envelope). `null` on any failure.
+ * The credential id of an access token and its agent's label: `GET {API}/agents/me/delegate`
+ * (`{data: {credentialId, agentLabel}}` through the API envelope). `null` on any failure.
  */
-export async function identifyCredential(
+export async function identifyAgent(
   deployment: ResolvedDeployment,
   accessToken: string,
   log: Logger = silentLogger,
   options: { signal?: AbortSignal | undefined; timeoutMs?: number | undefined } = {},
-): Promise<string | null> {
+): Promise<CredentialIdentity | null> {
   try {
     const signal = requestSignal(options.timeoutMs ?? REQUEST_TIMEOUT_MS, options.signal);
     const res = await pinnedFetch(deployment, `${deployment.api.replace(/\/+$/, "")}/agents/me/delegate`, {
@@ -290,12 +307,23 @@ export async function identifyCredential(
     }
     const text = await readCapped(res, MAX_BODY_BYTES, signal);
     if (text === null) return null;
-    const body = JSON.parse(text) as { data?: { credentialId?: unknown } } | null;
+    const body = JSON.parse(text) as { data?: { credentialId?: unknown; agentLabel?: unknown } } | null;
     const id = body?.data?.credentialId;
-    return typeof id === "string" && UUID_RE.test(id) ? id.toLowerCase() : null;
+    if (typeof id !== "string" || !UUID_RE.test(id)) return null;
+    return { credentialId: id.toLowerCase(), agentLabel: displayAgentLabel(body?.data?.agentLabel) };
   } catch {
     return null;
   }
+}
+
+/** The credential id of an access token ({@link identifyAgent} without the label). */
+export async function identifyCredential(
+  deployment: ResolvedDeployment,
+  accessToken: string,
+  log: Logger = silentLogger,
+  options: { signal?: AbortSignal | undefined; timeoutMs?: number | undefined } = {},
+): Promise<string | null> {
+  return (await identifyAgent(deployment, accessToken, log, options))?.credentialId ?? null;
 }
 
 /** Fixed messages: nothing from the callback or the server is echoed. */
@@ -403,22 +431,23 @@ export async function signIn(profile: ProfileRef, deployment: ResolvedDeployment
         }
         log.info("signed in");
 
-        const credentialId = await identifyCredential(deployment, answer.accessToken, log, { signal: lock.signal, timeoutMs: deps.requestTimeoutMs });
-        if (credentialId === null) {
+        const identity = await identifyAgent(deployment, answer.accessToken, log, { signal: lock.signal, timeoutMs: deps.requestTimeoutMs });
+        if (identity === null) {
           log.warn("signed in, but the credential id could not be read; it is read again later");
           return { credentialId: null };
         }
         lock.assertHeld();
+        const { credentialId, agentLabel } = identity;
         const current = readProfileFor(profile, deployment.environment);
         if (current === null) {
           createProfile(profile, lock, {
             environment: deployment.environment,
             credentialId,
-            agentLabel: "agent",
+            agentLabel: agentLabel ?? "agent",
             createdAt: new Date(nowSeconds() * 1000).toISOString(),
           });
         } else {
-          updateProfile(profile, lock, (c) => ({ ...c, credentialId }));
+          updateProfile(profile, lock, (c) => ({ ...c, credentialId, ...(agentLabel !== null ? { agentLabel } : {}) }));
         }
         log.info("credential recorded", { credential: credentialId.slice(0, 8) });
         return { credentialId };

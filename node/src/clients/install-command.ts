@@ -6,6 +6,7 @@
  * Nothing here ever carries a secret or an `env` entry: an entry is only the `npx` command, the
  * exactly pinned package, and the URL arguments.
  */
+import { builtInDeployments } from "../deployments.js";
 import { isValidName } from "./server-name.js";
 
 /** Client ids, in `CONNECT_CLIENTS` order (spec 7.10 item 5), local clients only. */
@@ -87,10 +88,13 @@ function check(input: InstallInput, scope: Scope): URL {
   return checkUrl(input.url);
 }
 
-/** True for `{MCP}/` with no query: `{url-args}` is then `--name {name}` only. */
+/**
+ * True for the production `{MCP}/` with no query: `{url-args}` is then `--name {name}` only, because
+ * the package defaults to it. A dev origin's `/` keeps `--url`, or the install would reach production.
+ */
 export function isRootUrl(url: string): boolean {
   const u = checkUrl(url);
-  return u.pathname === "/" && u.search === "" && !url.endsWith("?");
+  return u.origin === new URL(builtInDeployments().production.mcp).origin && u.pathname === "/" && u.search === "" && !url.endsWith("?");
 }
 
 export function pinnedPackage(V: string): string {

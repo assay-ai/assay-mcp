@@ -8,7 +8,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { createLogger, type Logger } from "../src/log/logger.js";
 import { apiKey, ApiKeyError, authMode } from "../src/oauth/api-key.js";
 import { clientIdOf, issuerOf } from "../src/oauth/endpoints.js";
-import { authorizeUrl, browserCommand, codeFrom, deviceLabel, openBrowser, pkcePair, signIn, SignInError, type ExecFile } from "../src/oauth/flow.js";
+import { authorizeUrl, browserCommand, codeFrom, deviceLabel, displayAgentLabel, openBrowser, pkcePair, signIn, SignInError, type ExecFile } from "../src/oauth/flow.js";
 import { LOOPBACK_TIMEOUT_MS, PAGES, startLoopback } from "../src/oauth/loopback.js";
 import { currentAccess, refreshUnderLock, RefreshError, revoke, type TokenContext } from "../src/oauth/tokens.js";
 import { MAX_BODY_BYTES, MIN_EXPIRES_IN, readCapped, REQUEST_TIMEOUT_MS } from "../src/oauth/endpoints.js";
@@ -108,6 +108,7 @@ describe("F1 sign-in", () => {
     const grant = as.grants[0]!;
     expect(result.credentialId).toBe(grant.credentialId);
     expect(readProfile(profile())!.credentialId).toBe(grant.credentialId);
+    expect(readProfile(profile())!.agentLabel).toBe("research-bot");
     expect(await keychain.get("refresh_token")).toMatch(/^assay_rt_/);
     expect((await keychain.getAccessToken())!.expiresAt).toBe(NOW + 3600);
     // Every keychain write carried the lock's signal.
@@ -306,7 +307,30 @@ describe("F1 sign-in", () => {
     expectNoSecretsLogged("11".repeat(32));
   });
 
-  it("device labels are sanitised to 32 printable characters", () => {
+  it("the agent label comes from the server, printable only; a missing or unusable one falls back to \"agent\"", async () => {
+    expect(displayAgentLabel("  research-bot  ")).toBe("research-bot");
+    expect(displayAgentLabel("evil\u001b[2Jbot\u202e")).toBe("evil[2Jbot");
+    expect(displayAgentLabel("\u0007\n ")).toBeNull();
+    expect(displayAgentLabel(42)).toBeNull();
+    expect(displayAgentLabel("x".repeat(200))).toHaveLength(128);
+
+    as.agentLabel = "\u001b]0;pwned\u0007";
+    await signIn(profile(), deployment, {}, { keychain, log, openBrowser: browser().open, nowSeconds: () => as.clock });
+    expect(readProfile(profile())!.agentLabel).toBe("]0;pwned");
+
+    // No usable label: an existing profile keeps its label, a new one gets "agent".
+    as.agentLabel = null;
+    await signIn(profile(), deployment, {}, { keychain, log, openBrowser: browser().open, nowSeconds: () => as.clock });
+    expect(readProfile(profile())!.agentLabel).toBe("]0;pwned");
+    rmSync(base, { recursive: true, force: true });
+    base = mkdtempSync(join(tmpdir(), "assay-mcp-oauth-"));
+    keychain = new Keychain(new MemoryKeyring(), { profile: "default", environment: deployment.environment });
+    const fresh = await signIn(profile(), deployment, {}, { keychain, log, openBrowser: browser().open, nowSeconds: () => as.clock });
+    expect(fresh.credentialId).not.toBeNull();
+    expect(readProfile(profile())!.agentLabel).toBe("agent");
+  });
+
+    it("device labels are sanitised to 32 printable characters", () => {
     expect(deviceLabel("a".repeat(80))).toHaveLength(32);
     expect(deviceLabel("\u0000‮")).toBeNull();
     expect(deviceLabel("Desk <script>")).toBe("Desk script");
