@@ -20,8 +20,8 @@
     "web": "<staging WEB>",
     "networks": {
       "eip155:46630": {
-        "escrow": "eip155:46630:0x1D2625efD87c2fc10b8563f3F0890072845Fcf41",
-        "asset": "eip155:46630/erc20:0xDbbC156dD414f43f2c952C1Be0f16A0B9a826Cd3",
+        "escrow": "<staging escrow CAIP-10>",
+        "asset": "<staging asset CAIP-19>",
         "decimals": 6,
         "rpc": ["<staging operator RPC>", "<staging public RPC>"]
       }
