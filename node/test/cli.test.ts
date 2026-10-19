@@ -7,6 +7,9 @@ const COMMAND_NAMES = [
   "enable-paid", "limits", "allow-paid", "disallow-paid", "dev-allow",
 ];
 
+/** Commands that are no longer stubs. */
+const IMPLEMENTED = ["serve", "add", "list", "remove"];
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -62,7 +65,7 @@ describe("main", () => {
     expect(err.join("")).toContain('unknown option "--bogus"');
   });
 
-  it.each(COMMAND_NAMES.filter((n) => n !== "serve"))("stub %s exits 2 and writes nothing to stdout", async (name) => {
+  it.each(COMMAND_NAMES.filter((n) => !IMPLEMENTED.includes(n)))("stub %s exits 2 and writes nothing to stdout", async (name) => {
     const { out, err } = capture();
     const argv = name === "dev-allow" ? ["dev", "allow"] : [name];
     expect(await main(argv)).toBe(2);
@@ -70,3 +73,4 @@ describe("main", () => {
     expect(err.join("")).toContain("not implemented yet");
   });
 });
+

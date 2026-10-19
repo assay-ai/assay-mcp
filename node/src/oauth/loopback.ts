@@ -172,7 +172,9 @@ export async function startLoopback(options: LoopbackOptions): Promise<Loopback>
     }
   }
   if (!bound) throw new LoopbackError("bind");
-  server.unref();
+  // The listener stays ref'd while the sign-in waits, so a terminal `login` (or any caller
+  // without other handles) is kept alive until the callback, the timeout or an abort; the
+  // timeout timer itself is unref'd. `shutdown()` closes the listener.
 
   const timer = setTimeout(() => fail("timeout"), options.timeoutMs ?? LOOPBACK_TIMEOUT_MS);
   timer.unref();
@@ -183,8 +185,9 @@ export async function startLoopback(options: LoopbackOptions): Promise<Loopback>
     clearTimeout(timer);
     options.signal?.removeEventListener("abort", onAbort);
     server.close();
-    // Let the answer to the callback go out before dropping the other connections.
-    setImmediate(() => server.closeAllConnections());
+    // Let the answer to the callback go out (`Connection: close`) before dropping the
+    // connections that are still open (a browser's idle preconnects).
+    setTimeout(() => server.closeAllConnections(), 1_000).unref();
   }
   function finish(r: CallbackResult): void {
     if (finished) return;

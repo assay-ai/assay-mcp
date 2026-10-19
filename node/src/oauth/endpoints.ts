@@ -50,13 +50,49 @@ export type TokenAnswer =
 const ACCESS_RE = /^assay_at_[A-Za-z0-9_-]{20,256}$/;
 const REFRESH_RE = /^assay_rt_[A-Za-z0-9_-]{20,256}$/;
 const ERROR_RE = /^[a-z_]{1,64}$/;
-const MAX_BODY = 16 * 1024;
+
+/** Every AS and API request is aborted after this long, body included. */
+export const REQUEST_TIMEOUT_MS = 15_000;
+/** The most of an answer body that is read; a longer answer is refused. */
+export const MAX_BODY_BYTES = 64 * 1024;
+/**
+ * The shortest access-token lifetime accepted. Shorter answers would make every request
+ * rotate (the proxy refreshes 60 s before expiry), so they are refused as `server_error`.
+ */
+export const MIN_EXPIRES_IN = 121;
+
+/** `timeoutMs` combined with the given signals (the lock's, a refresh bound). */
+export function requestSignal(timeoutMs: number, ...signals: (AbortSignal | null | undefined)[]): AbortSignal {
+  return AbortSignal.any([AbortSignal.timeout(timeoutMs), ...signals.filter((x): x is AbortSignal => x instanceof AbortSignal)]);
+}
+
+/**
+ * The body as text, reading at most `max` bytes; `null` when it is longer. A reset, an abort or
+ * a timeout while reading throws (callers map it to their own error types).
+ */
+export async function readCapped(res: Response, max: number = MAX_BODY_BYTES): Promise<string | null> {
+  if (res.body === null) return "";
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > max) {
+      await reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
 
 /** Parses a token endpoint answer. A 200 that is not a well-formed pair is a `server_error`. */
 export async function readTokenAnswer(res: Response, nowSeconds: number): Promise<TokenAnswer> {
-  const text = await res.text();
+  const text = await readCapped(res);
   let body: Record<string, unknown> | null = null;
-  if (text.length <= MAX_BODY) {
+  if (text !== null) {
     try {
       const parsed: unknown = JSON.parse(text);
       if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) body = parsed as Record<string, unknown>;
@@ -75,7 +111,7 @@ export async function readTokenAnswer(res: Response, nowSeconds: number): Promis
       type.toLowerCase() === "bearer" &&
       typeof expiresIn === "number" &&
       Number.isSafeInteger(expiresIn) &&
-      expiresIn > 0 &&
+      expiresIn >= MIN_EXPIRES_IN &&
       expiresIn <= 86_400
     ) {
       return { ok: true, tokens: { accessToken: at, refreshToken: rt, expiresAt: nowSeconds + expiresIn } };
@@ -91,13 +127,14 @@ export function postForm(
   deployment: Deployment,
   name: "token" | "revoke",
   form: Record<string, string>,
-  options: { signal?: AbortSignal | undefined; log?: Logger | undefined } = {},
+  options: { signal?: AbortSignal | undefined; log?: Logger | undefined; timeoutMs?: number | undefined } = {},
 ): Promise<Response> {
   return pinnedFetch(deployment, endpoint(deployment, name), {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
     body: new URLSearchParams(form).toString(),
-    signal: options.signal ?? null,
+    // Covers the body read too: undici aborts the stream with the request.
+    signal: requestSignal(options.timeoutMs ?? REQUEST_TIMEOUT_MS, options.signal),
     log: options.log,
   });
 }

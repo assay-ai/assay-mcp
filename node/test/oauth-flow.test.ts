@@ -1,7 +1,7 @@
-import { fork, type ChildProcess } from "node:child_process";
+import { fork, spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
-import { tmpdir } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,6 +11,7 @@ import { clientIdOf, issuerOf } from "../src/oauth/endpoints.js";
 import { authorizeUrl, browserCommand, codeFrom, deviceLabel, openBrowser, pkcePair, signIn, SignInError, type ExecFile } from "../src/oauth/flow.js";
 import { LOOPBACK_TIMEOUT_MS, PAGES, startLoopback } from "../src/oauth/loopback.js";
 import { currentAccess, refreshUnderLock, RefreshError, revoke, type TokenContext } from "../src/oauth/tokens.js";
+import { MAX_BODY_BYTES, MIN_EXPIRES_IN, REQUEST_TIMEOUT_MS } from "../src/oauth/endpoints.js";
 import { resolveDeployment, type ResolvedDeployment } from "../src/profile/deployments.js";
 import { Keychain } from "../src/profile/keychain.js";
 import { LockError, withLock } from "../src/profile/lock.js";
@@ -176,14 +177,30 @@ describe("F1 sign-in", () => {
     expect(new URL(link).origin).toBe(E2E_MCP);
     expect(link).not.toMatch(SECRET_RE);
 
-    expect(await openBrowser(deployment, link, { execFile, platform: "darwin" })).toBe(true);
-    expect(calls).toEqual([{ file: "open", args: [link], options: { shell: false, windowsHide: true, timeout: 15_000 } }]);
-    expect(browserCommand("win32", link)).toEqual({ file: "rundll32", args: ["url.dll,FileProtocolHandler", link] });
-    expect(browserCommand("linux", link)).toEqual({ file: "xdg-open", args: [link] });
+    const env = { PATH: "/project/bin:.", BROWSER: "/project/evil", HOME: "/home/user" };
+    const everywhere = () => true;
+    expect(await openBrowser(deployment, link, { execFile, platform: "darwin", env, exists: everywhere, cwd: "/profile/dir" })).toBe(true);
+    expect(calls).toEqual([
+      {
+        file: "/usr/bin/open",
+        args: [link],
+        options: { shell: false, windowsHide: true, timeout: 15_000, cwd: "/profile/dir", env: { PATH: "/project/bin:.", HOME: "/home/user" } },
+      },
+    ]);
+    // xdg-open: PATH=/usr/bin:/bin and the desktop-session variables only; cwd defaults to home.
+    calls.length = 0;
+    const linuxEnv = { PATH: "/project/bin:.", BROWSER: "/project/evil", DISPLAY: ":0", LD_PRELOAD: "/project/x.so", HOME: "/home/user" };
+    expect(await openBrowser(deployment, link, { execFile, platform: "linux", env: linuxEnv, exists: everywhere })).toBe(true);
+    expect(calls[0]).toEqual({
+      file: "/usr/bin/xdg-open",
+      args: [link],
+      options: { shell: false, windowsHide: true, timeout: 15_000, cwd: userInfo().homedir, env: { PATH: "/usr/bin:/bin", HOME: "/home/user", DISPLAY: ":0" } },
+    });
+    calls.length = 1;
 
     // Anything not built from the built-in origins is never launched.
     for (const bad of ["https://evil.example/oauth/authorize", "file:///etc/passwd", "javascript:alert(1)", `http://user:pw@localhost:3200/x`, "not a url"]) {
-      expect(await openBrowser(deployment, bad, { execFile, platform: "darwin" })).toBe(false);
+      expect(await openBrowser(deployment, bad, { execFile, platform: "darwin", exists: everywhere })).toBe(false);
     }
     expect(calls).toHaveLength(1);
 
@@ -193,6 +210,42 @@ describe("F1 sign-in", () => {
     await signIn(profile(), deployment, {}, { keychain, log, onLink: (l) => links.push(l), openBrowser: b.open });
     expect(b.opened).toEqual(links);
     expect(new URL(b.opened[0]!).pathname).toBe("/oauth/authorize");
+  });
+
+  it("the launcher is an absolute path, never found through PATH or the cwd", async () => {
+    const link = `${E2E_MCP}/oauth/authorize?x=1`;
+    const has = (...paths: string[]) => (p: string) => paths.includes(p);
+    const cmd = (platform: NodeJS.Platform, env: Record<string, string>, exists: (p: string) => boolean) => browserCommand({ platform, env, exists }, link);
+    expect(cmd("darwin", {}, has("/usr/bin/open"))).toEqual({ file: "/usr/bin/open", args: [link] });
+    expect(cmd("darwin", {}, has())).toBeNull();
+    expect(cmd("linux", {}, has("/usr/local/bin/xdg-open"))).toEqual({ file: "/usr/local/bin/xdg-open", args: [link] });
+    expect(cmd("linux", { PATH: "/tmp/repo" }, has("/tmp/repo/xdg-open"))).toBeNull();
+    expect(cmd("freebsd", {}, has("/usr/bin/xdg-open"))).toEqual({ file: "/usr/bin/xdg-open", args: [link] });
+    const win = "C:\\Windows\\System32\\rundll32.exe";
+    expect(cmd("win32", {}, has(win))).toEqual({ file: win, args: ["url.dll,FileProtocolHandler", link] });
+    // C:\Windows first; SystemRoot only when that file is missing; windir is never read.
+    const d = "D:\\Windows\\System32\\rundll32.exe";
+    expect(cmd("win32", { SystemRoot: "D:\\Windows" }, has(d, win))!.file).toBe(win);
+    expect(cmd("win32", { SystemRoot: "D:\\Windows" }, has(d))!.file).toBe(d);
+    expect(cmd("win32", { windir: "D:\\Windows" }, has(d))).toBeNull();
+    // A project config pointing SystemRoot at the repository is ignored.
+    for (const root of ["C:\\work\\repo", ".", "\\\\host\\share\\Windows", "D:\\Windows\\..\\repo"]) {
+      expect(cmd("win32", { SystemRoot: root }, has(`${root}\\System32\\rundll32.exe`, win))!.file).toBe(win);
+    }
+    expect(cmd("win32", {}, has())).toBeNull();
+
+    // Windows launch: absolute rundll32 and the profile dir as cwd.
+    const calls: { file: string; options: { cwd: string } }[] = [];
+    const execFile: ExecFile = (file, _args, options, cb) => {
+      calls.push({ file, options });
+      cb(null);
+    };
+    expect(await openBrowser(deployment, link, { execFile, platform: "win32", env: {}, exists: has(win), cwd: "C:\\Users\\u\\AppData\\Roaming\\assay-mcp" })).toBe(true);
+    expect(calls[0]!.file).toBe(win);
+    expect(calls[0]!.options.cwd).toBe("C:\\Users\\u\\AppData\\Roaming\\assay-mcp");
+    // No launcher: nothing runs, the caller prints the link.
+    expect(await openBrowser(deployment, link, { execFile, platform: "linux", env: {}, exists: has() })).toBe(false);
+    expect(calls).toHaveLength(1);
   });
 
   it("a browser that cannot open still leaves the link (onLink) and the flow waiting", async () => {
@@ -503,6 +556,147 @@ describe("tokens (F2, §8.4)", () => {
     expect(await keychain.getAccessToken()).toBeNull();
     expect(await keychain.get("delegate_key")).toBe("0x" + "33".repeat(32));
     expectNoSecretsLogged();
+  });
+});
+
+describe("fix round 1: bounds, error types, keep-alive", () => {
+  const short = { requestMs: 300, refreshBoundMs: 600 };
+
+  it("constants: 15 s per request, 64 KiB bodies, expires_in above twice the skew", () => {
+    expect(REQUEST_TIMEOUT_MS).toBe(15_000);
+    expect(MAX_BODY_BYTES).toBe(64 * 1024);
+    expect(MIN_EXPIRES_IN).toBeGreaterThan(120);
+  });
+
+  it("a plain node script awaiting the loopback result stays alive until the callback", async () => {
+    const bundle = await bundleFixture(join(here, "fixtures/loopback-child.ts"));
+    const state = "Z".repeat(43);
+    try {
+      const child = spawn(process.execPath, [bundle.file, state], { stdio: ["ignore", "pipe", "pipe"] });
+      let out = "";
+      const port = await new Promise<number>((resolve, reject) => {
+        child.stdout!.on("data", (d: Buffer) => {
+          out += d.toString();
+          const m = /port (\d+)/.exec(out);
+          if (m) resolve(Number(m[1]));
+        });
+        child.once("exit", (code) => reject(new Error(`exited early with ${code}`)));
+      });
+      // Nothing else holds the child's event loop: it must still be waiting.
+      await new Promise((r) => setTimeout(r, 300));
+      expect(child.exitCode).toBeNull();
+      const exited = new Promise<number | null>((r) => child.once("exit", (code) => r(code)));
+      const res = await realFetch(`http://127.0.0.1:${port}/callback?state=${state}&code=assay_ac_x&iss=${encodeURIComponent(E2E_MCP)}`);
+      expect(res.status).toBe(200);
+      expect(await exited).toBe(0);
+      expect(out).toContain(`result {"kind":"code","code":"assay_ac_x","iss":"${E2E_MCP}"}`);
+    } finally {
+      rmSync(bundle.dir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  for (const mode of ["stall", "drip"] as const) {
+    it(`a ${mode === "stall" ? "stalled" : "drip-fed"} token endpoint: RefreshError within the bound, tokens kept, a sibling gets the lock`, async () => {
+      const pair = as.seedGrant();
+      await seedTokens(pair);
+      as.clock = pair.expiresAt;
+      as.misbehave["/oauth/token"] = mode;
+      const started = Date.now();
+      const first = refreshUnderLock(ctx({ timeouts: short }), pair.accessToken).catch((e: unknown) => e);
+      await vi.waitFor(() => expect(as.tokenCalls()).toHaveLength(1));
+      // The sibling waits for the lock, then finds the endpoint healthy again.
+      const sibling = refreshUnderLock(ctx({ timeouts: short, lockOptions: { timeoutMs: 5_000 } }), pair.accessToken);
+      expect(await first).toBeInstanceOf(RefreshError);
+      expect(Date.now() - started).toBeLessThan(2_000);
+      expect(await keychain.get("refresh_token")).toBe(pair.refreshToken);
+      delete as.misbehave["/oauth/token"];
+      expect(await sibling).toMatch(/^assay_at_/);
+      expect(Date.now() - started).toBeLessThan(3_000);
+    });
+  }
+
+  it("the refresh bound aborts even when the per-request timeout is longer", async () => {
+    const pair = as.seedGrant();
+    await seedTokens(pair);
+    as.clock = pair.expiresAt;
+    as.misbehave["/oauth/token"] = "drip";
+    const started = Date.now();
+    await expect(refreshUnderLock(ctx({ timeouts: { requestMs: 60_000, refreshBoundMs: 400 } }), pair.accessToken)).rejects.toBeInstanceOf(RefreshError);
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
+  it("an oversized answer is refused (server_error), tokens kept", async () => {
+    const pair = as.seedGrant();
+    await seedTokens(pair);
+    as.clock = pair.expiresAt;
+    as.misbehave["/oauth/token"] = "huge";
+    await expect(refreshUnderLock(ctx(), pair.accessToken)).rejects.toBeInstanceOf(RefreshError);
+    expect(await keychain.get("refresh_token")).toBe(pair.refreshToken);
+  });
+
+  it("a connection reset mid-body is a RefreshError, never a raw TypeError", async () => {
+    const pair = as.seedGrant();
+    await seedTokens(pair);
+    as.clock = pair.expiresAt;
+    as.misbehave["/oauth/token"] = "reset";
+    await expect(refreshUnderLock(ctx(), pair.accessToken)).rejects.toBeInstanceOf(RefreshError);
+    expect(await keychain.get("refresh_token")).toBe(pair.refreshToken);
+  });
+
+  for (const mode of ["reset", "stall", "huge"] as const) {
+    it(`the code exchange (${mode}) fails as SignInError("failed")`, async () => {
+      as.misbehave["/oauth/token"] = mode;
+      const err = await signIn(profile(), deployment, {}, { keychain, log, openBrowser: browser().open, requestTimeoutMs: 300 }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(SignInError);
+      expect((err as SignInError).reason).toBe("failed");
+      expect(await keychain.get("refresh_token")).toBeNull();
+    });
+  }
+
+  it("a stalled credential read does not hold the sign-in: tokens stored, credentialId null", async () => {
+    as.misbehave["/api/v1/agents/me/delegate"] = "stall";
+    const started = Date.now();
+    const result = await signIn(profile(), deployment, {}, { keychain, log, openBrowser: browser().open, requestTimeoutMs: 300 });
+    expect(result.credentialId).toBeNull();
+    expect(Date.now() - started).toBeLessThan(3_000);
+    expect(await keychain.get("refresh_token")).toMatch(/^assay_rt_/);
+  });
+
+  it("an error callback with a foreign iss is refused, not read as declined", async () => {
+    const b = browser((url) => {
+      const back = new URL(as.approve(url, "deny"));
+      back.searchParams.set("iss", "https://evil.example");
+      return back.href;
+    });
+    const err = await signIn(profile(), deployment, {}, { keychain, log, openBrowser: b.open }).catch((e: unknown) => e);
+    expect((err as SignInError).reason).toBe("refused");
+  });
+
+  it("a short expires_in is refused instead of rotating on every request", async () => {
+    const pair = as.seedGrant();
+    await seedTokens(pair);
+    as.clock = pair.expiresAt;
+    as.expiresIn = 60;
+    await expect(refreshUnderLock(ctx(), pair.accessToken)).rejects.toBeInstanceOf(RefreshError);
+    expect(await keychain.get("refresh_token")).toBe(pair.refreshToken);
+  });
+
+  it("revoke with only an access token revokes that token; a stalled revoke still clears locally", async () => {
+    const pair = as.seedGrant();
+    await withLock(profile(), (lock) => keychain.set(lock, "access_token", JSON.stringify({ token: pair.accessToken, expiresAt: pair.expiresAt })));
+    expect(await revoke(ctx())).toEqual({ revoked: true });
+    const [r] = as.requests;
+    expect(r!.form!.get("token")).toBe(pair.accessToken);
+    expect(r!.form!.get("token_type_hint")).toBe("access_token");
+    expect(await keychain.getAccessToken()).toBeNull();
+
+    const other = as.seedGrant();
+    await seedTokens(other);
+    as.misbehave["/oauth/revoke"] = "stall";
+    const started = Date.now();
+    expect(await revoke(ctx({ timeouts: short }))).toEqual({ revoked: false });
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(await keychain.get("refresh_token")).toBeNull();
   });
 });
 

@@ -7,7 +7,8 @@ Language-neutral test vectors, shared by every implementation (`node/`, `sdk/nod
 - payment requirements and every local guard (G1 to G12), passing and failing;
 - `seq` bounds: `2^53 - 1` passes, `2^53` and `2^64 - 1` are refused;
 - the profile lock protocol;
-- server names and tool aliases.
+- server names and tool aliases;
+- install commands, links and config entries per client.
 
 The vector files are added with the features that use them.
 
@@ -47,3 +48,18 @@ The signing key in `binding.json` and `vouchers.json` is **test only**: the well
 ## lock-protocol.json
 
 The profile lock of spec 8.4: directory and owner-file names, the owner fields, the timings (heartbeat 5 s, stale after 30 s, retry every 100 ms, give up after 30 s with `LOCK_TIMEOUT`), self-fencing (a holder whose last touch is 15 s old or more counts its lock as lost), the reclaim mutex `{profile}.lock.d.reclaim`, the stale-removal and release rules, and freshness and staleness cases. Consumer: `node/test/lock.test.ts` (`node/src/profile/lock.ts`).
+
+## commands.json
+
+The spec 7.12 install commands for every client, with `V = 1.2.3` standing in for the version.
+
+- `install`: per client and URL, the paid-capable user-scope `command` (a POSIX shell line, or the config object for Cursor, Windsurf and Claude Desktop), the `entry` that lands in the client config under the server name, the one-click `link` (Cursor, VS Code) and the free-only `remote` alternative.
+- `project`: the args `add --scope project` writes (R-MU-4): the pinned package, `--url` and a non-default `--profile` only.
+- `add`: the `npx -y @assay-ai/mcp@V add {url} --client {id}` one-liner.
+- `ownership`: which stored entries `remove` treats as written by `assay-mcp` (by command and args, never by name).
+- Consumers:
+  - `node/test/clients.test.ts` (`node/src/clients/install-command.ts`, and `add`'s written entries, R-MU-9);
+  - the README install table, with `1.2.3` replaced by the package version (R-WEB-7, this repo's half);
+  - the frontend Connect UI commands (`assay-frontend/src/features/buyer-money/mcp-config.ts`, Part 3).
+- `quoting`: words outside `[A-Za-z0-9_./:@,=+%-]` are POSIX single-quoted (a URL with `?`, `&`, `$`, `;`, `!`, `*`, parentheses). The Cursor link percent-encodes its base64 `config`. Gemini passes `--scope user` (spec 7.12 amendment).
+- `names`: the server name `add` picks per scope; project-scope names fit the proxy's 16-character no-name budget.
