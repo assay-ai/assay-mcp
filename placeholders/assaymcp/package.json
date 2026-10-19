@@ -1,0 +1,12 @@
+{
+  "name": "assaymcp",
+  "version": "0.0.1",
+  "description": "Placeholder. The Assay MCP proxy is @assay-ai/mcp.",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/assay-ai/assay-mcp.git",
+    "directory": "placeholders/assaymcp"
+  },
+  "files": []
+}

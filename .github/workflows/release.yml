@@ -1,0 +1,66 @@
+name: Release
+
+# Runs only on a pushed version tag. Publishing needs:
+#   - the "release" environment, protected with a required reviewer (repository settings);
+#   - a signed, annotated tag v<version> matching node/package.json;
+#   - npm trusted publishing configured for @assay-ai/mcp on this repository and workflow,
+#     with the npm setting "Require 2FA and disallow tokens". No npm token is used.
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Tag is signed and matches the package version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          api() { curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$REPO/$1"; }
+          ref="$(api "git/ref/tags/$TAG")"
+          type="$(node -e 'console.log(JSON.parse(process.argv[1]).object.type)' "$ref")"
+          if [ "$type" != "tag" ]; then echo "Tag $TAG is not an annotated tag."; exit 1; fi
+          sha="$(node -e 'console.log(JSON.parse(process.argv[1]).object.sha)' "$ref")"
+          verified="$(api "git/tags/$sha" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).verification.verified))')"
+          if [ "$verified" != "true" ]; then echo "Tag $TAG is not signed by a verified key."; exit 1; fi
+          version="$(node -p 'require("./node/package.json").version')"
+          if [ "$TAG" != "v$version" ]; then echo "Tag $TAG does not match node/package.json $version."; exit 1; fi
+
+      - run: npm ci --ignore-scripts
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - run: npm run check:bundle
+      - run: npm run check:unscoped
+      - name: Package has no version range and no install script
+        run: npm run check:pack
+      - name: deployments.json has no placeholder and two RPC hosts
+        run: npm run check:release
+      - run: node node/dist/cli.js --version
+
+      - name: Publish with provenance (npm trusted publishing)
+        run: npm publish --provenance --access public --ignore-scripts -w node
