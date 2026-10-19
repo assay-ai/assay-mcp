@@ -55,7 +55,14 @@ describe("main", () => {
     expect(err.join("")).toContain("Usage:");
   });
 
-  it.each(COMMAND_NAMES)("stub %s exits 2 and writes nothing to stdout", async (name) => {
+  it("serve exits 2 with nothing on stdout for a bad flag", async () => {
+    const { out, err } = capture();
+    expect(await main(["serve", "--bogus"])).toBe(2);
+    expect(out).toEqual([]);
+    expect(err.join("")).toContain('unknown option "--bogus"');
+  });
+
+  it.each(COMMAND_NAMES.filter((n) => n !== "serve"))("stub %s exits 2 and writes nothing to stdout", async (name) => {
     const { out, err } = capture();
     const argv = name === "dev-allow" ? ["dev", "allow"] : [name];
     expect(await main(argv)).toBe(2);
