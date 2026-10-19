@@ -1,4 +1,4 @@
-import type { Account } from "viem";
+import type { Signer } from "./signers.js";
 
 /** Options of {@link AssayClient}. */
 export interface AssayClientOptions {
@@ -6,13 +6,16 @@ export interface AssayClientOptions {
   url: string;
   /** The API key. Required: it is the only way the SDK authenticates (R-SDK-2). */
   apiKey: string;
-  /** Pays for calls by signing locally. Omit for free calls only. */
-  signer?: Account;
+  /** Pays for calls by signing locally (see `Signers`). Omit for free calls only. */
+  signer?: Signer;
   /** Dollars per call, e.g. `"0.50"`. Required with a signer. */
   maxPerCall?: string;
   /** Dollars per rolling 24 hours, e.g. `"5"`. Required with a signer. */
   maxPerDay?: string;
-  /** Explicit allow list of MCP URLs that may be paid (replaces guard G11). */
+  /**
+   * The MCP URLs paid calls may go through (replaces guard G11), compared in canonical form.
+   * Defaults to `[url]`: the URL this client was built for.
+   */
   urls?: readonly string[];
   /** Development only: extra origins, set in code and never read from the environment or a file. */
   dev?: { origins: readonly string[] };
@@ -42,4 +45,14 @@ export interface CallResult {
   error?: { code?: string; message: string };
   /** Set when a local guard refused to pay. */
   refused?: Refusal;
+}
+
+/** What `bindDelegate` did. */
+export interface DelegateBinding {
+  /** The API key's credential id. */
+  credentialId: string;
+  /** The bound payment key's address. */
+  delegate: string;
+  /** True when the key was already bound and nothing was signed. */
+  alreadyBound: boolean;
 }

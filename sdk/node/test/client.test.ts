@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AssayClient, AssayConfigError } from "../src/index.js";
+import { generatePrivateKey } from "viem/accounts";
+import { AssayClient, AssayConfigError, Signers } from "../src/index.js";
 
 /** A local in-process MCP server over Streamable HTTP (JSON answers). No network beyond loopback. */
 class LocalMcp {
@@ -104,7 +105,7 @@ describe("free calls", () => {
   it("free call returns ok:true", async () => {
     client = make();
     await client.connect();
-    mcp.respondTool = () => ({ content: [{ type: "text", text: "hi" }], structuredContent: { n: 1 }, _meta: { "x402/receipt": "r-1" } });
+    mcp.respondTool = () => ({ content: [{ type: "text", text: "hi" }], structuredContent: { n: 1 }, _meta: { "assay/receipt": "r-1" } });
     expect(await client.callTool("echo", { a: "b" })).toEqual({ ok: true, content: [{ type: "text", text: "hi" }], structuredContent: { n: 1 }, receipt: "r-1" });
   });
 
@@ -132,7 +133,7 @@ describe("free calls", () => {
   });
 
   it("a signer needs maxPerCall and maxPerDay", () => {
-    const signer = { address: "0x0000000000000000000000000000000000000001" } as never;
+    const signer = Signers.fromPrivateKey(generatePrivateKey());
     expect(() => new AssayClient({ url: "https://mcp.assay.ai/", apiKey: KEY, signer })).toThrow(/maxPerCall/);
     expect(() => new AssayClient({ url: "https://mcp.assay.ai/", apiKey: KEY, signer, maxPerCall: "0.50" })).toThrow(/maxPerDay/);
     expect(() => new AssayClient({ url: "https://mcp.assay.ai/", apiKey: KEY, signer, maxPerCall: "0.50", maxPerDay: "5" })).not.toThrow();
