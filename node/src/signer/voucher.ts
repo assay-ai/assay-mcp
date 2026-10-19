@@ -16,7 +16,7 @@ export {
 
 /**
  * Builds the wire voucher and the EIP-712 typed data the delegate key signs, from a rail-B
- * requirement (a port of `agent-cli` `buildVoucher`).
+ * requirement.
  *
  * - `resourceHash = keccak256(utf8(resource))`; `requestHash` is the requirement's 32 bytes
  *   without `sha256:`;

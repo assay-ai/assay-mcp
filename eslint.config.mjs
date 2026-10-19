@@ -37,6 +37,11 @@ export default tseslint.config(
     },
   },
   {
+    // The examples print the model's answer.
+    files: ["sdk/node/examples/**/*.ts"],
+    rules: { "no-console": "off" },
+  },
+  {
     files: ["scripts/**/*.mjs"],
     rules: { "no-console": "off" },
   },

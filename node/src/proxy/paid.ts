@@ -10,16 +10,14 @@ import { recordHeld, SpendLimitError } from "../guards/spend-record.js";
 import type { BuiltInNetwork, Confirmation, GuardContext, GuardId, Quote } from "../guards/types.js";
 import { silentLogger, type Logger } from "../log/logger.js";
 import { identifyCredential } from "../oauth/flow.js";
-import { MAX_BODY_BYTES, readCapped, requestSignal } from "../oauth/endpoints.js";
 import type { ResolvedDeployment } from "../profile/deployments.js";
 import type { Keychain } from "../profile/keychain.js";
 import { withLock, type LockHandle, type LockOptions, type ProfileRef } from "../profile/lock.js";
 import { createProfile, paidUrlKey, readLimits, readPaidUrls, readProfileFor, readState, updateProfile, updateState, type PendingBinding } from "../profile/profile.js";
-import { checkBindingChallenge } from "../signer/binding.js";
-import { dateHeaderOffset, issuedAt } from "../signer/clock.js";
-import { SignerRefusal } from "../signer/errors.js";
+import { issuedAt } from "../signer/clock.js";
 import { generate } from "../signer/keygen.js";
 import { openThroughGate } from "./browser-gate.js";
+import { apiRequest, BindError, bindDelegateKey } from "./delegate-bind.js";
 import { CONFIRMATION_TTL_MS, type CallRegistry, type ForwardedCall } from "./calls.js";
 import type { FetchLike } from "./forwarder.js";
 import {
@@ -33,11 +31,13 @@ import {
   notEnabledText,
   paidToolOf,
   paymentState,
+  providerIdOf,
   quoteFromGetTool,
   quotesFromSearch,
   refusedText,
   REFUSED_META,
   SEARCH_TOOLS,
+  voucherEnvelope,
   withVoucher,
   type VoucherEnvelope,
 } from "./meta.js";
@@ -107,8 +107,6 @@ export interface PaidOptions {
 
 export const POLL_MS = 5_000;
 export const POLL_MAX_MS = 15 * 60_000;
-const API_TIMEOUT_MS = 15_000;
-const MAX_PROVIDER_ID_LENGTH = 256;
 const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 const PRIVATE_KEY_RE = /^0x[0-9a-fA-F]{64}$/;
 
@@ -308,8 +306,8 @@ export class PaidPath {
           if (account === null || account.address !== getAddress(localAddress)) {
             return { kind: "refused", guard: "G5", code: "G5_DELEGATE_MISMATCH", reason: "the payment key changed while the payment was checked" };
           }
-          const providerId = requirement.providerId;
-          if (typeof providerId !== "string" || providerId.length === 0 || providerId.length > MAX_PROVIDER_ID_LENGTH) {
+          const providerId = providerIdOf(requirement);
+          if (providerId === null) {
             return { kind: "refused", guard: "G1", code: "G1_NOT_A_REQUIREMENT", reason: "the payment request names no provider" };
           }
           // The host cancelled the call (review M2): nobody would receive the paid answer.
@@ -327,16 +325,7 @@ export class PaidPath {
           }
           lock.assertHeld();
           const signature = await account.signTypedData(built.typedData);
-          const contractVersion = requirement.contractVersion;
-          return {
-            kind: "signed",
-            envelope: {
-              voucher: built.wire,
-              signature,
-              providerId,
-              ...(typeof contractVersion === "number" && Number.isSafeInteger(contractVersion) && contractVersion >= 1 ? { contractVersion } : {}),
-            },
-          };
+          return { kind: "signed", envelope: voucherEnvelope(built.wire, signature, providerId, requirement.contractVersion) };
         },
         this.o.lockOptions,
       );
@@ -522,34 +511,19 @@ export class PaidPath {
 
   /** The challenge, its field-by-field check, the signature and the bind request (no lock held). */
   private async bindOnServer(account: PrivateKeyAccount, network: BuiltInNetwork, credentialId: string, bearer: string): Promise<void> {
-    const chainId = Number(network.id.slice("eip155:".length));
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const challenge = await this.api("POST", "/agents/me/delegate/challenge", { delegate: account.address }, bearer);
-      if (challenge === null) throw new SetupError("Paid calls could not be set up: Assay did not answer. Try again.");
-      const local = this.now() / 1000;
-      const nowSeconds = issuedAt(local, dateHeaderOffset(challenge.date, local));
-      const data = isObject(challenge.body) ? challenge.body.data : undefined;
-      let typedData;
-      try {
-        typedData = checkBindingChallenge(data, { localAddress: account.address, credentialId, environment: this.o.deployment.environment, network: network.id, nowSeconds });
-      } catch (err) {
-        if (err instanceof SignerRefusal && err.field === "message.expiresAt") {
-          // Clock: retried once with a fresh challenge, then refused (no widening of the window).
-          if (attempt === 0) continue;
-          throw new SetupError("Paid calls could not be set up: this computer's clock is too far from Assay's. Check the clock, then try again.");
-        }
-        this.log.warn("binding challenge refused", { field: err instanceof SignerRefusal ? err.field : "unknown" });
-        throw new SetupError("Paid calls could not be set up: Assay's key check did not match. Nothing was signed.");
-      }
-      const challengeId = isObject(data) ? data.challengeId : undefined;
-      if (typeof challengeId !== "string" || !UUID_RE.test(challengeId)) throw new SetupError("Paid calls could not be set up: Assay's key check did not match. Nothing was signed.");
-      const signature = await account.signTypedData(typedData);
-      const bound = await this.api("POST", "/agents/me/delegate", { challengeId, signature }, bearer);
-      const boundData = bound !== null && isObject(bound.body) ? bound.body.data : undefined;
-      if (!isObject(boundData) || accountOn(boundData.delegate, chainId) !== account.address) {
-        throw new SetupError("Paid calls could not be set up: Assay did not accept the payment key. Try again.");
-      }
-      return;
+    try {
+      await bindDelegateKey({
+        account,
+        api: (method, path, body) => this.api(method, path, body, bearer),
+        environment: this.o.deployment.environment,
+        network: network.id,
+        credentialId,
+        now: this.now,
+        log: this.log,
+      });
+    } catch (err) {
+      if (err instanceof BindError) throw new SetupError(err.message);
+      throw err;
     }
   }
 
@@ -590,28 +564,7 @@ export class PaidPath {
     // Never called with the profile lock held: `bearer()` may refresh, which takes that lock.
     const bearer = given ?? (await this.host.bearer());
     if (bearer === null) return null;
-    try {
-      const signal = requestSignal(API_TIMEOUT_MS);
-      const res = await this.o.fetch(`${this.o.deployment.api.replace(/\/+$/, "")}${path}`, {
-        method,
-        headers: { accept: "application/json", ...(body !== undefined ? { "content-type": "application/json" } : {}) },
-        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-        bearer,
-        log: this.log,
-        signal,
-      });
-      const date = res.headers.get("date");
-      if (res.status < 200 || res.status > 299) {
-        await res.body?.cancel().catch(() => {});
-        this.log.info("API refused", { path: path.split("/").slice(0, 4).join("/"), status: res.status });
-        return null;
-      }
-      const text = await readCapped(res, MAX_BODY_BYTES, signal);
-      if (text === null) return null;
-      return { body: text === "" ? null : (JSON.parse(text) as unknown), date };
-    } catch {
-      return null;
-    }
+    return apiRequest(this.o.fetch, this.o.deployment.api, bearer, method, path, body, this.log);
   }
 
   // ---- after the link (F4 step 6) -------------------------------------------------------------
