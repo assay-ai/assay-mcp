@@ -636,6 +636,8 @@ describe("remove", () => {
     expect(await runAdd(["/", "--client", "cursor"], h.deps)).toBe(0);
     expect(await runAdd(["/", "--client", "windsurf"], h.deps)).toBe(0);
     expect(await runRemove(["assay"], h.deps)).toBe(2);
+    expect(h.out.join("")).toContain("pass --client <id>");
+    expect(h.out.join("")).not.toContain("--scope");
     expect(await runRemove(["assay", "--client", "windsurf"], h.deps)).toBe(0);
     expect(entriesOf("cursor").has("assay")).toBe(true);
   });
@@ -693,15 +695,57 @@ describe("helpers", () => {
     expect(h.out.join("")).toContain("not valid TOML");
   });
 
-  it("remove keeps a Codex entry with an extra key and warns", async () => {
+  it.each(CLIENT_IDS)("remove keeps an entry with an extra env key and warns; list says changed: %s", async (client) => {
     const h = harness();
-    expect(await runAdd(["/", "--client", "codex"], h.deps)).toBe(0);
-    const path = join(home, ".codex", "config.toml");
-    writeFileSync(path, `${readFileSync(path, "utf8")}env = { X = "1" }\n`);
+    expect(await runAdd(["/", "--client", client], h.deps)).toBe(0);
+    const path = userConfig(client);
+    if (client === "codex") {
+      writeFileSync(path, `${readFileSync(path, "utf8")}env = { ASSAY_API_KEY = "x" }\n`);
+    } else {
+      const doc = readJson(path);
+      const servers = doc[client === "vscode" ? "servers" : "mcpServers"] as Record<string, Record<string, unknown>>;
+      servers.assay!.env = { ASSAY_API_KEY: "x" };
+      writeJson(path, doc);
+    }
+    const before = readFileSync(path, "utf8");
+    h.out.length = 0;
+    expect(await runList([], h.deps)).toBe(0);
+    expect(h.out.join("")).toMatch(/assay {2}.* changed/);
     expect(await runRemove(["assay"], h.deps)).toBe(2);
     expect(h.out.join("")).toContain("warning");
-    expect(parseCodexServers(readFileSync(path, "utf8")).has("assay")).toBe(true);
+    expect(readFileSync(path, "utf8")).toBe(before);
     expect(h.calls.filter((c) => c.argv[1] === "remove")).toEqual([]);
+    expect(h.deps.installs.read()).toHaveLength(1);
+  });
+
+  it("remove with a name in both scopes of one client names both, and --scope picks one (M11)", async () => {
+    const h = harness();
+    expect(await runAdd(["/", "--client", "cursor"], h.deps)).toBe(0);
+    expect(await runAdd(["/", "--client", "cursor", "--scope", "project"], h.deps)).toBe(0);
+    h.out.length = 0;
+    expect(await runRemove(["assay", "--client", "cursor"], h.deps)).toBe(2);
+    const msg = h.out.join("");
+    expect(msg).toContain("cursor user");
+    expect(msg).toContain(`cursor project (${join(project, ".cursor", "mcp.json")})`);
+    expect(msg).toContain("pass --scope user|project");
+    expect(msg).not.toContain("--client");
+    expect(await runRemove(["assay", "--scope", "bogus"], h.deps)).toBe(2);
+    expect(await runRemove(["assay", "--client", "cursor", "--scope", "project"], h.deps)).toBe(0);
+    expect(entriesOf("cursor", "project").has("assay")).toBe(false);
+    expect(entriesOf("cursor").has("assay")).toBe(true);
+    expect(h.deps.installs.read().map((r) => r.scope)).toEqual(["user"]);
+    expect(await runRemove(["assay", "--scope", "user"], h.deps)).toBe(0);
+    expect(h.deps.installs.read()).toEqual([]);
+  });
+
+  it("remove --scope project finds an unrecorded entry of ours in the current project", async () => {
+    const h = harness();
+    expect(await runAdd(["/", "--client", "vscode", "--scope", "project"], h.deps)).toBe(0);
+    h.store.clear();
+    expect(await runRemove(["assay", "--client", "vscode"], h.deps)).toBe(2);
+    expect(await runRemove(["assay", "--client", "vscode", "--scope", "project"], h.deps)).toBe(0);
+    expect(entriesOf("vscode", "project").size).toBe(0);
+    expect(await runRemove(["assay", "--client", "windsurf", "--scope", "project"], h.deps)).toBe(2);
   });
 
   it("slug words for default names", () => {
@@ -760,7 +804,8 @@ function checkRoundTrip(shell: string, input: InstallInput): void {
   }
 }
 
-describe("printed commands survive the shell (I3)", () => {
+// Hundreds of shell spawns: generous timeout so a loaded machine does not flake.
+describe("printed commands survive the shell (I3)", { timeout: 60_000 }, () => {
   it.each(SHELLS)("each metacharacter is either refused or comes back as one identical word: %s", (shell) => {
     let accepted = 0;
     for (const bad of HOSTILE) {
