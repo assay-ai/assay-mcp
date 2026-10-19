@@ -16,6 +16,7 @@ import { resolveDeployment, type ResolvedDeployment } from "../src/profile/deplo
 import { Keychain } from "../src/profile/keychain.js";
 import { LockError, withLock } from "../src/profile/lock.js";
 import { readProfile } from "../src/profile/profile.js";
+import { claimMarker, readMarker } from "../src/oauth/signin-marker.js";
 import { bundleFixture } from "./helpers/bundle.js";
 import { CLIENT_ID, E2E_MCP, FakeAs, rerouteFetch } from "./helpers/fake-as.js";
 import { FileKeyring } from "./helpers/file-keyring.js";
@@ -248,6 +249,35 @@ describe("F1 sign-in", () => {
     expect(calls).toHaveLength(1);
   });
 
+  it("a passive sign-in taken over, both links approved: one code exchange, one grant (re-review R1-I1)", async () => {
+    const links: string[] = [];
+    const passive = signIn(profile(), deployment, { passive: true }, { keychain, log, onLink: (l) => links.push(l), openBrowser: async () => true });
+    await vi.waitFor(() => expect(links).toHaveLength(1));
+    const active = signIn(profile(), deployment, {}, { keychain, log, onLink: (l) => links.push(l), openBrowser: async () => true });
+    await vi.waitFor(() => expect(links).toHaveLength(2));
+    await realFetch(as.approve(links[1]!));
+    const second = await active;
+    expect(second.existing).toBeUndefined();
+    await realFetch(as.approve(links[0]!));
+    const first = await passive;
+    expect(first.existing).toBe(true);
+    expect(as.tokenCalls("authorization_code")).toHaveLength(1);
+    expect(as.grants).toHaveLength(1);
+  });
+
+  it("the marker is claimed only under the profile lock (re-review R1-M1)", async () => {
+    let release!: () => void;
+    const held = withLock(profile(), () => new Promise<void>((r) => (release = r)));
+    const links: string[] = [];
+    const err = await signIn(profile(), deployment, {}, { keychain, log, onLink: (l) => links.push(l), lockOptions: { timeoutMs: 300 } }).catch((e: unknown) => e);
+    release();
+    await held;
+    expect(err).toBeInstanceOf(LockError);
+    expect((err as LockError).code).toBe("LOCK_TIMEOUT");
+    expect(links).toEqual([]);
+    expect(readMarker(profile())).toBeNull();
+  });
+
   it("a browser that cannot open still leaves the link (onLink) and the flow waiting", async () => {
     const links: string[] = [];
     const done = signIn(profile(), deployment, {}, {
@@ -267,7 +297,7 @@ describe("F1 sign-in", () => {
     await signIn(profile(), deployment, {}, { keychain, log, openBrowser: browser().open });
     const first = readProfile(profile())!.credentialId;
     await withLock(profile(), (lock) => keychain.set(lock, "delegate_key", "0x" + "11".repeat(32)));
-    await signIn(profile(), deployment, { device: "Laptop‮\u0007 two" }, { keychain, log, openBrowser: browser().open });
+    await signIn(profile(), deployment, { device: "Laptop‮\u0007 two", force: true }, { keychain, log, openBrowser: browser().open });
     const q = as.authorizeParams[1]!;
     expect(q.get("assay_replaces")).toBe(first);
     expect(q.get("assay_device")).toBe("Laptop two");
@@ -721,4 +751,32 @@ describe("API-key mode", () => {
 
 afterAll(() => {
   globalThis.fetch = realFetch;
+});
+
+describe("sign-in marker claims (re-review R1-M1)", () => {
+  const alive = () => true;
+  const dead = () => false;
+  async function claim(passive: boolean, at: number, isAlive = alive) {
+    return withLock(profile(), (lock) => claimMarker(profile(), lock, passive, at, isAlive));
+  }
+
+  it("a live active marker refuses every claim; a live passive one refuses passive claims only", async () => {
+    expect((await claim(false, 1_000)).kind).toBe("claimed");
+    expect((await claim(false, 2_000)).kind).toBe("busy");
+    expect((await claim(true, 2_000)).kind).toBe("busy");
+    rmSync(join(base, "profiles", "default.signin.json"));
+    expect((await claim(true, 3_000)).kind).toBe("claimed");
+    expect((await claim(true, 4_000)).kind).toBe("busy");
+    const takeover = await claim(false, 5_000);
+    expect(takeover.kind).toBe("claimed");
+    expect(readMarker(profile())).toMatchObject({ passive: false, startedAt: 5_000 });
+  });
+
+  it("a dead pid or an expired marker is free; a claim without the held lock throws", async () => {
+    await claim(false, 1_000);
+    expect((await claim(false, 2_000, dead)).kind).toBe("claimed");
+    expect((await claim(false, 2_000 + 5 * 60_000)).kind).toBe("claimed");
+    const notHeld = { profile: profile(), owner: { pid: 1, startedAt: "", token: "" }, signal: new AbortController().signal, assertHeld: () => { throw new LockError("LOCK_LOST", "lost"); } };
+    expect(() => claimMarker(profile(), notHeld, false, 9e12, alive)).toThrow(LockError);
+  });
 });

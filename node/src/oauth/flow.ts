@@ -23,11 +23,17 @@ import {
   type IssuedTokens,
 } from "./endpoints.js";
 import { startLoopback, type CallbackResult } from "./loopback.js";
+import { activateMarker, claimMarker, releaseMarker } from "./signin-marker.js";
 
 /**
  * F1 for the built-in client (spec §6.6 F1, §7.6, §7.14; R-MCP-5, R-MCP-18, R-MU-6, F5).
  *
- * Under the profile lock (held, and touched, for the whole sign-in):
+ * The profile lock is held only for short steps, never while the browser is open (Task 2.8
+ * fix round 1): first to re-read the keychain (a stored grant ends the sign-in, unless
+ * `force`) and claim the "sign-in in progress" marker (`signin-marker.ts`), so a second
+ * process starts no browser flow of its own; then, after the callback, to re-read the keychain
+ * again (a grant stored meanwhile wins and this code is dropped unexchanged, so one profile
+ * never gets two grants) and exchange and store. In between:
  * 1. re-read the profile; `assay_replaces` defaults to the credential id it holds (F5);
  * 2. PKCE S256 verifier and a 256-bit `state`; the loopback listener on `127.0.0.1`;
  * 3. the authorize URL is built here from the pinned issuer (PRM `authorization_servers` and
@@ -43,7 +49,7 @@ import { startLoopback, type CallbackResult } from "./loopback.js";
  * Nothing here logs a token, the code, the verifier or `state`.
  */
 
-export type SignInFailure = "denied" | "refused" | "failed" | "timeout" | "cancelled";
+export type SignInFailure = "denied" | "refused" | "failed" | "timeout" | "cancelled" | "busy";
 
 export class SignInError extends Error {
   override readonly name = "SignInError";
@@ -60,6 +66,10 @@ export interface SignInOptions {
   readonly device?: string | null;
   /** The credential this sign-in replaces; default the profile's own (F5). `null`: none. */
   readonly replaces?: string | null;
+  /** A link-only sign-in (startup): an active sign-in may take its marker over. */
+  readonly passive?: boolean;
+  /** Sign in even when a grant is stored (an explicit re-login). */
+  readonly force?: boolean;
 }
 
 export interface LaunchOptions {
@@ -89,11 +99,19 @@ export interface SignInDeps {
   readonly ports?: readonly number[];
   /** Per-request timeout for the exchange and the credential read; default 15 s. */
   readonly requestTimeoutMs?: number;
+  /** Cancels the wait for the browser. */
+  readonly signal?: AbortSignal;
+  /** Receives a function that marks this (passive) sign-in active; false: it was taken over. */
+  readonly onMarker?: (activate: () => Promise<boolean>) => void;
+  readonly nowMs?: () => number;
+  readonly pidAlive?: (pid: number) => boolean;
 }
 
 export interface SignInResult {
   /** The new credential's id, or `null` when it could not be read back (tokens are stored). */
   readonly credentialId: string | null;
+  /** True when a grant was already stored (before, or by another process meanwhile): no new one was made. */
+  readonly existing?: boolean;
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -282,10 +300,16 @@ const MESSAGES = {
   failed: "The sign-in did not complete. Try again.",
   timeout: "The sign-in was not finished within 5 minutes. Try again.",
   cancelled: "The sign-in was cancelled.",
+  busy: "Assay sign-in is already in progress in another window.",
 } as const;
 
 function fail(reason: SignInFailure): SignInError {
   return new SignInError(reason, MESSAGES[reason]);
+}
+
+/** The error for "another process's sign-in is pending". */
+export function signInBusyError(): SignInError {
+  return fail("busy");
 }
 
 /** Checks the callback (RFC 9207 `iss` first) and returns the code. */
@@ -298,72 +322,105 @@ export function codeFrom(result: CallbackResult, issuer: string): string {
 export async function signIn(profile: ProfileRef, deployment: ResolvedDeployment, options: SignInOptions, deps: SignInDeps): Promise<SignInResult> {
   const log = (deps.log ?? silentLogger).child("oauth");
   const nowSeconds = deps.nowSeconds ?? (() => Math.floor(Date.now() / 1000));
-  return withLock(
+  const nowMs = deps.nowMs ?? Date.now;
+
+  // 1. A short lock: an existing grant ends here; else claim the "sign-in in progress" marker.
+  const begun = await withLock(
     profile,
     async (lock) => {
-      const record = readProfileFor(profile, deployment.environment);
-      const wanted = options.replaces === undefined ? (record?.credentialId ?? null) : options.replaces;
-      const replaces = wanted !== null && UUID_RE.test(wanted) ? wanted : null;
-      const device = options.device === undefined ? deviceLabel((deps.hostname ?? osHostname)()) : options.device === null ? null : deviceLabel(options.device);
-
-      const { verifier, challenge } = pkcePair();
-      const state = b64url(randomBytes(32));
-      const loopback = await startLoopback({
-        state,
-        signal: lock.signal,
-        ...(deps.timeoutMs !== undefined ? { timeoutMs: deps.timeoutMs } : {}),
-        ...(deps.ports !== undefined ? { ports: deps.ports } : {}),
-      });
-      let code: string;
-      try {
-        const link = authorizeUrl(deployment, { redirectUri: loopback.redirectUri, state, challenge, device, replaces });
-        deps.onLink?.(link);
-        const opened = await (deps.openBrowser ?? ((u: string) => openBrowser(deployment, u, { cwd: profile.dir })))(link);
-        if (!opened) log.warn("browser not opened; use the printed link");
-        let result: CallbackResult;
-        try {
-          result = await loopback.result;
-        } catch (err) {
-          throw (err as { reason?: string }).reason === "timeout" ? fail("timeout") : fail("cancelled");
-        }
-        code = codeFrom(result, issuerOf(deployment));
-      } finally {
-        loopback.close();
-      }
-
-      lock.assertHeld();
-      const answer = await exchange(deployment, lock, { code, verifier, redirectUri: loopback.redirectUri }, nowSeconds, log, deps.requestTimeoutMs);
-      try {
-        lock.assertHeld();
-        await deps.keychain.storeTokens(lock, { refreshToken: answer.refreshToken, accessToken: { token: answer.accessToken, expiresAt: answer.expiresAt } });
-      } catch (err) {
-        // Lost the lock between the exchange and the write: give the new grant back.
-        await bestEffortRevoke(deployment, answer.refreshToken, log);
-        throw err;
-      }
-      log.info("signed in");
-
-      const credentialId = await identifyCredential(deployment, answer.accessToken, log, { signal: lock.signal, timeoutMs: deps.requestTimeoutMs });
-      if (credentialId === null) {
-        log.warn("signed in, but the credential id could not be read; it is read again later");
-        return { credentialId: null };
-      }
-      lock.assertHeld();
-      if (record === null) {
-        createProfile(profile, lock, {
-          environment: deployment.environment,
-          credentialId,
-          agentLabel: "agent",
-          createdAt: new Date(nowSeconds() * 1000).toISOString(),
-        });
-      } else {
-        updateProfile(profile, lock, (current) => ({ ...current, credentialId }));
-      }
-      log.info("credential recorded", { credential: credentialId.slice(0, 8) });
-      return { credentialId };
+      const heldRefresh = await deps.keychain.get("refresh_token");
+      if (heldRefresh !== null && options.force !== true) return { kind: "existing" as const };
+      const claim = claimMarker(profile, lock, options.passive === true, nowMs(), deps.pidAlive);
+      if (claim.kind === "busy") return { kind: "busy" as const };
+      return { kind: "claimed" as const, token: claim.marker.token, heldRefresh, record: readProfileFor(profile, deployment.environment) };
     },
     deps.lockOptions,
   );
+  if (begun.kind === "existing") return { credentialId: readProfileFor(profile, deployment.environment)?.credentialId ?? null, existing: true };
+  if (begun.kind === "busy") throw fail("busy");
+
+  const { token, heldRefresh, record } = begun;
+  const dropMarker = () => releaseMarker(profile, token);
+  process.on("exit", dropMarker);
+  try {
+    deps.onMarker?.(() => withLock(profile, (lock) => activateMarker(profile, lock, token), deps.lockOptions));
+    const wanted = options.replaces === undefined ? (record?.credentialId ?? null) : options.replaces;
+    const replaces = wanted !== null && UUID_RE.test(wanted) ? wanted : null;
+    const device = options.device === undefined ? deviceLabel((deps.hostname ?? osHostname)()) : options.device === null ? null : deviceLabel(options.device);
+
+    // 2. The browser flow, without the lock.
+    const { verifier, challenge } = pkcePair();
+    const state = b64url(randomBytes(32));
+    const loopback = await startLoopback({
+      state,
+      ...(deps.signal ? { signal: deps.signal } : {}),
+      ...(deps.timeoutMs !== undefined ? { timeoutMs: deps.timeoutMs } : {}),
+      ...(deps.ports !== undefined ? { ports: deps.ports } : {}),
+    });
+    let code: string;
+    try {
+      const link = authorizeUrl(deployment, { redirectUri: loopback.redirectUri, state, challenge, device, replaces });
+      deps.onLink?.(link);
+      const opened = await (deps.openBrowser ?? ((u: string) => openBrowser(deployment, u, { cwd: profile.dir })))(link);
+      if (!opened) log.warn("browser not opened; use the printed link");
+      let result: CallbackResult;
+      try {
+        result = await loopback.result;
+      } catch (err) {
+        throw (err as { reason?: string }).reason === "timeout" ? fail("timeout") : fail("cancelled");
+      }
+      code = codeFrom(result, issuerOf(deployment));
+    } finally {
+      loopback.close();
+    }
+
+    // 3. Under the lock: re-read; a grant stored meanwhile wins and our code is dropped unused.
+    return await withLock(
+      profile,
+      async (lock) => {
+        const now = await deps.keychain.get("refresh_token");
+        if (now !== null && now !== heldRefresh) {
+          log.info("signed in by another process; this sign-in's code is not used");
+          return { credentialId: readProfileFor(profile, deployment.environment)?.credentialId ?? null, existing: true };
+        }
+        lock.assertHeld();
+        const answer = await exchange(deployment, lock, { code, verifier, redirectUri: loopback.redirectUri }, nowSeconds, log, deps.requestTimeoutMs);
+        try {
+          lock.assertHeld();
+          await deps.keychain.storeTokens(lock, { refreshToken: answer.refreshToken, accessToken: { token: answer.accessToken, expiresAt: answer.expiresAt } });
+        } catch (err) {
+          // Lost the lock between the exchange and the write: give the new grant back.
+          await bestEffortRevoke(deployment, answer.refreshToken, log);
+          throw err;
+        }
+        log.info("signed in");
+
+        const credentialId = await identifyCredential(deployment, answer.accessToken, log, { signal: lock.signal, timeoutMs: deps.requestTimeoutMs });
+        if (credentialId === null) {
+          log.warn("signed in, but the credential id could not be read; it is read again later");
+          return { credentialId: null };
+        }
+        lock.assertHeld();
+        const current = readProfileFor(profile, deployment.environment);
+        if (current === null) {
+          createProfile(profile, lock, {
+            environment: deployment.environment,
+            credentialId,
+            agentLabel: "agent",
+            createdAt: new Date(nowSeconds() * 1000).toISOString(),
+          });
+        } else {
+          updateProfile(profile, lock, (c) => ({ ...c, credentialId }));
+        }
+        log.info("credential recorded", { credential: credentialId.slice(0, 8) });
+        return { credentialId };
+      },
+      deps.lockOptions,
+    );
+  } finally {
+    process.off("exit", dropMarker);
+    dropMarker();
+  }
 }
 
 /**

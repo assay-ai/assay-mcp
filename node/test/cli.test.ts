@@ -8,7 +8,7 @@ const COMMAND_NAMES = [
 ];
 
 /** Commands that are no longer stubs. */
-const IMPLEMENTED = ["add", "list", "remove"];
+const IMPLEMENTED = ["serve", "add", "list", "remove"];
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -56,6 +56,13 @@ describe("main", () => {
     expect(await main(["bogus"])).toBe(2);
     expect(out).toEqual([]);
     expect(err.join("")).toContain("Usage:");
+  });
+
+  it("serve exits 2 with nothing on stdout for a bad flag", async () => {
+    const { out, err } = capture();
+    expect(await main(["serve", "--bogus"])).toBe(2);
+    expect(out).toEqual([]);
+    expect(err.join("")).toContain('unknown option "--bogus"');
   });
 
   it.each(COMMAND_NAMES.filter((n) => !IMPLEMENTED.includes(n)))("stub %s exits 2 and writes nothing to stdout", async (name) => {
