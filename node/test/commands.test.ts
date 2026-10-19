@@ -10,7 +10,10 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DelegationResult } from "../src/chain/reads.js";
 import { CLIENTS } from "../src/clients/registry.js";
-import { invocationFor, windowsCmdExe } from "../src/clients/client.js";
+import { invocationFor, makeRunner, NO_CWD_EXE_SEARCH, which, windowsCmdExe } from "../src/clients/client.js";
+import { printable } from "../src/commands/format.js";
+import { guard } from "./setup/global-guard.js";
+import { fingerprintDir } from "./setup/real-profile.js";
 import { checkProjectEntry, runDoctor, T13_RISK_TEXT } from "../src/commands/doctor.js";
 import { enablePaidLink, runEnablePaid } from "../src/commands/enable-paid.js";
 import { unitsToUsd, usd, utcDate } from "../src/commands/format.js";
@@ -33,7 +36,8 @@ import { addDevOrigin, readDevOrigins } from "../src/profile/dev-origins.js";
 import { fingerprint } from "../src/profile/fingerprint.js";
 import { Keychain, KeychainError, KEYCHAIN_SERVICE, type OsKeychain } from "../src/profile/keychain.js";
 import { LockError, withLock, type ProfileRef } from "../src/profile/lock.js";
-import { profileFile, writePrivateFile } from "../src/profile/paths.js";
+import { configDir, profileFile, writePrivateFile } from "../src/profile/paths.js";
+import { testHome } from "./setup/temp-home.js";
 import { addPaidUrl, createProfile, readLimits, readPaidUrls, readProfile, updateProfile } from "../src/profile/profile.js";
 import { readSettings } from "../src/profile/settings.js";
 import { isInteractive, requireTty, TtyRequired } from "../src/tty.js";
@@ -56,6 +60,7 @@ let keyring: MemoryKeyring;
 let printed: string[];
 let opened: string[];
 let confirmAnswer: boolean;
+let typedAnswer: string | null;
 let confirmAsked: string[];
 let chainResult: DelegationResult;
 const realFetch = globalThis.fetch;
@@ -75,6 +80,12 @@ function deps(overrides: Partial<ProfileDeps> = {}): ProfileDeps {
     confirm: async (q) => {
       confirmAsked.push(q);
       return confirmAnswer;
+    },
+    // A typed confirmation: the profile name when the test says yes, a plain "y" otherwise
+    // (which must not be enough).
+    prompt: async (q) => {
+      confirmAsked.push(q);
+      return confirmAnswer ? (typedAnswer ?? "default") : "y";
     },
     openKeychain: async () => os,
     openBrowser: async (_d, url) => {
@@ -157,6 +168,7 @@ beforeEach(() => {
   printed = [];
   opened = [];
   confirmAnswer = false;
+  typedAnswer = null;
   confirmAsked = [];
   chainResult = { ok: false, code: "CHAIN_UNCONFIRMED", reason: "not set" };
 });
@@ -204,8 +216,16 @@ describe("TTY-only commands", () => {
     expect(existsSync(dir)).toBe(false);
   });
 
-  // Only when the runner has no TTY (CI, vitest workers): otherwise the real {dir} would be used.
-  it.skipIf(isInteractive())("the CLI entry refuses them too (the test runner has no TTY)", async () => {
+  // The CLI entry builds its own deps from `configDir()`, which test/setup/temp-home.ts points
+  // at a temporary home (review I2); the global guard fails the run if the real one changes.
+  it("the CLI entry refuses them too, in a temporary home", async () => {
+    expect(configDir().startsWith(testHome())).toBe(true);
+    const tempDir = configDir();
+    const before = existsSync(tempDir) ? readdirSync(tempDir, { recursive: true }) : null;
+    const stdin = process.stdin.isTTY;
+    const stdoutTty = process.stdout.isTTY;
+    // Even when the test runner itself sits in a terminal, the entry must see no TTY.
+    Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
     const err: string[] = [];
     const out = vi.spyOn(process.stdout, "write");
     vi.spyOn(process.stderr, "write").mockImplementation((s) => (err.push(String(s)), true));
@@ -217,6 +237,9 @@ describe("TTY-only commands", () => {
     expect(await main(["settings", "set", "--allow-env-proxy", "on"])).toBe(2);
     expect(out).not.toHaveBeenCalled();
     expect(err.join("").match(/changes local safety settings/g)).toHaveLength(5);
+    Object.defineProperty(process.stdin, "isTTY", { value: stdin, configurable: true });
+    Object.defineProperty(process.stdout, "isTTY", { value: stdoutTty, configurable: true });
+    expect(existsSync(tempDir) ? readdirSync(tempDir, { recursive: true }) : null).toEqual(before);
   });
 });
 
@@ -421,16 +444,103 @@ describe("login and logout (fake AS)", () => {
     expect(output()).not.toMatch(TOKEN_PATTERN);
   });
 
-  it("logout without a payment key prints no on-chain hint, and still clears local data when the revoke fails", async () => {
+  it("logout without a payment key prints no on-chain hint", async () => {
     await seedProfile("e2e");
     seedSecret("default", "e2e", "refresh_token", "assay_rt_unknown_to_the_server");
-    as.misbehave["/oauth/revoke"] = "stall";
-    expect(await runLogout([], deps({ env: E2E_ENV, requestTimeoutMs: 200 }))).toBe(0);
+    expect(await runLogout([], deps({ env: E2E_ENV }))).toBe(0);
     expect(output()).toContain("This signs out all 0 Assay servers on this computer.");
-    expect(output()).toContain("Assay did not confirm the sign-out");
     expect(output()).not.toContain("payment key was deleted");
     expect(keyring.entries.size).toBe(0);
     expect(readProfile(ref())).toBeNull();
+  });
+
+  /** A signed-in profile with a payment key and every profile file. */
+  async function seedFull(refreshToken = "assay_rt_seeded_token_value", accessToken = "assay_at_seeded_token_value") {
+    await seedProfile("e2e", { delegate: true, paid: ["/c/weather"] });
+    await withLock(ref(), (lock) => {
+      writePrivateFile(dir, profileFile("default", "state"), JSON.stringify({ version: 1, signed: [], lastBrowserOpen: null }));
+      writePrivateFile(dir, profileFile("default", "settings"), JSON.stringify({ version: 1, allowEnvProxy: true }));
+      lock.assertHeld();
+    });
+    seedSecret("default", "e2e", "refresh_token", refreshToken);
+    seedSecret("default", "e2e", "access_token", JSON.stringify({ token: accessToken, expiresAt: NOW + 600 }));
+    seedSecret("default", "e2e", "delegate_key", PRIVATE_KEY);
+    return readFileSync(join(dir, profileFile("default", "limits")), "utf8");
+  }
+
+  function expectCleared(limitsBefore: string, web: string | null = "http://localhost:4000") {
+    expect([...keyring.entries.keys()]).toEqual([]);
+    for (const kind of ["profile", "state", "settings"] as const) expect(existsSync(join(dir, profileFile("default", kind)))).toBe(false);
+    expect(readFileSync(join(dir, profileFile("default", "limits")), "utf8")).toBe(limitsBefore);
+    expect(readPaidUrls(ref())).toEqual(["/", "/c/weather"]);
+    expect(output()).toContain(web !== null ? `${onChainHint(web)}\n` : "Your payment key was deleted from this computer. To also cancel its on-chain permission, open Agents & keys");
+  }
+
+  it.each(["stall", "reset"] as const)("logout deletes the payment key and the files even when the revoke fails (%s)", async (mode) => {
+    const limitsBefore = await seedFull();
+    as.misbehave["/oauth/revoke"] = mode;
+    expect(await runLogout([], deps({ env: E2E_ENV, requestTimeoutMs: 200 }))).toBe(0);
+    // A reset after a 200 status line counts as answered; a stall is not confirmed.
+    if (mode === "stall") expect(output()).toContain("Assay did not confirm the sign-out");
+    expectCleared(limitsBefore);
+  });
+
+  it("logout deletes the payment key and the files when the server refuses the connection", async () => {
+    const limitsBefore = await seedFull();
+    await as.stop(); // nothing listens on the port any more: connection refused
+    expect(await runLogout([], deps({ env: E2E_ENV }))).toBe(0);
+    expect(output()).toContain("Assay did not confirm the sign-out");
+    expectCleared(limitsBefore);
+    await as.start();
+  });
+
+  it("logout clears locally, without a request, for an unreadable profile or a dev profile without dev mode (M2)", async () => {
+    const limitsBefore = await seedFull();
+    // Dev mode off: no revoke is sent, the local data still goes.
+    expect(await runLogout([], deps({ env: {} }))).toBe(0);
+    expect(as.requests).toEqual([]);
+    expect(output()).toContain("Signed out on this computer only");
+    expectCleared(limitsBefore, null);
+
+    printed = [];
+    const limits2 = await seedFull();
+    // An unreadable (loose) profile file: every environment's entries of the profile are cleared.
+    const { chmodSync } = await import("node:fs");
+    chmodSync(join(dir, profileFile("default", "profile")), 0o644);
+    seedSecret("default", "production", "delegate_key", PRIVATE_KEY);
+    expect(await runLogout([], deps({ env: E2E_ENV }))).toBe(0);
+    expect(as.requests).toEqual([]);
+    expectCleared(limits2, null);
+  });
+
+  it("logout keeps 2.7's lost-lock fallback: the local clear runs under a new lock (M1)", async () => {
+    const limitsBefore = await seedFull();
+    let stalled = false;
+    // The first keychain delete stalls past the lock's freshness (a 15 s heartbeat stall,
+    // shortened by a fake clock), so the hold ends with LOCK_LOST.
+    let clock = Date.now();
+    keyring.beforeWrite = async () => {
+      if (!stalled) {
+        stalled = true;
+        clock += 20_000;
+      }
+    };
+    expect(await runLogout([], deps({ env: E2E_ENV, lockOptions: { timeoutMs: 2000, now: () => clock } }))).toBe(0);
+    expect(stalled).toBe(true);
+    expectCleared(limitsBefore);
+  });
+
+  it("prints nothing about signing out when the lock cannot be taken (M9)", async () => {
+    await seedFull();
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const holder = withLock(ref(), () => held);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(await runLogout([], deps({ env: E2E_ENV, lockOptions: { timeoutMs: 300 } }))).toBe(1);
+    release();
+    await holder;
+    expect(output()).not.toContain("This signs out all");
+    expect(output()).toContain(LOCK_TIMEOUT_TEXT);
   });
 
   it("an invalid profile name is a usage error", async () => {
@@ -497,8 +607,9 @@ describe("limits", () => {
 });
 
 describe("allow-paid / disallow-paid", () => {
-  it("adds and removes the canonical path on a TTY", async () => {
+  it("adds and removes the canonical path on a TTY, after the profile name is typed", async () => {
     await seedProfile("production");
+    confirmAnswer = true;
     const t = deps({ isTTY: true });
     expect(await runPaidUrlChange("allow-paid", ["https://mcp.assay.ai/c/weather"], t)).toBe(0);
     expect(readPaidUrls(ref())).toEqual(["/", "/c/weather"]);
@@ -507,6 +618,22 @@ describe("allow-paid / disallow-paid", () => {
     expect(await runPaidUrlChange("disallow-paid", ["/c/weather"], t)).toBe(0);
     expect(readPaidUrls(ref())).toEqual(["/"]);
     expect(readFileSync(join(dir, profileFile("default", "paid-urls")), "utf8")).not.toContain("mcp.assay.ai");
+    // Asked once: allowing a URL already allowed, and disallowing, ask nothing.
+    expect(confirmAsked).toHaveLength(1);
+    expect(confirmAsked[0]).toContain('Type the profile name (default)');
+  });
+
+  it("a plain yes is not enough: nothing changes and the exit code is 0", async () => {
+    await seedProfile("production");
+    confirmAnswer = false; // the prompt answers "y"
+    const before = snapshot();
+    expect(await runPaidUrlChange("allow-paid", ["/c/weather"], deps({ isTTY: true }))).toBe(0);
+    expect(output()).toContain("Nothing changed.");
+    expect(snapshot()).toEqual(before);
+    confirmAnswer = true;
+    typedAnswer = "Default";
+    expect(await runPaidUrlChange("allow-paid", ["/c/weather"], deps({ isTTY: true }))).toBe(0);
+    expect(readPaidUrls(ref())).toEqual(["/"]);
   });
 
   it("refuses another origin, a dev origin without dev mode, and a profile of another environment", async () => {
@@ -530,14 +657,36 @@ describe("dev allow", () => {
     expect(lstatSync(join(dir, "dev-origins.json")).mode & 0o777).toBe(0o600);
   });
 
-  it("writes nothing on a no, and refuses origins of no built-in dev entry", async () => {
+  it("writes nothing on a no (exit 0), and refuses origins of no built-in dev entry", async () => {
     confirmAnswer = false;
-    expect(await runDevAllow([E2E_MCP], deps({ isTTY: true }))).toBe(1);
+    expect(await runDevAllow([E2E_MCP], deps({ isTTY: true }))).toBe(0);
+    expect(output()).toContain("Nothing changed.");
     expect(existsSync(dir)).toBe(false);
     confirmAnswer = true;
     expect(await runDevAllow(["https://evil.example"], deps({ isTTY: true }))).toBe(2);
     expect(await runDevAllow(["http://localhost:3200/path"], deps({ isTTY: true }))).toBe(2);
     expect(existsSync(dir)).toBe(false);
+  });
+});
+
+describe("dev allow (lock and unreadable file, review M7)", () => {
+  it("writes under the dev-origins lock and refuses to replace an unreadable file", async () => {
+    confirmAnswer = true;
+    // A held dev-origins lock blocks the write until the timeout.
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const holder = withLock({ dir, name: "dev-origins" }, () => held);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(await runDevAllow([E2E_MCP], deps({ isTTY: true, lockOptions: { timeoutMs: 300 } }))).toBe(1);
+    release();
+    await holder;
+    expect(readDevOrigins(dir)).toEqual([]);
+
+    writePrivateFile(dir, "dev-origins.json", "{not json");
+    printed = [];
+    expect(await runDevAllow([E2E_MCP], deps({ isTTY: true }))).toBe(1);
+    expect(output()).toContain("not valid JSON");
+    expect(readFileSync(join(dir, "dev-origins.json"), "utf8")).toBe("{not json");
   });
 });
 
@@ -561,9 +710,11 @@ describe("settings (env-proxy opt-in)", () => {
     expect(readSettings(ref()).allowEnvProxy).toBe(false);
   });
 
-  it("a declined confirmation or a bad value writes nothing", async () => {
+  it("a declined confirmation (a plain yes) or a bad value writes nothing", async () => {
     confirmAnswer = false;
-    expect(await runSettings(["set", "--allow-env-proxy", "on"], deps({ isTTY: true }))).toBe(1);
+    expect(await runSettings(["set", "--allow-env-proxy", "on"], deps({ isTTY: true }))).toBe(0);
+    expect(output()).toContain("Nothing changed.");
+    expect(confirmAsked[0]).toContain("Type the profile name (default)");
     expect(await runSettings(["set", "--allow-env-proxy", "yes"], deps({ isTTY: true }))).toBe(2);
     expect(await runSettings(["set"], deps({ isTTY: true }))).toBe(2);
     expect(existsSync(dir)).toBe(false);
@@ -798,5 +949,93 @@ describe("L(u) from tools/list (CARRY 2.11)", () => {
     seenAuth = [];
     expect(await withKey("default", url)).toBe(20);
     expect(seenAuth.every((a) => a === "Bearer assay_at_good")).toBe(true);
+  });
+});
+
+describe("client CLI runner (review I1, M4)", () => {
+  type Call = { file: string; args: readonly string[]; options: Record<string, unknown> };
+  function fakeExec(calls: Call[]) {
+    return ((file: string, args: readonly string[], options: Record<string, unknown>, cb: (e: Error | null, out: string, err: string) => void) => {
+      calls.push({ file, args, options });
+      cb(null, "", "");
+    }) as unknown as typeof import("node:child_process").execFile;
+  }
+  const winExists = (p: string) => p === "C:\\Windows\\System32\\cmd.exe";
+
+  it("POSIX: spawns the absolute path from which(), never the bare name, and refuses a relative result", async () => {
+    const calls: Call[] = [];
+    const run = makeRunner({ platform: "darwin", env: {}, which: () => "/opt/bin/claude", execFile: fakeExec(calls), exists: () => true, safeCwds: [] });
+    await run("claude", ["mcp", "list"], { cwd: home });
+    expect(calls[0]!.file).toBe("/opt/bin/claude");
+    expect(calls[0]!.options).toMatchObject({ shell: false, cwd: home });
+    expect(calls[0]!.options.env).toBeUndefined();
+    for (const bad of ["claude", "./claude", null]) {
+      const r = makeRunner({ platform: "darwin", env: {}, which: () => bad, execFile: fakeExec(calls), exists: () => true, safeCwds: [] });
+      await expect(r("claude", [], { cwd: home })).rejects.toThrow(/not found/);
+    }
+    expect(calls).toHaveLength(1);
+  });
+
+  it.skipIf(process.platform === "win32")("POSIX, real execFile: the program started is the absolute path in an absolute PATH entry", async () => {
+    const bin = join(base, "bin");
+    mkdirSync(bin);
+    const record = join(base, "argv0");
+    writeFileSync(join(bin, "fakecli"), `#!/bin/sh\nprintf '%s' "$0" > '${record}'\n`, { mode: 0o755 });
+    const { execFile } = await import("node:child_process");
+    const run = makeRunner({ platform: process.platform, env: {}, which: (b) => which(b, `relative:${bin}`), execFile, exists: () => true, safeCwds: [] });
+    await run("fakecli", [], { cwd: home });
+    expect(readFileSync(record, "utf8")).toBe(join(bin, "fakecli"));
+  });
+
+  it("Windows: every child gets NoDefaultCurrentDirectoryInExePath=1 and runs only in the home directory", async () => {
+    const calls: Call[] = [];
+    const winHome = "C:\\Users\\u";
+    const mk = (path: string) => makeRunner({ platform: "win32", env: { PATH: "x" }, which: () => path, execFile: fakeExec(calls), exists: winExists, safeCwds: [winHome] });
+    await mk("C:\\Users\\u\\AppData\\Roaming\\npm\\claude.cmd")("claude", ["mcp", "list"], { cwd: winHome });
+    await mk("C:\\Tools\\claude.exe")("claude", ["mcp", "list"], { cwd: "c:\\users\\U\\" });
+    expect(calls).toHaveLength(2);
+    for (const c of calls) expect((c.options.env as Record<string, string>)[NO_CWD_EXE_SEARCH]).toBe("1");
+    expect(calls[0]!.file).toBe("C:\\Windows\\System32\\cmd.exe");
+    await expect(mk("C:\\Users\\u\\AppData\\Roaming\\npm\\claude.cmd")("claude", ["mcp", "add"], { cwd: "C:\\code\\project" })).rejects.toThrow(/only from your home directory/);
+    expect(calls).toHaveLength(2);
+  });
+
+  it("the Windows browser launcher env also sets it", async () => {
+    const { launcherEnv } = await import("../src/oauth/flow.js");
+    expect(launcherEnv("win32", { BROWSER: "x" })).toEqual({ NoDefaultCurrentDirectoryInExePath: "1" });
+    expect(launcherEnv("darwin", {}).NoDefaultCurrentDirectoryInExePath).toBeUndefined();
+  });
+});
+
+describe("doctor escapes hostile names (review M3)", () => {
+  it("control characters in server names and env keys are printed as \\uXXXX", async () => {
+    writeFileSync(
+      join(cwd, ".mcp.json"),
+      JSON.stringify({ mcpServers: { "assay\u001b[2K": { command: "npx", args: ["-y", "@assay-ai/mcp@1.2.3"], env: { "X\u001b]8;;http://evil\u0007": "1" } } } }),
+    );
+    expect(await runDoctor([], deps())).toBe(1);
+    expect(output()).not.toContain("\u001b");
+    expect(output()).not.toContain("\u0007");
+    expect(output()).toContain("assay\\u001b[2K");
+    expect(output()).toContain("X\\u001b]8;;http://evil\\u0007");
+    expect(printable("a\u202eb\u2028c")).toBe("a\\u202eb\\u2028c");
+  });
+});
+
+describe("global guard (review I2)", () => {
+  it("fingerprints a directory and throws when it changes", () => {
+    const watched = join(base, "watched");
+    const teardown = guard(watched);
+    expect(() => teardown()).not.toThrow();
+    const again = guard(watched);
+    mkdirSync(watched);
+    expect(() => again()).toThrow(/changed the real profile directory/);
+    expect(fingerprintDir(watched)).toContain("watched d");
+  });
+
+  it("every default dependency points at the temporary home", async () => {
+    const { defaultProfileDeps } = await import("../src/commands/profile-context.js");
+    expect(defaultProfileDeps().dir).toBe(configDir());
+    expect(configDir().startsWith(testHome())).toBe(true);
   });
 });

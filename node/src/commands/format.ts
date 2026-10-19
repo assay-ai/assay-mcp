@@ -24,3 +24,13 @@ export function utcDate(seconds: number | bigint | string): string {
   if (!Number.isFinite(ms) || ms > 8.64e15) return "never";
   return new Date(ms).toISOString().slice(0, 10);
 }
+
+/**
+ * Names, keys and messages come from project configs that may be hostile: control characters
+ * (C0, DEL, C1), line and paragraph separators and bidi controls are shown as `\uXXXX`, so
+ * terminal escape sequences cannot rewrite or hide a finding.
+ */
+export function printable(text: string): string {
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+}

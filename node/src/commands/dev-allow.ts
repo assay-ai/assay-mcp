@@ -5,12 +5,16 @@
  * enough, and only an origin of a built-in dev entry can select a deployment.
  */
 import { builtInDeployments, isPlaceholder } from "../deployments.js";
-import { EXIT_FATAL, EXIT_OK } from "../exit-codes.js";
+import { EXIT_OK } from "../exit-codes.js";
+import { withLock } from "../profile/lock.js";
 import { DEV_SELECTABLE } from "../profile/deployments.js";
-import { addDevOrigin, DEV_ORIGINS_ENV, normaliseOrigin, readDevOrigins } from "../profile/dev-origins.js";
+import { addDevOrigin, DEV_ORIGINS_ENV, normaliseOrigin, readDevOriginsForWrite } from "../profile/dev-origins.js";
 import { requireTty } from "../tty.js";
 import { parseFlags, UsageError } from "./context.js";
-import { defaultProfileDeps, reportFailure, type ProfileDeps } from "./profile-context.js";
+import { DECLINED_TEXT, defaultProfileDeps, reportFailure, type ProfileDeps } from "./profile-context.js";
+
+/** `dev-origins.json` is shared by every profile, so it has its own lock name (like `installs`). */
+export const DEV_ORIGINS_LOCK_NAME = "dev-origins";
 
 /** Origins of the built-in dev entries (the only ones dev mode can select). */
 export function builtInDevOrigins(): string[] {
@@ -32,7 +36,8 @@ export async function devAllow(args: readonly string[], deps: ProfileDeps): Prom
   if (origin === null) throw new UsageError("expected an http(s) origin, e.g. http://localhost:3200");
   const known = builtInDevOrigins();
   if (!known.includes(origin)) throw new UsageError(`${origin} is not the origin of a built-in dev deployment (${known.join(", ") || "none"})`);
-  if (readDevOrigins(deps.dir).includes(origin)) {
+  // A file that exists but cannot be read is refused here, never replaced.
+  if (readDevOriginsForWrite(deps.dir).includes(origin)) {
     deps.print(`${origin} is already allowed for dev mode.\n`);
     return EXIT_OK;
   }
@@ -40,10 +45,13 @@ export async function devAllow(args: readonly string[], deps: ProfileDeps): Prom
     `Allow dev mode for ${origin}? While ${DEV_ORIGINS_ENV} also names it, assay-mcp talks to that development deployment instead of Assay. Never use dev mode with real funds.`,
   );
   if (!yes) {
-    deps.print("Nothing changed.\n");
-    return EXIT_FATAL;
+    deps.print(`${DECLINED_TEXT}\n`);
+    return EXIT_OK;
   }
-  addDevOrigin(deps.dir, origin);
+  await withLock({ dir: deps.dir, name: DEV_ORIGINS_LOCK_NAME }, (lock) => {
+    lock.assertHeld();
+    addDevOrigin(deps.dir, origin);
+  }, deps.lockOptions);
   deps.print(`Dev mode allowed for ${origin}. It is on only while ${DEV_ORIGINS_ENV} also lists it.\n`);
   return EXIT_OK;
 }

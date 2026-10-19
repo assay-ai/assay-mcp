@@ -5,17 +5,17 @@
  *
  * `allowEnvProxy` lets `serve` send Assay traffic through an HTTP proxy named in its
  * environment (`HTTPS_PROXY`, `NODE_USE_ENV_PROXY`, ...), which it otherwise refuses because a
- * project config can set that environment. Turning it on is terminal only and asks for a
- * confirmation; it writes `profiles/{profile}.settings.json` as a 0600 file under the lock.
+ * project config can set that environment. Turning it on is terminal only and asks the user
+ * to type the profile name; it writes `profiles/{profile}.settings.json` as a 0600 file under the lock.
  * Turning it off needs the terminal too, but no confirmation.
  */
-import { EXIT_FATAL, EXIT_OK } from "../exit-codes.js";
+import { EXIT_OK } from "../exit-codes.js";
 import { withLock } from "../profile/lock.js";
 import { profileFile } from "../profile/paths.js";
 import { readSettings, writeSettings } from "../profile/settings.js";
 import { requireTty } from "../tty.js";
 import { parseFlags, UsageError } from "./context.js";
-import { checkProfileName, defaultProfileDeps, profileRef, reportFailure, type ProfileDeps } from "./profile-context.js";
+import { checkProfileName, DECLINED_TEXT, defaultProfileDeps, profileRef, reportFailure, typedConfirm, type ProfileDeps } from "./profile-context.js";
 
 export async function settings(args: readonly string[], deps: ProfileDeps): Promise<number> {
   if (args[0] !== "set") {
@@ -33,12 +33,14 @@ export async function settings(args: readonly string[], deps: ProfileDeps): Prom
   const allow = raw === "on";
   const ref = profileRef(deps, profile);
   if (allow) {
-    const yes = await deps.confirm(
-      `Let assay-mcp (profile "${profile}") send Assay traffic, including your sign-in, through an HTTP proxy named in its environment? Only say yes if you set up that proxy yourself: a project config can set these variables too.`,
+    const yes = await typedConfirm(
+      deps,
+      `Let assay-mcp (profile "${profile}") send Assay traffic, including your sign-in, through an HTTP proxy named in its environment? Only confirm if you set up that proxy yourself: a project config can set these variables too.`,
+      profile,
     );
     if (!yes) {
-      deps.print("Nothing changed.\n");
-      return EXIT_FATAL;
+      deps.print(`${DECLINED_TEXT}\n`);
+      return EXIT_OK;
     }
   }
   await withLock(ref, (lock) => writeSettings(ref, lock, { allowEnvProxy: allow }), deps.lockOptions);

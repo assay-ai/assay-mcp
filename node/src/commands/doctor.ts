@@ -19,6 +19,7 @@ import { EXIT_FATAL, EXIT_OK } from "../exit-codes.js";
 import { readDevOrigins } from "../profile/dev-origins.js";
 import { readSettings } from "../profile/settings.js";
 import { parseFlags } from "./context.js";
+import { printable } from "./format.js";
 import { checkProfileName, defaultProfileDeps, installRecords, profileRef, reportFailure, type ProfileDeps } from "./profile-context.js";
 
 export interface Finding {
@@ -169,8 +170,8 @@ export async function doctorFindings(args: readonly string[], deps: ProfileDeps)
 export async function runDoctor(args: readonly string[], deps: ProfileDeps): Promise<number> {
   try {
     const { findings, checked } = await doctorFindings(args, deps);
-    for (const c of checked) deps.print(`ok    ${c}\n`);
-    for (const f of findings) deps.print(`${f.level === "problem" ? "!!   " : "note "} ${f.text}\n`);
+    for (const c of checked) deps.print(`ok    ${printable(c)}\n`);
+    for (const f of findings) deps.print(`${f.level === "problem" ? "!!   " : "note "} ${printable(f.text)}\n`);
     deps.print(`\nKnown risk (T13): ${T13_RISK_TEXT}\n`);
     const problems = findings.filter((f) => f.level === "problem").length;
     deps.print(problems === 0 ? "No problems found.\n" : `${problems} problem${problems === 1 ? "" : "s"} found.\n`);

@@ -12,7 +12,9 @@
  */
 import { EXIT_OK } from "../exit-codes.js";
 import { clientIdOf, postForm, REQUEST_TIMEOUT_MS } from "../oauth/endpoints.js";
-import { withLock } from "../profile/lock.js";
+import { ENVIRONMENTS, type Environment } from "../deployments.js";
+import type { ResolvedDeployment } from "../profile/deployments.js";
+import { LockError, withLock, type LockHandle } from "../profile/lock.js";
 import { deletePrivateFile, profileFile } from "../profile/paths.js";
 import { readProfile } from "../profile/profile.js";
 import { parseFlags } from "./context.js";
@@ -21,7 +23,6 @@ import {
   defaultProfileDeps,
   installRecords,
   profileDeployment,
-  profileKeychain,
   profileRef,
   reportFailure,
   type ProfileDeps,
@@ -38,12 +39,41 @@ export function onChainHint(web: string): string {
   return `Your payment key was deleted from this computer. To also cancel its on-chain permission, open ${web.replace(/\/+$/, "")}/agents and click Stop it (one signature).`;
 }
 
+interface Outcome {
+  hadGrant: boolean;
+  revoked: boolean;
+  hadKey: boolean;
+}
+
+/** The profile's environment from its file, or null when the file is missing or unreadable. */
+function environmentOf(deps: ProfileDeps, profile: string): Environment | null {
+  try {
+    return readProfile(profileRef(deps, profile))?.environment ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export async function logout(args: readonly string[], deps: ProfileDeps): Promise<number> {
   const { values } = parseFlags(args, { profile: { type: "string" } }, 0);
   const profile = checkProfileName(values.profile as string | undefined);
-  const deployment = profileDeployment(deps, profile);
-  const keychain = await profileKeychain(deps, profile, deployment);
   const ref = profileRef(deps, profile);
+
+  // Logout is the recovery path: when the deployment cannot be resolved (an unreadable
+  // profile file, or a dev profile while dev mode is off), nothing is sent to a server, but
+  // the local sign-in data is still removed. The keychain scope needs no host.
+  let deployment: ResolvedDeployment | null = null;
+  let localOnly: string | null = null;
+  try {
+    deployment = profileDeployment(deps, profile);
+  } catch (err) {
+    localOnly = err instanceof Error ? err.message : String(err);
+  }
+  const known = deployment?.environment ?? environmentOf(deps, profile);
+  const environments: readonly Environment[] = known !== null ? [known] : ENVIRONMENTS;
+  const os = await deps.openKeychain();
+  await os.probe();
+  const keychains = environments.map((environment) => os.forScope({ profile, environment }));
 
   let n = 0;
   try {
@@ -51,49 +81,88 @@ export async function logout(args: readonly string[], deps: ProfileDeps): Promis
   } catch {
     // An unreadable installs.json does not block signing out.
   }
-  deps.print(`${signsOutText(n)}\n`);
 
-  const outcome = await withLock(
-    ref,
-    async (lock) => {
-      const record = readProfile(ref);
-      const refreshToken = await keychain.get("refresh_token");
-      const access = refreshToken === null ? await keychain.getAccessToken() : null;
-      const token = refreshToken ?? access?.token ?? null;
-      let revoked = false;
-      if (token !== null) {
-        lock.assertHeld();
-        try {
-          const res = await postForm(
-            deployment,
-            "revoke",
-            { token, token_type_hint: refreshToken !== null ? "refresh_token" : "access_token", client_id: clientIdOf(deployment) },
-            { signal: lock.signal, log: deps.log, timeoutMs: deps.requestTimeoutMs ?? REQUEST_TIMEOUT_MS },
-          );
-          await res.body?.cancel().catch(() => {});
-          revoked = res.status === 200;
-        } catch {
-          revoked = false;
-        }
-      }
+  /** Deletes the tokens, the payment key and the profile files except limits and paid URLs. */
+  const clearLocal = async (lock: LockHandle): Promise<boolean> => {
+    let hadKey = false;
+    for (const keychain of keychains) {
       await keychain.delete(lock, "access_token");
       await keychain.delete(lock, "refresh_token");
-      const hadKey = await keychain.delete(lock, "delegate_key");
-      lock.assertHeld();
-      for (const kind of LOGOUT_DELETES) deletePrivateFile(deps.dir, profileFile(profile, kind));
-      return { hadGrant: token !== null, revoked, hadKey: hadKey || (record?.delegateAddress ?? null) !== null };
-    },
-    deps.lockOptions,
-  );
+      hadKey = (await keychain.delete(lock, "delegate_key")) || hadKey;
+    }
+    lock.assertHeld();
+    for (const kind of LOGOUT_DELETES) deletePrivateFile(deps.dir, profileFile(profile, kind));
+    return hadKey;
+  };
 
-  if (!outcome.hadGrant) deps.print(`Profile "${profile}" was not signed in. Local sign-in data is removed.\n`);
+  let recordHadKey = false;
+  try {
+    recordHadKey = (readProfile(ref)?.delegateAddress ?? null) !== null;
+  } catch {
+    // unreadable: the keychain answer decides
+  }
+
+  let outcome: Outcome;
+  try {
+    outcome = await withLock(
+      ref,
+      async (lock) => {
+        let token: string | null = null;
+        let hint: "refresh_token" | "access_token" = "refresh_token";
+        if (deployment !== null) {
+          const keychain = keychains[0]!;
+          const refreshToken = await keychain.get("refresh_token");
+          const access = refreshToken === null ? await keychain.getAccessToken() : null;
+          token = refreshToken ?? access?.token ?? null;
+          if (refreshToken === null) hint = "access_token";
+        } else {
+          for (const keychain of keychains) if ((await keychain.get("refresh_token")) !== null) token = "";
+        }
+        let revoked = false;
+        if (deployment !== null && token !== null && token !== "") {
+          lock.assertHeld();
+          try {
+            const res = await postForm(
+              deployment,
+              "revoke",
+              { token, token_type_hint: hint, client_id: clientIdOf(deployment) },
+              { signal: lock.signal, log: deps.log, timeoutMs: deps.requestTimeoutMs ?? REQUEST_TIMEOUT_MS },
+            );
+            await res.body?.cancel().catch(() => {});
+            revoked = res.status === 200;
+          } catch {
+            revoked = false;
+          }
+        }
+        const hadKey = await clearLocal(lock);
+        return { hadGrant: token !== null, revoked, hadKey: hadKey || recordHadKey };
+      },
+      deps.lockOptions,
+    );
+  } catch (err) {
+    if (!(err instanceof LockError && err.code === "LOCK_LOST")) throw err;
+    // As in Task 2.7's revoke(): the lock was lost mid-way; clear locally under a new lock.
+    const hadKey = await withLock(ref, clearLocal, deps.lockOptions);
+    outcome = { hadGrant: true, revoked: false, hadKey: hadKey || recordHadKey };
+  }
+
+  // Printed only after the lock work is done, so a lock or keychain failure never follows it.
+  deps.print(`${signsOutText(n)}\n`);
+  const web = deployment?.web.replace(/\/+$/, "") ?? null;
+  if (localOnly !== null) {
+    deps.print(`Signed out on this computer only (${localOnly}). Revoke the app at Agents & keys on the Assay website if it still shows.\n`);
+  } else if (!outcome.hadGrant) deps.print(`Profile "${profile}" was not signed in. Local sign-in data is removed.\n`);
   else if (outcome.revoked) deps.print(`Signed out. Profile "${profile}" no longer has access to Assay.\n`);
   else {
+    deps.print(`Signed out on this computer, but Assay did not confirm the sign-out. The app's access ends after 30 idle days, or revoke it now at ${web}/agents.\n`);
+  }
+  if (outcome.hadKey) {
     deps.print(
-      `Signed out on this computer, but Assay did not confirm the sign-out. The app's access ends after 30 idle days, or revoke it now at ${deployment.web.replace(/\/+$/, "")}/agents.\n`,
+      web !== null
+        ? `${onChainHint(web)}\n`
+        : "Your payment key was deleted from this computer. To also cancel its on-chain permission, open Agents & keys on the Assay website and click Stop it (one signature).\n",
     );
   }
-  if (outcome.hadKey) deps.print(`${onChainHint(deployment.web)}\n`);
   return EXIT_OK;
 }
 

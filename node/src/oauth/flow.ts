@@ -200,6 +200,8 @@ export function launcherEnv(platform: NodeJS.Platform, env: NodeJS.ProcessEnv): 
   }
   const copy = { ...env };
   delete copy.BROWSER;
+  // Windows: never search the cwd for a bare program name (as for client CLIs).
+  if (platform === "win32") copy.NoDefaultCurrentDirectoryInExePath = "1";
   return copy;
 }
 

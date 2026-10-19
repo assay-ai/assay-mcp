@@ -12,7 +12,7 @@ import { withLock } from "../profile/lock.js";
 import { addPaidUrl, readPaidUrls, readProfileFor, removePaidUrl } from "../profile/profile.js";
 import { requireTty } from "../tty.js";
 import { parseFlags, UsageError } from "./context.js";
-import { checkProfileName, profileRef, reportFailure, type ProfileDeps } from "./profile-context.js";
+import { checkProfileName, DECLINED_TEXT, profileRef, reportFailure, typedConfirm, type ProfileDeps } from "./profile-context.js";
 import { urlResolver } from "./wiring.js";
 
 export type PaidUrlChange = "allow-paid" | "disallow-paid";
@@ -29,6 +29,18 @@ export async function changePaidUrl(command: PaidUrlChange, args: readonly strin
     throw err;
   }
   const ref = profileRef(deps, profile);
+  readProfileFor(ref, url.environment); // refused before any question; checked again under the lock
+  if (command === "allow-paid" && !readPaidUrls(ref).includes(url.pathAndQuery)) {
+    const yes = await typedConfirm(
+      deps,
+      `Allow paid calls through ${url.url} for profile "${profile}"? Tools behind this URL can then spend within your local caps.`,
+      profile,
+    );
+    if (!yes) {
+      deps.print(`${DECLINED_TEXT}\n`);
+      return EXIT_OK;
+    }
+  }
   const result = await withLock(
     ref,
     (lock) => {

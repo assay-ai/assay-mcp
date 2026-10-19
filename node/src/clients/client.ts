@@ -5,6 +5,7 @@
  */
 import { execFile } from "node:child_process";
 import { accessSync, constants, existsSync, statSync } from "node:fs";
+import { userInfo } from "node:os";
 import { delimiter, isAbsolute, join, win32 } from "node:path";
 import type { ClientId, InstallInput, Scope } from "./install-command.js";
 
@@ -137,36 +138,79 @@ export function invocationFor(
   return { file: cmd, args: ["/d", "/s", "/c", `"${line}"`], windowsVerbatimArguments: true };
 }
 
+/** Set in the environment of every Windows child: `cmd.exe` then never searches the cwd for a bare name (npm shims run `node`). */
+export const NO_CWD_EXE_SEARCH = "NoDefaultCurrentDirectoryInExePath";
+
+export interface RunnerDeps {
+  platform: NodeJS.Platform;
+  env: Readonly<Record<string, string | undefined>>;
+  /** Resolves a client CLI to an absolute path from absolute `PATH` entries only ({@link which}). */
+  which(bin: string): string | null;
+  execFile: typeof execFile;
+  exists(path: string): boolean;
+  /** Windows only: the directories a client CLI may run in (the home and profile directories). */
+  safeCwds: readonly string[];
+}
+
 /**
- * The default runner: the binary resolved to an absolute path first ({@link which}), then
- * `execFile` without a shell (a `.cmd` shim through the absolute `cmd.exe`, see
- * {@link invocationFor}), output captured (never written to stdout).
+ * A runner: the binary resolved to an absolute path first (a bare or relative result is
+ * refused), then `execFile` without a shell (a `.cmd` shim through the absolute `cmd.exe`,
+ * see {@link invocationFor}), output captured (never written to stdout).
+ *
+ * On Windows every child gets `NoDefaultCurrentDirectoryInExePath=1` and runs only in the
+ * home or profile directory, never a project directory: `cmd.exe` (and the npm shims it runs)
+ * would otherwise find a `node.exe` planted in the project before the real one. So
+ * project-scope installs through a client CLI are refused on Windows.
  */
-export const execFileRunner: CliRunner = (bin, argv, { cwd }) =>
-  new Promise((resolve, reject) => {
-    const path = which(bin);
-    if (path === null) {
-      reject(new ClientError(`${bin} was not found on PATH`));
-      return;
-    }
-    let inv: Invocation;
-    try {
-      inv = invocationFor(path, argv);
-    } catch (err) {
-      reject(err);
-      return;
-    }
-    execFile(
-      inv.file,
-      inv.args,
-      { cwd, shell: false, timeout: CLI_TIMEOUT_MS, windowsHide: true, windowsVerbatimArguments: inv.windowsVerbatimArguments },
-      (error, stdout, stderr) => {
-        if (error) {
-          const output = `${String(stderr)}${String(stdout)}`.trim().slice(0, 2000);
-          reject(new ClientError(`${bin} ${argv.slice(0, 2).join(" ")} failed${output ? `: ${output}` : ""}`));
-        } else {
-          resolve();
+export function makeRunner(deps: RunnerDeps): CliRunner {
+  return (bin, argv, { cwd }) =>
+    new Promise((resolve, reject) => {
+      const path = deps.which(bin);
+      const absolute = deps.platform === "win32" ? path !== null && win32.isAbsolute(path) : path !== null && isAbsolute(path);
+      if (path === null || !absolute) {
+        reject(new ClientError(`${bin} was not found on PATH`));
+        return;
+      }
+      let inv: Invocation;
+      let env: NodeJS.ProcessEnv | undefined;
+      try {
+        if (deps.platform === "win32") {
+          const norm = (p: string) => win32.resolve(p).toLowerCase();
+          if (!deps.safeCwds.some((d) => norm(d) === norm(cwd))) {
+            throw new ClientError(
+              `on Windows, assay-mcp runs ${bin} only from your home directory; a project-scope install through ${bin} is not supported there. Use --scope user, or a file client (cursor, vscode).`,
+            );
+          }
+          env = { ...deps.env, [NO_CWD_EXE_SEARCH]: "1" };
         }
-      },
-    );
-  });
+        inv = invocationFor(path, argv, deps.platform, deps.env, deps.exists);
+      } catch (err) {
+        reject(err);
+        return;
+      }
+      deps.execFile(
+        inv.file,
+        inv.args,
+        { cwd, shell: false, timeout: CLI_TIMEOUT_MS, windowsHide: true, windowsVerbatimArguments: inv.windowsVerbatimArguments, ...(env ? { env } : {}) },
+        (error, stdout, stderr) => {
+          if (error) {
+            const output = `${String(stderr)}${String(stdout)}`.trim().slice(0, 2000);
+            reject(new ClientError(`${bin} ${argv.slice(0, 2).join(" ")} failed${output ? `: ${output}` : ""}`));
+          } else {
+            resolve();
+          }
+        },
+      );
+    });
+}
+
+/** The runner `add` and `remove` use: the real `PATH`, `execFile` and home directory. */
+export const execFileRunner: CliRunner = (bin, argv, options) =>
+  makeRunner({
+    platform: process.platform,
+    env: process.env,
+    which: (b) => which(b),
+    execFile,
+    exists: existsSync,
+    safeCwds: [userInfo().homedir],
+  })(bin, argv, options);

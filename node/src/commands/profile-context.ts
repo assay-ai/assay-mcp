@@ -28,6 +28,7 @@ import { configDir, isValidProfileName, readPrivateFile } from "../profile/paths
 import { readProfile } from "../profile/profile.js";
 import { isInteractive, TtyRequired } from "../tty.js";
 import { UsageError } from "./context.js";
+import { printable } from "./format.js";
 
 /** §7.15: the lock wait ran out; never refresh. The CLI form of JSON-RPC `-32001`. */
 export const LOCK_TIMEOUT_TEXT = "Assay sign-in in progress in another window.";
@@ -46,6 +47,8 @@ export interface ProfileDeps {
   print(text: string): void;
   /** A yes/no question on the TTY; true only for an explicit yes. */
   confirm(question: string): Promise<boolean>;
+  /** A free-text answer on the TTY (trimmed); null when there was none. */
+  prompt(question: string): Promise<string | null>;
   /** The OS keychain (`openOsKeychain()` in production; a memory keyring in tests). */
   openKeychain(): Promise<OsKeychain>;
   /** Opens a URL built from `{WEB}` or `{MCP}` without a shell (R-MCP-18). */
@@ -119,11 +122,11 @@ export function installRecords(deps: Pick<ProfileDeps, "dir">): InstallRecord[] 
 export function reportFailure(command: string, err: unknown, deps: Pick<ProfileDeps, "print">): number {
   if (err instanceof KeychainError) return reportKeychainError(err, (line) => deps.print(line));
   if (err instanceof TtyRequired || err instanceof UsageError) {
-    deps.print(`assay-mcp ${command}: ${redact(err.message)}\n`);
+    deps.print(`assay-mcp ${command}: ${printable(redact(err.message))}\n`);
     return EXIT_USAGE;
   }
   if (err instanceof OriginError) {
-    deps.print(`assay-mcp ${command}: ${redact(err.message)}\n`);
+    deps.print(`assay-mcp ${command}: ${printable(redact(err.message))}\n`);
     return EXIT_USAGE;
   }
   if (err instanceof LockError && err.code === "LOCK_TIMEOUT") {
@@ -135,12 +138,36 @@ export function reportFailure(command: string, err: unknown, deps: Pick<ProfileD
     return EXIT_FATAL;
   }
   if (err instanceof SignInError || err instanceof ApiKeyError) {
-    deps.print(`${redact(err.message)}\n`);
+    deps.print(`${printable(redact(err.message))}\n`);
     return EXIT_FATAL;
   }
   const message = err instanceof Error ? err.message : String(err);
-  deps.print(`assay-mcp ${command}: ${redact(message)}\n`);
+  deps.print(`assay-mcp ${command}: ${printable(redact(message))}\n`);
   return EXIT_FATAL;
+}
+
+/**
+ * A typed confirmation: the user must type `expected` (the profile name) exactly. A shell an
+ * agent drives in a pseudo-terminal passes the TTY check, so a yes/no is not enough for the
+ * settings that loosen a guard (`settings set ... on`, `allow-paid`).
+ */
+export async function typedConfirm(deps: Pick<ProfileDeps, "prompt">, question: string, expected: string): Promise<boolean> {
+  const answer = await deps.prompt(`${question}\nType the profile name (${expected}) to confirm, or press Enter to cancel:`);
+  return answer === expected;
+}
+
+/** The message and exit code for a confirmation the user declined: nothing changed, exit 0. */
+export const DECLINED_TEXT = "Nothing changed.";
+
+async function promptOnTty(question: string): Promise<string | null> {
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
+  try {
+    return (await rl.question(`${question} `)).trim();
+  } catch {
+    return null;
+  } finally {
+    rl.close();
+  }
 }
 
 async function confirmOnTty(question: string): Promise<boolean> {
@@ -164,6 +191,7 @@ export function defaultProfileDeps(): ProfileDeps {
     isTTY: isInteractive(),
     print: (text) => void process.stderr.write(text),
     confirm: confirmOnTty,
+    prompt: promptOnTty,
     openKeychain: openOsKeychain,
     openBrowser: (deployment, url) => openBrowser(deployment, url, { cwd: dir }),
     chain: (environment, profile) => createChainReader({ environment, profile }),
