@@ -1,5 +1,7 @@
 import { getAddress, isAddress, type Address } from "viem";
+import type { Environment } from "../deployments.js";
 import { SignerRefusal } from "./errors.js";
+import { resolveBuiltInNetwork } from "./network.js";
 
 /** The binding proof's own EIP-712 domain (spec §4, F4 step 3). Not the escrow's. */
 export const DELEGATE_BINDING_DOMAIN_NAME = "GoAssay Agent Binding";
@@ -31,8 +33,10 @@ export interface BindingContext {
   localAddress: string;
   /** The profile's credential id. */
   credentialId: string;
-  /** The network's chain id from the built-in table. */
-  chainId: number;
+  /** The built-in environment the profile uses. */
+  environment: Environment;
+  /** The session's network (CAIP-2). The chain id comes from the built-in table, never from here. */
+  network: string;
   /** Unix seconds. */
   nowSeconds: number;
 }
@@ -63,13 +67,23 @@ function toInteger(value: unknown): bigint | null {
  * a `SignerRefusal` naming the first field that fails:
  *
  * - `domain` is exactly `{name: "GoAssay Agent Binding", version: "1", chainId}` with the
- *   network's `chainId`: no `verifyingContract`, no `salt`, nothing else;
+ *   chain id of `ctx.network` in the built-in table (a placeholder entry is refused): no `verifyingContract`, no `salt`, nothing else;
  * - `primaryType` is `DelegateBinding` and `types` holds only it, with exactly
  *   `delegate:address, credentialId:string, nonce:string, expiresAt:uint64` in that order;
  * - `message.delegate` is the local address, `message.credentialId` the profile's credential id,
  *   and `now < expiresAt ≤ now + 300`.
  */
 export function checkBindingChallenge(challenge: unknown, ctx: BindingContext): DelegateBindingTypedData {
+  const { chainId: builtInChainId } = resolveBuiltInNetwork(ctx.environment, ctx.network, "the binding challenge");
+  if (!Number.isSafeInteger(Math.floor(ctx.nowSeconds)) || ctx.nowSeconds < 0) {
+    refuse("context.nowSeconds", "is not a usable time");
+  }
+  if (typeof ctx.localAddress !== "string" || !isAddress(ctx.localAddress, { strict: false })) {
+    refuse("context.localAddress", "is not an address");
+  }
+  if (typeof ctx.credentialId !== "string" || ctx.credentialId.length === 0) {
+    refuse("context.credentialId", "is empty");
+  }
   if (!isRecord(challenge)) refuse("challenge", "is not an object");
   const t = challenge.typedData;
   if (!isRecord(t)) refuse("typedData", "is not an object");
@@ -85,7 +99,7 @@ export function checkBindingChallenge(challenge: unknown, ctx: BindingContext): 
     refuse("domain.version", `must be "${DELEGATE_BINDING_DOMAIN_VERSION}"`);
   }
   const chainId = toInteger(domain.chainId);
-  if (chainId === null || chainId !== BigInt(ctx.chainId)) refuse("domain.chainId", `must be ${ctx.chainId}`);
+  if (chainId === null || chainId !== BigInt(builtInChainId)) refuse("domain.chainId", `must be ${builtInChainId}`);
 
   // Types.
   if (t.primaryType !== "DelegateBinding") refuse("primaryType", 'must be "DelegateBinding"');
@@ -135,7 +149,7 @@ export function checkBindingChallenge(challenge: unknown, ctx: BindingContext): 
   }
 
   return {
-    domain: { name: DELEGATE_BINDING_DOMAIN_NAME, version: DELEGATE_BINDING_DOMAIN_VERSION, chainId: ctx.chainId },
+    domain: { name: DELEGATE_BINDING_DOMAIN_NAME, version: DELEGATE_BINDING_DOMAIN_VERSION, chainId: builtInChainId },
     types: DELEGATE_BINDING_TYPES,
     primaryType: "DelegateBinding",
     message: { delegate: getAddress(delegate), credentialId: ctx.credentialId, nonce, expiresAt },

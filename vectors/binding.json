@@ -6,9 +6,10 @@
     "address": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
   },
   "context": {
+    "environment": "production",
+    "network": "eip155:46630",
     "localAddress": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
     "credentialId": "5b8f3c1e-2a4d-4e6f-9a1b-3c5d7e9f0a2b",
-    "chainId": 46630,
     "nowSeconds": 1785999800
   },
   "valid": [
