@@ -50,6 +50,7 @@
  * Approval on the fork is the payer's own `authorizeDelegate` call, sent as the payer with
  * `anvil_impersonateAccount` (a fork-only door: no key, no relayer, nothing on a real network).
  */
+import { execSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -77,6 +78,8 @@ const CATEGORY = env.ASSAY_MCP_E2E_CATEGORY ?? "weather";
 const SERVING_HANDLE = env.ASSAY_MCP_E2E_HANDLE ?? null;
 const ANVIL_RPC = env.ASSAY_ANVIL_RPC ?? "http://127.0.0.1:8547";
 const paidEnabled = enabled && env.ASSAY_ANVIL_FORK === "1";
+/** A shell command that runs SQL from stdin on the backend's database (the Pause rows). */
+const SQL_COMMAND = env.ASSAY_MCP_E2E_SQL ?? null;
 
 const E2E = builtInDeployments().e2e;
 const MCP = E2E.mcp;
@@ -151,29 +154,51 @@ function newModeDir(mode: Mode): Pick<ModeWorld, "dir" | "keyringFile" | "browse
   return { dir, keyringFile: join(dir, "..", `${mode}-keyring.json`), browserLog };
 }
 
-/** Mode B: the proxy's own F1 sign-in; consent approved for the first active agent. */
-async function signInModeB(): Promise<ModeWorld> {
-  const paths = newModeDir("B");
-  const keychain = new Keychain(new FileKeyring(paths.keyringFile), { profile: "default", environment: deployment.environment });
-  const consent = async (authorizeUrl: string): Promise<boolean> => {
+/**
+ * The consent page's part, done with the human session: read the request, approve it for
+ * `agent` (default: the first active agent, which becomes the suite's agent), and finish
+ * `continue` with the request cookie, as the browser would.
+ */
+function consentFor(agent?: string) {
+  return async (authorizeUrl: string): Promise<boolean> => {
     const start = await reroutedFetch(authorizeUrl, { redirect: "manual" });
     const cookie = (start.headers.get("set-cookie") ?? "").split(";")[0]!;
     const rid = new URL(start.headers.get("location")!).hash.replace(/^#request=/, "");
     const read = await api("GET", `/oauth/requests/${rid}`, humanToken);
     if (read.status !== 200) throw new Error(`reading the consent request: ${read.status} ${JSON.stringify(read.body)}`);
-    const agent = dataOf<{ agents: { id: string; active: boolean }[] }>(read.body).agents.find((a) => a.active);
-    if (!agent) throw new Error("the human session has no active agent");
-    agentId = agent.id;
-    const approved = await api("POST", `/oauth/requests/${rid}/approve`, humanToken, { agentId: agent.id, name: "assay-mcp equivalence" });
+    const chosen = agent ?? dataOf<{ agents: { id: string; active: boolean }[] }>(read.body).agents.find((a) => a.active)?.id;
+    if (!chosen) throw new Error("the human session has no active agent");
+    agentId = chosen;
+    const approved = await api("POST", `/oauth/requests/${rid}/approve`, humanToken, { agentId: chosen, name: "assay-mcp equivalence" });
     if (approved.status !== 200 && approved.status !== 201) throw new Error(`approving the consent request: ${approved.status} ${JSON.stringify(approved.body)}`);
     const cont = await reroutedFetch(dataOf<{ redirectTo: string }>(approved.body).redirectTo, { redirect: "manual", headers: { cookie } });
     await realFetch(cont.headers.get("location")!); // the loopback callback (127.0.0.1)
     return true;
   };
+}
+
+const keychainOf = (world: Pick<ModeWorld, "keyringFile">) => new Keychain(new FileKeyring(world.keyringFile), { profile: "default", environment: deployment.environment });
+
+/** Mode B: the proxy's own F1 sign-in; consent approved for the first active agent. */
+async function signInModeB(): Promise<ModeWorld> {
+  const paths = newModeDir("B");
   const profile = { dir: paths.dir, name: "default" };
-  const { credentialId } = await signIn(profile, deployment, { device: "equivalence" }, { keychain, openBrowser: consent });
+  const { credentialId } = await signIn(profile, deployment, { device: "equivalence" }, { keychain: keychainOf(paths), openBrowser: consentFor() });
   if (credentialId === null) throw new Error("sign-in did not read the credential back");
   return { mode: "B", ...paths, credentialId, apiKey: null };
+}
+
+/** F5: mode B signs in again on its profile; the new grant replaces its credential (`assay_replaces`). */
+async function reSignInModeB(): Promise<string> {
+  const profile = { dir: worlds.B.dir, name: "default" };
+  const { credentialId } = await signIn(profile, deployment, { device: "equivalence", force: true }, { keychain: keychainOf(worlds.B), openBrowser: consentFor(agentId) });
+  if (credentialId === null) throw new Error("the F5 sign-in did not read the credential back");
+  return credentialId;
+}
+
+/** SQL on the backend's database, through ASSAY_MCP_E2E_SQL (an operator's act; Pause rows only). */
+function sql(statement: string): void {
+  execSync(SQL_COMMAND!, { input: statement, stdio: ["pipe", "ignore", "pipe"] });
 }
 
 /** Mode A: an API key on the same agent, through the credentials screen's API. */
@@ -190,8 +215,7 @@ async function mintModeA(): Promise<ModeWorld> {
 /** Mode B's current access token (for the API host cases). */
 async function bearerOf(world: ModeWorld): Promise<string> {
   if (world.apiKey !== null) return world.apiKey;
-  const keychain = new Keychain(new FileKeyring(world.keyringFile), { profile: "default", environment: deployment.environment });
-  const token = await currentAccess({ profile: { dir: world.dir, name: "default" }, deployment, keychain });
+  const token = await currentAccess({ profile: { dir: world.dir, name: "default" }, deployment, keychain: keychainOf(world) });
   if (token === null) throw new Error("mode B has no access token");
   return token;
 }
@@ -529,6 +553,225 @@ describe.runIf(enabled)("equivalence through the proxy: OAuth (B) = API key (A) 
       seen[m] = normalise(res.body, m);
     }
     expect(seen.B).toEqual(seen.A);
+  });
+
+  // ---- §12.1 rows beyond URL kinds and methods (fix round 1, I1) ---------------------------
+
+  /** One step through both proxies on `path`, compared; returns mode A's normalised view. */
+  const onePath = (path: string, name: string, step: (p: Proxy) => Promise<unknown>, view?: (seen: Json) => Json) =>
+    onBoth(path, (p) => equal(name, (m) => observe(() => step(p[m])), view));
+
+  /** A, until a refusal with `code` (at most `max` calls); then B once; both compared. */
+  async function untilRefused(name: string, path: string, code: string, max: number, step: (p: Proxy) => Promise<unknown>): Promise<Json> {
+    return onBoth(path, async (p) => {
+      let last: Json = {};
+      for (let i = 0; i < max; i += 1) {
+        last = await observe(() => step(p.A));
+        if (outcomeCode(last) === code || JSON.stringify(last).includes(code)) break;
+      }
+      expect(JSON.stringify(last), `${name}: mode A reached ${code}`).toContain(code);
+      const b = await observe(() => step(p.B));
+      const na = normalise(last, "A") as Json;
+      expect(normalise(b, "B"), `${name}: mode B differs from mode A`).toEqual(na);
+      outcomes.push(`${name}: ${summary(na)}`);
+      return na;
+    });
+  }
+
+  it("last_used_at: stamped for both credentials", async () => {
+    const res = await api("GET", `/agents/${agentId}/credentials?limit=100`, humanToken);
+    expect(res.status).toBe(200);
+    const data = dataOf<Json>(res.body);
+    const items = (Array.isArray(data) ? data : ((data.items ?? data.data ?? []) as Json[])) as { id: string; lastUsedAt: string | null }[];
+    for (const m of MODES) {
+      const row = items.find((c) => c.id === worlds[m].credentialId);
+      expect(row, `mode ${m}'s credential is listed`).toBeDefined();
+      expect(row!.lastUsedAt, `mode ${m}'s last_used_at`).not.toBeNull();
+    }
+  });
+
+  describe("Narrowing: PATCH /agent-credentials/:id/access has the same effect through both proxies", () => {
+    const narrow = (credentialId: string, body: Json) => api("PATCH", `/agent-credentials/${credentialId}/access`, humanToken, body);
+    const refusedTool = () => toolOf("PAID") ?? toolOf("FREE")!;
+
+    it("the same answer, the same read-back, lists and refusals; it survives an F5 replacement of the grant", async () => {
+      // Nothing allowed: every catalogue tool is refused for both keys.
+      const body = { accessMode: "RESTRICTED", allowedToolIds: [] };
+      const answers: Record<Mode, unknown> = { A: null, B: null };
+      const readBack: Record<Mode, unknown> = { A: null, B: null };
+      for (const m of MODES) {
+        const res = await narrow(worlds[m].credentialId, body);
+        expect(res.status, JSON.stringify(res.body)).toBe(200);
+        answers[m] = normalise(res.body, m);
+        readBack[m] = normalise((await api("GET", `/agent-credentials/${worlds[m].credentialId}/access`, humanToken)).body, m);
+      }
+      expect(answers.B).toEqual(answers.A);
+      expect(readBack.B).toEqual(readBack.A);
+
+      const tool = refusedTool();
+      const steps = async (label: string) => {
+        for (const path of ["/", "/?discovery=full"]) await onePath(path, `${label} tools/list ${path}`, (p) => p.client.listTools());
+        await onePath("/", `${label} tools/call ${tool.name}`, (p) => p.client.callTool({ name: tool.name, arguments: argsFor(tool) }));
+        await onePath("/", `${label} call_tool ${tool.name}`, (p) => p.client.callTool({ name: "call_tool", arguments: { name: tool.name, arguments: argsFor(tool) } }));
+        await onePath("/", `${label} get_tool ${tool.name}`, (p) => p.client.callTool({ name: "get_tool", arguments: { name: tool.name } }));
+      };
+      await steps("narrowed");
+      // Not vacuous: the narrowed call is refused as not allowed.
+      expect(outcomes.filter((o) => o.startsWith("narrowed tools/call")).join("\n")).toContain("TOOL_NOT_ALLOWED");
+
+      // F5: mode B signs in again; its new grant replaces the old credential and keeps the narrowing.
+      const old = worlds.B.credentialId;
+      const replacement = await reSignInModeB();
+      expect(replacement).not.toBe(old);
+      worlds.B = { ...worlds.B, credentialId: replacement };
+      ownValues.B.unshift([replacement, "<credential>"]);
+      const inherited = normalise((await api("GET", `/agent-credentials/${replacement}/access`, humanToken)).body, "B");
+      expect(inherited).toEqual(readBack.A);
+      await steps("after F5");
+
+      // Back to the agent's access for the rows that follow.
+      for (const m of MODES) expect((await narrow(worlds[m].credentialId, { accessMode: null })).status).toBe(200);
+    }, 300_000);
+  });
+
+  describe.runIf(SQL_COMMAND !== null)("Pause: the same refusal through both proxies and on the API host", () => {
+    const agentSql = () => `'${agentId.replace(/'/g, "")}'`;
+    const orgSql = () => `(SELECT organization_id FROM agents WHERE id = ${agentSql()})`;
+    const OPERATOR = "assay-mcp-equivalence-operator";
+    const blockSql = (kind: "ORGANIZATION" | "WALLET") => {
+      const subject =
+        kind === "ORGANIZATION"
+          ? `(SELECT lower(organization_id::text) FROM agents WHERE id = ${agentSql()})`
+          : `(SELECT CASE WHEN primary_account_id LIKE 'eip155:%' THEN lower(primary_account_id) ELSE primary_account_id END FROM agents WHERE id = ${agentSql()})`;
+      const key = kind === "ORGANIZATION" ? subject : `(SELECT split_part(s, ':', 1) || ':' || split_part(s, ':', 3) FROM (SELECT ${subject} AS s) x)`;
+      return `INSERT INTO operators (subject, display_name, email) VALUES ('${OPERATOR}', 'Equivalence operator', 'operator@example.test') ON CONFLICT DO NOTHING;
+        INSERT INTO account_blocks (subject_kind, subject, subject_key, reason_code, note, blocked_by)
+        VALUES ('${kind}', ${subject}, ${key}, 'EQUIVALENCE', 'Blocked by the assay-mcp equivalence suite.', (SELECT id FROM operators WHERE subject = '${OPERATOR}'));`;
+    };
+    const unblockSql = `DELETE FROM account_blocks WHERE reason_code = 'EQUIVALENCE'; DELETE FROM operators WHERE subject = '${OPERATOR}';`;
+
+    const states: [string, string, () => string, () => string][] = [
+      ["agent suspended", "AUTH_AGENT_SUSPENDED", () => `UPDATE agents SET status = 'SUSPENDED' WHERE id = ${agentSql()};`, () => `UPDATE agents SET status = 'ACTIVE' WHERE id = ${agentSql()};`],
+      ["organization suspended", "AUTH_ORGANIZATION_SUSPENDED", () => `UPDATE organizations SET status = 'SUSPENDED' WHERE id = ${orgSql()};`, () => `UPDATE organizations SET status = 'ACTIVE' WHERE id = ${orgSql()};`],
+      [
+        "wallet not linked",
+        "AUTH_WALLET_NOT_LINKED",
+        () => `DROP TABLE IF EXISTS eq_saved_wallet; CREATE TABLE eq_saved_wallet AS SELECT id, primary_account_id, chain_id FROM agents WHERE id = ${agentSql()};
+               UPDATE agents SET primary_account_id = NULL, chain_id = NULL WHERE id = ${agentSql()};`,
+        () => `UPDATE agents a SET primary_account_id = s.primary_account_id, chain_id = s.chain_id FROM eq_saved_wallet s WHERE a.id = s.id; DROP TABLE eq_saved_wallet;`,
+      ],
+      ["organization blocked", "AUTH_ORGANIZATION_SUSPENDED", () => blockSql("ORGANIZATION"), () => unblockSql],
+      ["wallet blocked", "ACCOUNT_BLOCKED", () => blockSql("WALLET"), () => unblockSql],
+    ];
+
+    /** What a paused agent's caller sees: the list, a free call and the API host, per mode. */
+    async function pausedOutcome(p: Record<Mode, Proxy>, code: string): Promise<void> {
+      const free = toolOf("FREE")!;
+      const view = async (m: Mode) => {
+        const host = await api("GET", "/agents/me/delegate", await bearerOf(worlds[m]));
+        return {
+          list: await observe(() => p[m].client.listTools()),
+          call: await observe(() => p[m].client.callTool({ name: free.name, arguments: argsFor(free) })),
+          apiHost: { status: host.status, code: ((host.body.error as Json | undefined)?.code ?? null) as unknown },
+        };
+      };
+      // The change reaches each session cache and the blocklist poll (5 s) in its own time.
+      let a: Json = {};
+      for (const deadline = Date.now() + 30_000; Date.now() < deadline; ) {
+        a = (await view("A")) as unknown as Json;
+        // The proxy answers a refused MCP request as a JSON-RPC error naming only the HTTP status
+        // (the AUTH_* code shows on the API host), the same for both modes.
+        if ((a.list as Json).error !== undefined && JSON.stringify(a.apiHost).includes(code)) break;
+        await new Promise((r) => setTimeout(r, 1_000));
+      }
+      expect(JSON.stringify(a.apiHost), `mode A refused with ${code}`).toContain(code);
+      expect((a.list as Json).error, "the list is refused").toBeDefined();
+      const b = (await view("B")) as unknown as Json;
+      const na = normalise(a, "A");
+      expect(normalise(b, "B"), "mode B differs from mode A").toEqual(na);
+      outcomes.push(`paused (${code}): ${JSON.stringify(na).slice(0, 200)}`);
+    }
+
+    it.each(states)("%s", async (_name, code, pause, resume) => {
+      await onBoth("/", async (p) => {
+        // Both proxies are connected (handshake done) before the pause.
+        for (const m of MODES) await p[m].client.listTools();
+        sql(pause());
+        try {
+          await pausedOutcome(p, code);
+        } finally {
+          sql(resume());
+        }
+      });
+      // Resumed: served again for both (after the caches and the blocklist poll catch up).
+      await onBoth("/", async (p) => {
+        for (const m of MODES) {
+          let ok = false;
+          for (const deadline = Date.now() + 30_000; !ok && Date.now() < deadline; ) {
+            ok = (await observe(() => p[m].client.listTools())).result !== undefined;
+            if (!ok) await new Promise((r) => setTimeout(r, 1_000));
+          }
+          expect(ok, `mode ${m} served again`).toBe(true);
+        }
+      });
+    }, 120_000);
+
+    it("suspended during a refresh: mode B's rotation succeeds, and its next call gets the same AUTH_* code as the key", async () => {
+      await onBoth("/", async (p) => {
+        for (const m of MODES) await p[m].client.listTools();
+        sql(`UPDATE agents SET status = 'SUSPENDED' WHERE id = ${agentSql()};`);
+        try {
+          // Mode B's stored access token now looks expired, so its next request refreshes first.
+          const keychain = keychainOf(worlds.B);
+          const before = (await keychain.get("refresh_token"))!;
+          const access = (await keychain.getAccessToken())!;
+          await withLock({ dir: worlds.B.dir, name: "default" }, (lock) =>
+            keychain.storeTokens(lock, { refreshToken: before, accessToken: { token: access.token, expiresAt: Math.floor(Date.now() / 1000) - 10 } }),
+          );
+          await pausedOutcome(p, "AUTH_AGENT_SUSPENDED");
+          // The rotation happened while suspended, and the grant is still held (not signed out).
+          const after = await keychain.get("refresh_token");
+          expect(after).not.toBeNull();
+          expect(after).not.toBe(before);
+        } finally {
+          sql(`UPDATE agents SET status = 'ACTIVE' WHERE id = ${agentSql()};`);
+        }
+      });
+    }, 120_000);
+  });
+
+  describe("Limits: the rows that are refusals only", () => {
+    it("meta-tool rate limits: search_tools, then get_tool, refused alike once the agent's limit is spent", async () => {
+      await untilRefused("search_tools rate limit", "/", "RATE_LIMITED", 40, (p) => p.client.callTool({ name: "search_tools", arguments: { query: CATEGORY } }));
+      await untilRefused("get_tool rate limit", "/", "RATE_LIMITED", 130, (p) => p.client.callTool({ name: "get_tool", arguments: { name: toolOf("FREE")!.name } }));
+    }, 300_000);
+
+    it("the refusal rate limit: narrowed calls are refused as not allowed, then every call RATE_LIMITED, alike", async () => {
+      const tool = toolOf("PAID") ?? toolOf("FREE")!;
+      for (const m of MODES) {
+        expect((await api("PATCH", `/agent-credentials/${worlds[m].credentialId}/access`, humanToken, { accessMode: "RESTRICTED", allowedToolIds: [] })).status).toBe(200);
+      }
+      try {
+        await untilRefused("refusal rate limit", "/", "RATE_LIMITED", 80, (p) => p.client.callTool({ name: tool.name, arguments: argsFor(tool) }));
+      } finally {
+        for (const m of MODES) await api("PATCH", `/agent-credentials/${worlds[m].credentialId}/access`, humanToken, { accessMode: null });
+      }
+    }, 300_000);
+
+    // Covered by the backend's equivalence suite (Task 1.17) until a staked provider and an
+    // anvil fork exist here (coordinator ruling, fix round 1): they need a served or paid call.
+    it.skip("spend-policy refusals (perCallMax, paused): need a paid call (backend 1.17 covers them)", () => {});
+    it.skip("the platform free budget: needs served free calls (backend 1.17 covers it)", () => {});
+  });
+
+  // Delegate and Intents rows need a settled payment: covered by the backend's equivalence suite
+  // (Task 1.17) until a staked provider and an anvil fork exist (coordinator ruling, fix round 1).
+  describe("Delegate and Intents (covered by the backend 1.17 suite)", () => {
+    it.skip("delegate: bind for both, read back on the API host (needs a PAYMENT_REQUIRED to bind from)", () => {});
+    it.skip("delegate: one live credential per key", () => {});
+    it.skip("delegate: a voucher signed by another credential's key is refused", () => {});
+    it.skip("delegate: after a 30-day idle expiry, re-login binds the existing key with 0 signatures", () => {});
+    it.skip("intents: credential_id and attribution identical (needs a paid call)", () => {});
   });
 
   describe.runIf(paidEnabled)("the paid path on an anvil fork: bind, approve, sign, receipt (R-MCP-5)", () => {

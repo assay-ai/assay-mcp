@@ -1,6 +1,6 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
@@ -52,7 +52,7 @@ afterAll(() => {
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "assay-mcp-concurrency-"));
-  keyringFile = join(dir, "..", `${dir.split("/").pop()}-keyring.json`);
+  keyringFile = join(dir, "..", `${basename(dir)}-keyring.json`);
   addDevOrigin(dir, E2E_MCP);
 });
 

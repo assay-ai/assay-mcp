@@ -1,6 +1,6 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -59,7 +59,7 @@ async function world(mode: Mode) {
   const fake = new FakeAssay(NETWORK);
   await fake.start();
   const dir = mkdtempSync(join(tmpdir(), `assay-mcp-modes-${mode}-`));
-  const keyringFile = join(dir, "..", `${dir.split("/").pop()}-keyring.json`);
+  const keyringFile = join(dir, "..", `${basename(dir)}-keyring.json`);
   addDevOrigin(dir, E2E_MCP);
   const profile = { dir, name: "default" };
   if (mode === "A") {

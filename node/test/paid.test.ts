@@ -1,7 +1,7 @@
 import { fork } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { ElicitRequestSchema } from "@modelcontextprotocol/sdk/types.js";
@@ -78,7 +78,7 @@ beforeEach(async () => {
   fake = new FakeAssay(NETWORK);
   await fake.start();
   dir = mkdtempSync(join(tmpdir(), "assay-mcp-paid-"));
-  keyringFile = join(dir, "..", `${dir.split("/").pop()}-keyring.json`);
+  keyringFile = join(dir, "..", `${basename(dir)}-keyring.json`);
   addDevOrigin(dir, E2E_MCP);
 });
 
