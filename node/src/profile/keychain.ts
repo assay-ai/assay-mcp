@@ -39,9 +39,10 @@ export const ENTRY_OPTIONS = Object.freeze({ linux: Object.freeze({ store: "secr
  */
 export interface KeyringBackend {
   get(service: string, account: string): Promise<string | null>;
-  set(service: string, account: string, value: string): Promise<void>;
+  /** `signal`: the lock's signal; an aborted write is dropped by the store (`@napi-rs/keyring`). */
+  set(service: string, account: string, value: string, signal?: AbortSignal): Promise<void>;
   /** True if an entry was deleted, false if there was none. */
-  delete(service: string, account: string): Promise<boolean>;
+  delete(service: string, account: string, signal?: AbortSignal): Promise<boolean>;
 }
 
 export type KeychainFailure = "unavailable" | "locked";
@@ -89,6 +90,22 @@ async function guarded<T>(op: () => Promise<T>): Promise<T> {
 }
 
 /**
+ * A keychain write under the lock: an abort (the lock was lost while it was pending) and a
+ * completion after the loss both surface as `LOCK_LOST`, never as a keychain failure.
+ */
+async function guardedUnderLock<T>(lock: LockHandle, op: () => Promise<T>): Promise<T> {
+  let result: T;
+  try {
+    result = await guarded(op);
+  } catch (err) {
+    if (lock.signal.aborted) lock.assertHeld();
+    throw err;
+  }
+  lock.assertHeld();
+  return result;
+}
+
+/**
  * Checks at startup that the keychain can be read. Throws `KeychainError` (exit code 1)
  * with the exact §7.9 text, or the "unlock" text for a locked store.
  */
@@ -128,18 +145,22 @@ export class Keychain {
     return value === null || value === undefined || value === "" ? null : value;
   }
 
-  /** Writes one secret. Refused with `LOCK_LOST` unless `lock` is held and fresh right now. */
+  /**
+   * Writes one secret. Refused with `LOCK_LOST` unless `lock` is held and fresh right now.
+   * `lock.signal` goes to the store, so a write still pending when the lock is lost is
+   * aborted; a write that completes after the loss throws `LOCK_LOST` to the caller.
+   */
   async set(lock: LockHandle, kind: SecretKind, value: string): Promise<void> {
     const account = accountFor(this.scope, kind);
     if (typeof value !== "string" || value === "") throw new TypeError("refusing to store an empty secret");
     this.checkLock(lock);
-    await guarded(() => this.backend.set(KEYCHAIN_SERVICE, account, value));
+    await guardedUnderLock(lock, () => this.backend.set(KEYCHAIN_SERVICE, account, value, lock.signal));
   }
 
   async delete(lock: LockHandle, kind: SecretKind): Promise<boolean> {
     const account = accountFor(this.scope, kind);
     this.checkLock(lock);
-    return guarded(() => this.backend.delete(KEYCHAIN_SERVICE, account));
+    return guardedUnderLock(lock, () => this.backend.delete(KEYCHAIN_SERVICE, account, lock.signal));
   }
 
   /** Removes every secret of the profile (logout). */
@@ -188,8 +209,8 @@ export class Keychain {
 
 interface NapiAsyncEntry {
   getPassword(): Promise<string | undefined | null>;
-  setPassword(password: string): Promise<void>;
-  deletePassword(): Promise<boolean>;
+  setPassword(password: string, signal?: AbortSignal): Promise<void>;
+  deletePassword(signal?: AbortSignal): Promise<boolean>;
 }
 export type NapiAsyncEntryCtor = new (service: string, account: string, options?: typeof ENTRY_OPTIONS) => NapiAsyncEntry;
 
@@ -198,13 +219,17 @@ export function keyringBackendFrom(AsyncEntry: NapiAsyncEntryCtor): KeyringBacke
   const entry = (service: string, account: string) => new AsyncEntry(service, account, ENTRY_OPTIONS);
   return {
     get: async (service, account) => (await entry(service, account).getPassword()) ?? null,
-    set: (service, account, value) => entry(service, account).setPassword(value),
-    delete: (service, account) => entry(service, account).deletePassword(),
+    set: (service, account, value, signal) => entry(service, account).setPassword(value, signal),
+    delete: (service, account, signal) => entry(service, account).deletePassword(signal),
   };
 }
 
-/** The OS keychain through `@napi-rs/keyring`, loaded on first use (so `--version` never loads it). */
-export async function loadOsKeyring(): Promise<KeyringBackend> {
+/**
+ * The OS keychain through `@napi-rs/keyring`, loaded on first use (so `--version` never loads
+ * it). Not exported: callers get the probe and lock-aware `Keychain`s from `openOsKeychain`,
+ * never the raw store.
+ */
+async function loadOsKeyring(): Promise<KeyringBackend> {
   let AsyncEntry: NapiAsyncEntryCtor;
   try {
     ({ AsyncEntry } = (await import("@napi-rs/keyring")) as unknown as { AsyncEntry: NapiAsyncEntryCtor });
@@ -212,4 +237,37 @@ export async function loadOsKeyring(): Promise<KeyringBackend> {
     throw new KeychainError("unavailable");
   }
   return keyringBackendFrom(AsyncEntry);
+}
+
+/** The OS keychain, reachable only through the probe and the lock-aware {@link Keychain}. */
+export interface OsKeychain {
+  /** The startup probe (see {@link probeKeychain}). */
+  probe(): Promise<void>;
+  /** The secrets of one profile and environment. */
+  forScope(scope: KeychainScope): Keychain;
+}
+
+export async function openOsKeychain(): Promise<OsKeychain> {
+  const backend = await loadOsKeyring();
+  return { probe: () => probeKeychain(backend), forScope: (scope) => new Keychain(backend, scope) };
+}
+
+/** The service of the gated real-keychain smoke test; never the product service. */
+export const SMOKE_TEST_SERVICE = `${KEYCHAIN_SERVICE}.smoke-test`;
+
+/**
+ * For the gated CI smoke test only: writes, reads back and deletes one random value under
+ * {@link SMOKE_TEST_SERVICE}. Returns true when every step behaved.
+ */
+export async function realKeychainSmokeTest(account: string, value: string): Promise<boolean> {
+  const backend = await loadOsKeyring();
+  await probeKeychain(backend);
+  let ok = false;
+  try {
+    await guarded(() => backend.set(SMOKE_TEST_SERVICE, account, value));
+    ok = (await guarded(() => backend.get(SMOKE_TEST_SERVICE, account))) === value;
+  } finally {
+    ok = (await guarded(() => backend.delete(SMOKE_TEST_SERVICE, account))) && ok;
+  }
+  return ok && (await guarded(() => backend.get(SMOKE_TEST_SERVICE, account))) === null;
 }
