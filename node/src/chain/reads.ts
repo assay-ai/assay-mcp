@@ -2,13 +2,15 @@
  * The proxy's read-only view of the escrow: the delegate grant and its caps (G4, G6; spec §7.8,
  * §7.15, M6).
  *
- * - Two views only, with the backend's ABI: `delegationOf(payer, delegate)` and
- *   `effectiveCapsOf(payer, delegate)` (`assay-evm/src/X402Escrow.sol`).
+ * - Three views only, with the backend's ABI: `delegationOf(payer, delegate)`,
+ *   `effectiveCapsOf(payer, delegate)` and `escrowOf(payer)` (`assay-evm/src/X402Escrow.sol`).
+ *   Each cap is the lower of the effective envelope and the current value: strictest wins.
  * - The escrow and the RPCs come from the selected entry of `deployments.json`, never from the
  *   server or from code.
- * - Every listed RPC is read, and each must answer the same chain id and the same bytes. A
- *   failure, a timeout or any disagreement gives `CHAIN_UNCONFIRMED`, which guards treat as "no
- *   read" (fail closed).
+ * - Every listed RPC is read, and each must answer the same chain id and the same bytes. All
+ *   reads run at one pinned block `B = min(heights) - 1`, so RPCs a block apart still agree; heights
+ *   more than `MAX_BLOCK_SPREAD` apart refuse. A failure, a timeout or any disagreement gives
+ *   `CHAIN_UNCONFIRMED`, which guards treat as "no read" (fail closed).
  * - An agreed result is cached for 10 minutes per profile, payer and delegate. Failures are not
  *   cached.
  */
@@ -22,22 +24,27 @@ import {
   type Environment,
 } from "../deployments.js";
 import { isAllowedRpcUrl } from "./pinned-fetch.js";
-import { DEFAULT_TIMEOUT_MS, ethCall, ethChainId } from "./rpc.js";
+import { DEFAULT_TIMEOUT_MS, ethBlockNumber, ethCall, ethChainId } from "./rpc.js";
 
 /** How long an agreed read stands (G4: "at most every 10 minutes"). */
 export const CACHE_TTL_MS = 10 * 60 * 1000;
+/** The most two RPCs' latest block heights may differ before the read refuses. */
+export const MAX_BLOCK_SPREAD = 5n;
 /** Cached entries per reader; the oldest is dropped beyond this. */
 const MAX_CACHE_ENTRIES = 64;
 
 /** The two escrow views, verbatim from the backend's `X402_ESCROW_ABI`. */
 export const ESCROW_READ_ABI = parseAbi([
   "struct Delegation { uint64 maxVoucherAmount; uint64 maxPerWindow; uint64 spentInWindow; uint64 windowStartedAt; uint64 validUntil; uint32 listPosition; bool revoked; }",
+  "struct Escrow { uint128 balance; uint64 seqHigh; uint64 authNonce; uint64 maxVoucherAmount; uint64 maxPerWindow; uint64 spentInWindow; uint64 windowStartedAt; uint64 withdrawRequested; uint64 withdrawAvailableAt; uint128 totalRedeemed; uint128 totalWithdrawn; uint128 totalFunded; }",
+  "function escrowOf(address buyer) view returns (Escrow)",
   "function delegationOf(address payer, address delegate) view returns (Delegation)",
   "function effectiveCapsOf(address payer, address delegate) view returns (uint64 maxVoucherAmount, uint64 maxPerWindow, uint64 delegateMaxVoucherAmount, uint64 delegateMaxPerWindow)",
 ]);
 
-/** ABI-encoded return sizes: a static 7-word tuple and 4 words. */
+/** ABI-encoded return sizes: static tuples of 7 and 12 words, and 4 words. */
 const DELEGATION_BYTES = 7 * 32;
+const ESCROW_BYTES = 12 * 32;
 const CAPS_BYTES = 4 * 32;
 
 /** The agreed chain state. Integers are decimal strings (uint64 can exceed 2^53). */
@@ -50,9 +57,12 @@ export interface DelegationState {
   active: boolean;
   /** `delegationOf(...).validUntil`, Unix seconds; the guard compares it with the clock. */
   validUntil: string;
-  /** The escrow's cap per voucher, `effectiveCapsOf(...).maxVoucherAmount`. */
+  /**
+   * The escrow's cap per voucher: the lower of `effectiveCapsOf(...).maxVoucherAmount` and the
+   * current `escrowOf(payer).maxVoucherAmount`.
+   */
   maxVoucherAmount: string;
-  /** The escrow's cap per window, `effectiveCapsOf(...).maxPerWindow`. */
+  /** Same rule for the escrow's window cap. */
   maxPerWindow: string;
   /**
    * The delegate's cap per voucher: the lower of `effectiveCapsOf(...).delegateMaxVoucherAmount`
@@ -125,12 +135,14 @@ function account(value: unknown, chainId: number): `0x${string}` | null {
   return /^0x[0-9a-fA-F]{40}$/.test(value) && isAddress(value, { strict: false }) ? getAddress(value) : null;
 }
 
+const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : "failed");
+
 const min = (a: bigint, b: bigint): bigint => (a < b ? a : b);
 
 interface RawRead {
-  chainId: number;
   delegation: `0x${string}`;
   caps: `0x${string}`;
+  escrow: `0x${string}`;
 }
 
 export function createChainReader(options: ChainReaderOptions): ChainReader {
@@ -163,33 +175,55 @@ export function createChainReader(options: ChainReaderOptions): ChainReader {
     const capsData = encodeFunctionData({ abi: ESCROW_READ_ABI, functionName: "effectiveCapsOf", args: [payer, delegate] });
     const rpcOpts = { allowed: rpcs, timeoutMs };
 
+    const escrowData = encodeFunctionData({ abi: ESCROW_READ_ABI, functionName: "escrowOf", args: [payer] });
+
+    // Round 1: chain id and latest height from every RPC.
+    const heads = await Promise.allSettled(
+      rpcs.map(async (url) => {
+        const [id, height] = await Promise.all([ethChainId(url, rpcOpts), ethBlockNumber(url, rpcOpts)]);
+        return { id, height };
+      }),
+    );
+    const heights: bigint[] = [];
+    for (const [i, h] of heads.entries()) {
+      if (h.status === "rejected") return unconfirmed(`rpc[${i}] ${errorMessage(h.reason)}`);
+      if (h.value.id !== chainId) return unconfirmed("an RPC is on another chain");
+      heights.push(h.value.height);
+    }
+    const low = heights.reduce((x, y) => (y < x ? y : x));
+    const high = heights.reduce((x, y) => (y > x ? y : x));
+    if (high - low > MAX_BLOCK_SPREAD) return unconfirmed("RPCs are too far apart");
+    if (low < 1n) return unconfirmed("no block to pin");
+    // One block behind the lowest head, so every RPC has it.
+    const block = low - 1n;
+
+    // Round 2: every read at the pinned block on every RPC.
     const settled = await Promise.allSettled(
       rpcs.map(async (url): Promise<RawRead> => {
-        const [id, delegation, caps] = await Promise.all([
-          ethChainId(url, rpcOpts),
-          ethCall(url, { to, data: delegationData }, rpcOpts),
-          ethCall(url, { to, data: capsData }, rpcOpts),
+        const [delegation, caps, escrowRaw] = await Promise.all([
+          ethCall(url, { to, data: delegationData }, block, rpcOpts),
+          ethCall(url, { to, data: capsData }, block, rpcOpts),
+          ethCall(url, { to, data: escrowData }, block, rpcOpts),
         ]);
-        return { chainId: id, delegation, caps };
+        return { delegation, caps, escrow: escrowRaw };
       }),
     );
 
     const reads: RawRead[] = [];
     for (const [i, s] of settled.entries()) {
-      if (s.status === "rejected") {
-        return unconfirmed(`rpc[${i}] ${s.reason instanceof Error ? s.reason.message : "failed"}`);
-      }
+      if (s.status === "rejected") return unconfirmed(`rpc[${i}] ${errorMessage(s.reason)}`);
       reads.push(s.value);
     }
     const first = reads[0]!;
     for (const r of reads) {
-      if (r.chainId !== chainId) return unconfirmed("an RPC is on another chain");
-      if (r.delegation !== first.delegation || r.caps !== first.caps) return unconfirmed("RPCs disagree");
+      if (r.delegation !== first.delegation || r.caps !== first.caps || r.escrow !== first.escrow) {
+        return unconfirmed("RPCs disagree");
+      }
     }
 
     const decoded = decode(first);
     if (!decoded) return unconfirmed("malformed escrow answer");
-    const { d, caps } = decoded;
+    const { d, caps, e } = decoded;
     return {
       ok: true,
       value: {
@@ -197,8 +231,8 @@ export function createChainReader(options: ChainReaderOptions): ChainReader {
         delegate,
         active: d.validUntil !== 0n && !d.revoked,
         validUntil: d.validUntil.toString(),
-        maxVoucherAmount: caps[0].toString(),
-        maxPerWindow: caps[1].toString(),
+        maxVoucherAmount: min(caps[0], e.maxVoucherAmount).toString(),
+        maxPerWindow: min(caps[1], e.maxPerWindow).toString(),
         delegateMaxVoucherAmount: min(caps[2], d.maxVoucherAmount).toString(),
         delegateMaxPerWindow: min(caps[3], d.maxPerWindow).toString(),
       },
@@ -246,15 +280,30 @@ export function createChainReader(options: ChainReaderOptions): ChainReader {
 function decode(raw: RawRead): {
   d: { maxVoucherAmount: bigint; maxPerWindow: bigint; validUntil: bigint; revoked: boolean };
   caps: readonly [bigint, bigint, bigint, bigint];
+  e: { maxVoucherAmount: bigint; maxPerWindow: bigint };
 } | null {
-  if (raw.delegation.length !== 2 + DELEGATION_BYTES * 2 || raw.caps.length !== 2 + CAPS_BYTES * 2) return null;
+  if (
+    raw.delegation.length !== 2 + DELEGATION_BYTES * 2 ||
+    raw.caps.length !== 2 + CAPS_BYTES * 2 ||
+    raw.escrow.length !== 2 + ESCROW_BYTES * 2
+  ) {
+    return null;
+  }
   try {
     const d = decodeFunctionResult({ abi: ESCROW_READ_ABI, functionName: "delegationOf", data: raw.delegation });
     const caps = decodeFunctionResult({ abi: ESCROW_READ_ABI, functionName: "effectiveCapsOf", data: raw.caps });
     const dAgain = encodeFunctionResult({ abi: ESCROW_READ_ABI, functionName: "delegationOf", result: d });
     const capsAgain = encodeFunctionResult({ abi: ESCROW_READ_ABI, functionName: "effectiveCapsOf", result: caps });
-    if (dAgain.toLowerCase() !== raw.delegation || capsAgain.toLowerCase() !== raw.caps) return null;
-    return { d, caps };
+    const e = decodeFunctionResult({ abi: ESCROW_READ_ABI, functionName: "escrowOf", data: raw.escrow });
+    const eAgain = encodeFunctionResult({ abi: ESCROW_READ_ABI, functionName: "escrowOf", result: e });
+    if (
+      dAgain.toLowerCase() !== raw.delegation ||
+      capsAgain.toLowerCase() !== raw.caps ||
+      eAgain.toLowerCase() !== raw.escrow
+    ) {
+      return null;
+    }
+    return { d, caps, e };
   } catch {
     return null;
   }

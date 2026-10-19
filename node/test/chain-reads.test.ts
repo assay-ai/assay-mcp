@@ -6,6 +6,7 @@ import { builtInDeployments, type Deployments } from "../src/deployments.js";
 import {
   CACHE_TTL_MS,
   ESCROW_READ_ABI,
+  MAX_BLOCK_SPREAD,
   createChainReader,
   toGuardChain,
   type ChainReaderOptions,
@@ -22,12 +23,34 @@ const ESCROW = "0x1D2625efD87c2fc10b8563f3F0890072845Fcf41";
 
 const ABI = parseAbi([
   "struct Delegation { uint64 maxVoucherAmount; uint64 maxPerWindow; uint64 spentInWindow; uint64 windowStartedAt; uint64 validUntil; uint32 listPosition; bool revoked; }",
+  "struct Escrow { uint128 balance; uint64 seqHigh; uint64 authNonce; uint64 maxVoucherAmount; uint64 maxPerWindow; uint64 spentInWindow; uint64 windowStartedAt; uint64 withdrawRequested; uint64 withdrawAvailableAt; uint128 totalRedeemed; uint128 totalWithdrawn; uint128 totalFunded; }",
+  "function escrowOf(address buyer) view returns (Escrow)",
   "function delegationOf(address payer, address delegate) view returns (Delegation)",
   "function effectiveCapsOf(address payer, address delegate) view returns (uint64 maxVoucherAmount, uint64 maxPerWindow, uint64 delegateMaxVoucherAmount, uint64 delegateMaxPerWindow)",
 ]);
 
+interface EscrowView {
+  balance: bigint;
+  seqHigh: bigint;
+  authNonce: bigint;
+  maxVoucherAmount: bigint;
+  maxPerWindow: bigint;
+  spentInWindow: bigint;
+  windowStartedAt: bigint;
+  withdrawRequested: bigint;
+  withdrawAvailableAt: bigint;
+  totalRedeemed: bigint;
+  totalWithdrawn: bigint;
+  totalFunded: bigint;
+}
+
 interface ChainView {
   chainId: string;
+  /** Latest block height this RPC reports. */
+  height: bigint;
+  escrow: EscrowView;
+  /** Per-block overrides of the caps, to model state that changed at a block. */
+  capsAt?: Map<bigint, [bigint, bigint, bigint, bigint]>;
   delegation: {
     maxVoucherAmount: bigint;
     maxPerWindow: bigint;
@@ -43,6 +66,21 @@ interface ChainView {
 function baseView(): ChainView {
   return {
     chainId: CHAIN_ID_HEX,
+    height: 1000n,
+    escrow: {
+      balance: 50000000n,
+      seqHigh: 3n,
+      authNonce: 1n,
+      maxVoucherAmount: 1000000n,
+      maxPerWindow: 10000000n,
+      spentInWindow: 0n,
+      windowStartedAt: 0n,
+      withdrawRequested: 0n,
+      withdrawAvailableAt: 0n,
+      totalRedeemed: 0n,
+      totalWithdrawn: 0n,
+      totalFunded: 50000000n,
+    },
     delegation: {
       maxVoucherAmount: 500000n,
       maxPerWindow: 5000000n,
@@ -109,6 +147,9 @@ async function fakeRpc(): Promise<FakeRpc> {
       if (msg.method === "eth_chainId") {
         fake.calls.push({ method: msg.method });
         result = fake.view.chainId;
+      } else if (msg.method === "eth_blockNumber") {
+        fake.calls.push({ method: msg.method });
+        result = `0x${fake.view.height.toString(16)}`;
       } else if (msg.method === "eth_call") {
         const [tx, block] = msg.params as [{ to: string; data: Hex }, unknown];
         const decoded = decodeFunctionData({ abi: ABI, data: tx.data });
@@ -116,8 +157,11 @@ async function fakeRpc(): Promise<FakeRpc> {
         if (b.kind === "result") result = b.result;
         else if (decoded.functionName === "delegationOf") {
           result = encodeFunctionResult({ abi: ABI, functionName: "delegationOf", result: fake.view.delegation });
+        } else if (decoded.functionName === "escrowOf") {
+          result = encodeFunctionResult({ abi: ABI, functionName: "escrowOf", result: fake.view.escrow });
         } else {
-          result = encodeFunctionResult({ abi: ABI, functionName: "effectiveCapsOf", result: fake.view.caps });
+          const at = typeof block === "string" ? fake.view.capsAt?.get(BigInt(block)) : undefined;
+          result = encodeFunctionResult({ abi: ABI, functionName: "effectiveCapsOf", result: at ?? fake.view.caps });
         }
       } else {
         res.writeHead(200, { "content-type": "application/json" });
@@ -201,11 +245,12 @@ describe("readDelegation", () => {
     expect(res).toEqual({ ok: true, value: AGREED });
     for (const f of [a, b]) {
       const calls = f.calls.filter((c) => c.method === "eth_call");
-      expect(calls.map((c) => c.fn).sort()).toEqual(["delegationOf", "effectiveCapsOf"]);
+      expect(calls.map((c) => c.fn).sort()).toEqual(["delegationOf", "effectiveCapsOf", "escrowOf"]);
       for (const c of calls) {
         expect(c.to?.toLowerCase()).toBe(ESCROW.toLowerCase());
-        expect(c.block).toBe("latest");
+        expect(c.block).toBe(`0x${(1000n - 1n).toString(16)}`);
       }
+      expect(f.calls.some((c) => c.method === "eth_blockNumber")).toBe(true);
       expect(f.calls.some((c) => c.method === "eth_chainId")).toBe(true);
     }
     expect(toGuardChain(res)).toEqual({
@@ -417,9 +462,76 @@ describe("readDelegation", () => {
     }
   });
 
-  it("the read ABI is exactly the backend's two views", () => {
-    expect(ESCROW_READ_ABI.map((f) => ("name" in f ? f.name : "")).sort()).toEqual(["delegationOf", "effectiveCapsOf"]);
+  it("the read ABI is exactly the backend's three views", () => {
+    expect(ESCROW_READ_ABI.map((f) => ("name" in f ? f.name : "")).sort()).toEqual([
+      "delegationOf",
+      "effectiveCapsOf",
+      "escrowOf",
+    ]);
     for (const f of ESCROW_READ_ABI) expect(f).toMatchObject({ type: "function", stateMutability: "view" });
+  });
+
+  it("the escrow caps are the lower of the envelope and the payer's current caps", async () => {
+    // The payer just lowered the escrow caps: the envelope still holds the old ones.
+    for (const f of [a, b]) f.view.escrow = { ...f.view.escrow, maxVoucherAmount: 300000n, maxPerWindow: 3000000n };
+    const { r } = reader();
+    const res = await r.readDelegation(NETWORK, PAYER, DELEGATE);
+    expect(res).toMatchObject({ ok: true, value: { maxVoucherAmount: "300000", maxPerWindow: "3000000" } });
+    expect(toGuardChain(res)).toMatchObject({ maxVoucherAmount: "300000" });
+
+    // The payer raised them: the envelope keeps the lower held value for the tighten delay.
+    for (const f of [a, b]) f.view.escrow = { ...baseView().escrow, maxVoucherAmount: 9000000n, maxPerWindow: 90000000n };
+    const { r: r2 } = reader();
+    expect(await r2.readDelegation(NETWORK, PAYER, DELEGATE)).toMatchObject({
+      ok: true,
+      value: { maxVoucherAmount: "1000000", maxPerWindow: "10000000" },
+    });
+  });
+
+  it("disagree on escrowOf alone → CHAIN_UNCONFIRMED", async () => {
+    b.view.escrow = { ...b.view.escrow, maxVoucherAmount: 2n };
+    const { r } = reader();
+    expect(await r.readDelegation(NETWORK, PAYER, DELEGATE)).toMatchObject({ ok: false, code: "CHAIN_UNCONFIRMED" });
+  });
+
+  it("RPCs a few blocks apart read one pinned block, min(heights) - 1, and agree", async () => {
+    a.view.height = 1003n;
+    b.view.height = 1000n;
+    // State changed at block 1000: an RPC reading its own latest would disagree.
+    for (const f of [a, b]) f.view.capsAt = new Map([[1000n, [1000000n, 10000000n, 1n, 1n]], [1003n, [1000000n, 10000000n, 1n, 1n]]]);
+    const { r } = reader();
+    expect(await r.readDelegation(NETWORK, PAYER, DELEGATE)).toEqual({ ok: true, value: AGREED });
+    for (const f of [a, b]) {
+      const blocks = new Set(f.calls.filter((c) => c.method === "eth_call").map((c) => c.block));
+      expect([...blocks]).toEqual([`0x${(999n).toString(16)}`]);
+    }
+  });
+
+  it("RPCs exactly MAX_BLOCK_SPREAD apart still read", async () => {
+    a.view.height = 1000n + MAX_BLOCK_SPREAD;
+    const { r } = reader();
+    expect(await r.readDelegation(NETWORK, PAYER, DELEGATE)).toMatchObject({ ok: true });
+  });
+
+  it("RPCs more than MAX_BLOCK_SPREAD apart → CHAIN_UNCONFIRMED, with no eth_call", async () => {
+    expect(MAX_BLOCK_SPREAD).toBe(5n);
+    a.view.height = 1000n + MAX_BLOCK_SPREAD + 1n;
+    const { r } = reader();
+    expect(await r.readDelegation(NETWORK, PAYER, DELEGATE)).toMatchObject({ ok: false, code: "CHAIN_UNCONFIRMED" });
+    for (const f of [a, b]) expect(f.calls.filter((c) => c.method === "eth_call")).toEqual([]);
+  });
+
+  it("a chain at block 0 has no block to pin → CHAIN_UNCONFIRMED", async () => {
+    for (const f of [a, b]) f.view.height = 0n;
+    const { r } = reader();
+    expect(await r.readDelegation(NETWORK, PAYER, DELEGATE)).toMatchObject({ ok: false, code: "CHAIN_UNCONFIRMED" });
+  });
+
+  it("a real disagreement at the pinned block still refuses", async () => {
+    a.view.height = 1002n;
+    b.view.capsAt = new Map([[999n, [1000000n, 10000000n, 7n, 5000000n]]]);
+    const { r } = reader();
+    expect(await r.readDelegation(NETWORK, PAYER, DELEGATE)).toMatchObject({ ok: false, code: "CHAIN_UNCONFIRMED" });
   });
 
   // The anvil fork CI job sets ASSAY_ANVIL_FORK=1 after authorising DELEGATE for PAYER on the fork
@@ -446,7 +558,7 @@ describe("rpc / pinned fetch", () => {
   it("ethCall rejects a mismatched JSON-RPC id", async () => {
     b.behaviour = { kind: "raw", body: '{"jsonrpc":"2.0","id":999,"result":"0x"}' };
     await expect(
-      ethCall(b.url, { to: ESCROW, data: "0x" }, { allowed: [b.url], timeoutMs: 300 }),
+      ethCall(b.url, { to: ESCROW, data: "0x" }, 1n, { allowed: [b.url], timeoutMs: 300 }),
     ).rejects.toBeInstanceOf(RpcError);
   });
 });

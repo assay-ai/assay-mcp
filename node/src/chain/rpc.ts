@@ -1,5 +1,6 @@
 /**
- * A minimal JSON-RPC client for read-only chain calls: `eth_chainId` and `eth_call` only.
+ * A minimal JSON-RPC client for read-only chain calls: `eth_chainId`, `eth_blockNumber` and
+ * `eth_call` only.
  * It never sends a transaction and holds no key. Every request goes through `pinnedPost`.
  */
 import { pinnedPost } from "./pinned-fetch.js";
@@ -65,10 +66,27 @@ export async function ethChainId(url: string, opts: RpcOptions): Promise<number>
   return Number.parseInt(result, 16);
 }
 
-/** `eth_call` at `latest`; returns the raw return data as lower-case hex. */
-export async function ethCall(url: string, tx: { to: string; data: string }, opts: RpcOptions): Promise<`0x${string}`> {
-  if (!ADDRESS.test(tx.to) || !HEX.test(tx.data)) throw new RpcError("eth_call: bad request");
-  const result = await call(url, "eth_call", [{ to: tx.to, data: tx.data }, "latest"], opts);
+/** `eth_blockNumber`, as a bigint. */
+export async function ethBlockNumber(url: string, opts: RpcOptions): Promise<bigint> {
+  const result = await call(url, "eth_blockNumber", [], opts);
+  if (typeof result !== "string" || !QUANTITY.test(result) || result.length > 18) {
+    throw new RpcError("eth_blockNumber: bad result");
+  }
+  return BigInt(result);
+}
+
+/**
+ * `eth_call` at a pinned block number; returns the raw return data as lower-case hex. Every read
+ * of one agreement round uses the same block on every RPC, so both answer the same state.
+ */
+export async function ethCall(
+  url: string,
+  tx: { to: string; data: string },
+  block: bigint,
+  opts: RpcOptions,
+): Promise<`0x${string}`> {
+  if (!ADDRESS.test(tx.to) || !HEX.test(tx.data) || block < 0n) throw new RpcError("eth_call: bad request");
+  const result = await call(url, "eth_call", [{ to: tx.to, data: tx.data }, `0x${block.toString(16)}`], opts);
   if (typeof result !== "string" || !HEX.test(result)) throw new RpcError("eth_call: bad result");
   return result.toLowerCase() as `0x${string}`;
 }
