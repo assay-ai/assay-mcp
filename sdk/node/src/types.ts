@@ -17,6 +17,11 @@ export interface AssayClientOptions {
    * Defaults to `[url]`: the URL this client was built for.
    */
   urls?: readonly string[];
+  /**
+   * G8, stricter mode (default off): paid calls go only to these providers, as 0x addresses.
+   * A payment request naming any other provider is refused with G8 and nothing is signed.
+   */
+  providers?: readonly string[];
   /** Development only: extra origins, set in code and never read from the environment or a file. */
   dev?: { origins: readonly string[] };
 }

@@ -207,6 +207,8 @@ jobs:
           CREDENTIAL_VAULT_KEKS="[{\"keyId\":\"ci-1\",\"key\":\"$(openssl rand -hex 32)\"}]"
           PROVIDER_REQUEST_SIGNING_KEYS="[{\"keyId\":\"ci-1\",\"secretKey\":\"$(openssl rand -hex 32)\"}]"
           echo "::add-mask::$OAUTH_REQUEST_COOKIE_SECRET"
+          echo "::add-mask::$CREDENTIAL_VAULT_KEKS"
+          echo "::add-mask::$PROVIDER_REQUEST_SIGNING_KEYS"
           export OAUTH_REQUEST_COOKIE_SECRET CREDENTIAL_VAULT_KEKS PROVIDER_REQUEST_SIGNING_KEYS
           docker compose up -d --build --wait postgres redis
           docker compose up -d --build backend

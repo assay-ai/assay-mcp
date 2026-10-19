@@ -62,10 +62,12 @@ export interface SdkGuardInputs {
   signed: SignedVoucher[];
   url: string;
   urls: readonly string[];
+  /** G8: the provider allow-list (stricter mode); `null` is off. */
+  providers: readonly string[] | null;
   nowSeconds: number;
 }
 
-/** The guard context the SDK builds: caps from the constructor, `urls` for G11, no prompt, no allow-list. */
+/** The guard context the SDK builds: caps from the constructor, `urls` for G11, no prompt, and G8's allow-list only when `providers` is set. */
 export function sdkGuardContext(i: SdkGuardInputs): Omit<GuardContext, "network"> {
   return {
     requirement: i.requirement,
@@ -74,7 +76,7 @@ export function sdkGuardContext(i: SdkGuardInputs): Omit<GuardContext, "network"
     chain: i.chain,
     localKey: i.signerAddress,
     recordedPayer: i.recordedPayer,
-    limits: { perCall: i.maxPerCall, perDay: i.maxPerDay, confirmAbove: null, providers: null },
+    limits: { perCall: i.maxPerCall, perDay: i.maxPerDay, confirmAbove: null, providers: i.providers === null ? null : [...i.providers] },
     signed: i.signed,
     confirmation: null,
     canonicalUrl: i.url,
@@ -124,6 +126,8 @@ export interface PaidDeps {
   readonly maxPerDay: string;
   /** Canonical URLs paid calls may go through (G11). */
   readonly urls: readonly string[];
+  /** G8 allow-list of provider addresses, or null (off). */
+  readonly providers: readonly string[] | null;
   readonly chain: ChainReader;
   readonly quotes: QuoteCache;
   /** Sends `tools/call` with these params; the raw result. */
@@ -192,6 +196,7 @@ export class PaidCalls {
       signed,
       url: deployment.url,
       urls: this.d.urls,
+      providers: this.d.providers,
       nowSeconds,
     });
     const built = guardVoucher(ctx, issuedAt(nowSeconds, this.d.dateOffset()), env);

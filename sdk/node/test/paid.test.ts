@@ -2,7 +2,7 @@ import { getAddress, type Hex, type LocalAccount } from "viem";
 import { generatePrivateKey, privateKeyToAccount, toAccount } from "viem/accounts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { builtInDeployments } from "@assay-core/deployments.js";
-import { API_KEY, CREDENTIAL_ID, FakeAssay, PAYER, type NetworkEntry } from "../../../node/test/helpers/fake-assay.js";
+import { API_KEY, CREDENTIAL_ID, FakeAssay, PAYER, PROVIDER, type NetworkEntry } from "../../../node/test/helpers/fake-assay.js";
 import { AssayClient, AssayConfigError, Signers, type AssayClientOptions, type Signer } from "../src/index.js";
 
 /**
@@ -188,6 +188,35 @@ describe("paid calls", () => {
     expect(k.signTypedData).not.toHaveBeenCalled();
     expect(fake.rpcCalls).toEqual([]);
     expect(fake.accepted).toEqual([]);
+  });
+
+  it("providers (G8): a provider outside the list is refused and nothing is signed", async () => {
+    const k = kms();
+    enable(k.address);
+    const client = await make(k.signer, { providers: [PAYER] });
+    const r = await client.callTool("weather");
+    expect(r.refused).toEqual({ guard: "G8", reason: "the provider is not in the allow-list" });
+    expect(voucherSigns(k.signTypedData)).toBe(0);
+    expect(fake.accepted).toEqual([]);
+  });
+
+  it("providers (G8): a listed provider pays; with no list behaviour is unchanged", async () => {
+    const k = kms();
+    enable(k.address);
+    const listed = await make(k.signer, { providers: [PROVIDER.toLowerCase()] });
+    expect((await listed.callTool("weather")).ok).toBe(true);
+    const open = await make(k.signer);
+    expect((await open.callTool("weather")).ok).toBe(true);
+    expect(fake.accepted).toHaveLength(2);
+  });
+
+  it("providers must be a non-empty list of addresses, and needs a signer", () => {
+    const signer = Signers.fromPrivateKey(generatePrivateKey());
+    const base = { url: "https://mcp.assay.ai/", apiKey: API_KEY, signer, maxPerCall: "0.5", maxPerDay: "5" };
+    expect(() => new AssayClient({ ...base, providers: [] })).toThrow(/providers/);
+    expect(() => new AssayClient({ ...base, providers: ["nope"] })).toThrow(/providers/);
+    expect(() => new AssayClient({ url: "https://mcp.assay.ai/", apiKey: API_KEY, providers: [PROVIDER] })).toThrow(/signer/);
+    expect(() => new AssayClient({ ...base, providers: [PROVIDER] })).not.toThrow();
   });
 
   it("maxPerCall is enforced (G7) before signing", async () => {
