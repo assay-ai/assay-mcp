@@ -10,7 +10,7 @@ import { recordHeld, SpendLimitError } from "../guards/spend-record.js";
 import type { BuiltInNetwork, Confirmation, GuardContext, GuardId, Quote } from "../guards/types.js";
 import { silentLogger, type Logger } from "../log/logger.js";
 import { identifyCredential } from "../oauth/flow.js";
-import { readCapped, requestSignal } from "../oauth/endpoints.js";
+import { MAX_BODY_BYTES, readCapped, requestSignal } from "../oauth/endpoints.js";
 import type { ResolvedDeployment } from "../profile/deployments.js";
 import type { Keychain } from "../profile/keychain.js";
 import { withLock, type LockHandle, type LockOptions, type ProfileRef } from "../profile/lock.js";
@@ -591,13 +591,14 @@ export class PaidPath {
     const bearer = given ?? (await this.host.bearer());
     if (bearer === null) return null;
     try {
+      const signal = requestSignal(API_TIMEOUT_MS);
       const res = await this.o.fetch(`${this.o.deployment.api.replace(/\/+$/, "")}${path}`, {
         method,
         headers: { accept: "application/json", ...(body !== undefined ? { "content-type": "application/json" } : {}) },
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
         bearer,
         log: this.log,
-        signal: requestSignal(API_TIMEOUT_MS),
+        signal,
       });
       const date = res.headers.get("date");
       if (res.status < 200 || res.status > 299) {
@@ -605,7 +606,7 @@ export class PaidPath {
         this.log.info("API refused", { path: path.split("/").slice(0, 4).join("/"), status: res.status });
         return null;
       }
-      const text = await readCapped(res);
+      const text = await readCapped(res, MAX_BODY_BYTES, signal);
       if (text === null) return null;
       return { body: text === "" ? null : (JSON.parse(text) as unknown), date };
     } catch {

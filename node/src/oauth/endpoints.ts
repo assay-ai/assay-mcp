@@ -69,28 +69,41 @@ export function requestSignal(timeoutMs: number, ...signals: (AbortSignal | null
 /**
  * The body as text, reading at most `max` bytes; `null` when it is longer. A reset, an abort or
  * a timeout while reading throws (callers map it to their own error types).
+ *
+ * `signal` is the request's own signal. The read watches it itself and cancels the body when it
+ * aborts: the fetch's abort did not always reach a body still being read once the headers were
+ * in (Task 2.17: a drip-fed answer outlived its refresh bound), so the bound cannot rely on it.
  */
-export async function readCapped(res: Response, max: number = MAX_BODY_BYTES): Promise<string | null> {
+export async function readCapped(res: Response, max: number = MAX_BODY_BYTES, signal?: AbortSignal): Promise<string | null> {
   if (res.body === null) return "";
   const reader = res.body.getReader();
+  const onAbort = () => void reader.cancel().catch(() => {});
+  if (signal?.aborted) onAbort();
+  signal?.addEventListener("abort", onAbort, { once: true });
   const chunks: Uint8Array[] = [];
   let size = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    size += value.byteLength;
-    if (size > max) {
-      await reader.cancel().catch(() => {});
-      return null;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      // A cancelled read ends as `done`: that is an abort, never a complete answer.
+      signal?.throwIfAborted();
+      if (done) break;
+      size += value.byteLength;
+      if (size > max) {
+        await reader.cancel().catch(() => {});
+        return null;
+      }
+      chunks.push(value);
     }
-    chunks.push(value);
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
   }
   return Buffer.concat(chunks).toString("utf8");
 }
 
 /** Parses a token endpoint answer. A 200 that is not a well-formed pair is a `server_error`. */
-export async function readTokenAnswer(res: Response, nowSeconds: number): Promise<TokenAnswer> {
-  const text = await readCapped(res);
+export async function readTokenAnswer(res: Response, nowSeconds: number, signal?: AbortSignal): Promise<TokenAnswer> {
+  const text = await readCapped(res, MAX_BODY_BYTES, signal);
   let body: Record<string, unknown> | null = null;
   if (text !== null) {
     try {
