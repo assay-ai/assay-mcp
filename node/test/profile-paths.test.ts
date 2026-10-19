@@ -54,6 +54,24 @@ describe("configDirFor", () => {
   });
 });
 
+describe("configDir with a mocked platform", () => {
+  it.each(["darwin", "linux", "win32"] as const)("%s: XDG_CONFIG_HOME and APPDATA are ignored on every OS", (platform) => {
+    const real = Object.getOwnPropertyDescriptor(process, "platform")!;
+    const savedXdg = process.env.XDG_CONFIG_HOME;
+    try {
+      Object.defineProperty(process, "platform", { value: platform });
+      const expected = configDirFor({ platform, home: userInfo().homedir });
+      process.env.XDG_CONFIG_HOME = join(base, "xdg");
+      expect(configDir()).toBe(expected);
+      expect(configDir().startsWith(base)).toBe(false);
+    } finally {
+      Object.defineProperty(process, "platform", real);
+      if (savedXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = savedXdg;
+    }
+  });
+});
+
 describe("profile names", () => {
   it("accepts simple names and refuses path tricks", () => {
     for (const ok of ["default", "e2e", "ci-1"]) expect(isValidProfileName(ok)).toBe(true);

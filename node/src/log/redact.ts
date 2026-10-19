@@ -29,8 +29,13 @@ const BEARER = /\b(Bearer)\s+[^\s"',;&]+/gi;
  * Secrets carried in a URL query or fragment without an `assay_` prefix: the consent request
  * id, OAuth codes, PKCE verifiers, `state`, and tokens.
  */
-const QUERY_SECRET =
-  /([?&#;](?:code|code_verifier|request|rid|state|token|access_token|refresh_token|id_token|key|api_key|client_secret)=)[^&#\s"']+/gi;
+const SECRET_KEYS = "code|code_verifier|request|rid|state|token|access_token|refresh_token|id_token|key|api_key|client_secret";
+/** Also matches at the very start of the text, so a form body `code_verifier=…&…` is covered. */
+const QUERY_SECRET = new RegExp(`((?:^|[?&#;])(?:${SECRET_KEYS})=)[^&#\\s"']+`, "gi");
+/** A secret key inside JSON text: `"code_verifier":"…"`, also with escaped quotes. Key must be quoted, so prose survives. */
+const JSON_SECRET = new RegExp(`(\\\\?["'](?:${SECRET_KEYS})\\\\?["']\\s*:\\s*\\\\?["'])[^"'\\\\]*`, "gi");
+/** A bare `Basic <base64>` credential. Needs a digit, `+`, `/`, `=` or a lower-to-upper step, so "Basic Configuration" survives. */
+const BASIC = /\b(Basic)\s+(?=[A-Za-z0-9+/_-]*(?:[0-9+/=]|[a-z][A-Z]))[A-Za-z0-9+/_-]{8,}={0,2}/g;
 
 export const REDACTED = "[redacted]";
 
@@ -44,5 +49,7 @@ export function redact(text: string): string {
     .replace(BARE_LONG_HEX, REDACTED)
     .replace(AUTH_HEADER, `$1$2${REDACTED}`)
     .replace(BEARER, `$1 ${REDACTED}`)
+    .replace(BASIC, `$1 ${REDACTED}`)
+    .replace(JSON_SECRET, `$1${REDACTED}`)
     .replace(QUERY_SECRET, `$1${REDACTED}`);
 }
