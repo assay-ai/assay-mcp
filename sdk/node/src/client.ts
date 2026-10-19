@@ -1,5 +1,5 @@
 import { inspect } from "node:util";
-import { getAddress } from "viem";
+import { getAddress, isAddress } from "viem";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
@@ -93,6 +93,14 @@ export class AssayClient {
         throw new AssayConfigError("maxPerCall must not be above maxPerDay");
       }
     }
+    let providers: readonly string[] | null = null;
+    if (options.providers !== undefined) {
+      if (options.signer === undefined) throw new AssayConfigError("providers needs a signer");
+      if (!Array.isArray(options.providers) || options.providers.length === 0 || options.providers.some((p) => typeof p !== "string" || !isAddress(p, { strict: false }))) {
+        throw new AssayConfigError("providers must be a non-empty list of 0x addresses");
+      }
+      providers = Object.freeze(options.providers.map((p) => getAddress(p)));
+    }
     const origins: string[] = [];
     for (const raw of options.dev?.origins ?? []) {
       const o = normaliseOrigin(raw);
@@ -136,6 +144,7 @@ export class AssayClient {
         maxPerCall,
         maxPerDay,
         urls,
+        providers,
         chain: createChainReader({ environment: deployment.environment, profile: "sdk" }),
         quotes: this.#quotes,
         send: (params) => this.#send(params),
@@ -175,7 +184,7 @@ export class AssayClient {
       const page = await client.listTools(cursor ? { cursor } : undefined);
       this.#quotes.setAll(quotesFromList(page));
       for (const t of page.tools) {
-        tools.push({ name: t.name, description: t.description ?? "", inputSchema: t.inputSchema as Record<string, unknown> });
+        tools.push({ name: t.name, description: t.description ?? "", inputSchema: t.inputSchema as AssayTool["inputSchema"] });
       }
       cursor = page.nextCursor;
     } while (cursor);

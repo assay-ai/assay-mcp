@@ -41,3 +41,18 @@ Every payment request runs the same local guards as `assay-mcp` (G1 to G12), on 
 - A refused payment comes back as `ok: false` with `refused: { guard, reason }`. Nothing was signed.
 
 The API key and the signer's key are never shown by `console.log`, `util.inspect`, `JSON.stringify` or `String()`.
+
+## Examples
+
+`examples/anthropic-messages.ts` (Anthropic Messages API, tool use) and `examples/openai-responses.ts` (OpenAI Responses API, function calling) each ask a model for the weather in Lisbon and answer its tool calls through `assay.callTool`. Both run from this directory:
+
+```sh
+npm run example -- anthropic-messages   # needs ANTHROPIC_API_KEY and ANTHROPIC_MODEL
+npm run example -- openai-responses     # needs OPENAI_API_KEY and OPENAI_MODEL
+```
+
+- Model ids come only from `ANTHROPIC_MODEL` and `OPENAI_MODEL`. The examples pin none: without one they exit with a message.
+- `ASSAY_API_KEY` is the Assay API key (required). `ASSAY_URL` defaults to `https://mcp.assay.ai/`.
+- To run against a local stack, set `ASSAY_DEV_ORIGIN` to its origin (it goes to `dev.origins` in code).
+- `ASSAY_EXAMPLE_TEST_KEY` (a throwaway key, test stacks only) switches paid calls on through `Signers.fromPrivateKey`. Real code uses `Signers.fromAccount`.
+- Nothing prints a key. Do not print the environment in CI.
