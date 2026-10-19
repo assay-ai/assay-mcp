@@ -89,12 +89,19 @@ export function validateDeployment(env: Environment, d: Deployment, allowPlaceho
       continue;
     }
     const chainId = Number(chain[1]);
-    const escrow = parseCaip10(n.escrow);
-    if (!escrow) errors.push(`${where}.escrow: not a checksummed CAIP-10 account`);
-    else if (escrow.chainId !== chainId) errors.push(`${where}.escrow: chain does not match ${caip2}`);
-    const asset = parseCaip19Erc20(n.asset);
-    if (!asset) errors.push(`${where}.asset: not a checksummed CAIP-19 erc20 asset`);
-    else if (asset.chainId !== chainId) errors.push(`${where}.asset: chain does not match ${caip2}`);
+    // Contract placeholders are allowed only outside production: production always names its
+    // escrow and asset, and the guards (G2) and the EIP-712 domain are built from them.
+    const contractPlaceholderOk = allowPlaceholder && env !== "production";
+    if (!(contractPlaceholderOk && isPlaceholder(n.escrow))) {
+      const escrow = parseCaip10(n.escrow);
+      if (!escrow) errors.push(`${where}.escrow: not a checksummed CAIP-10 account`);
+      else if (escrow.chainId !== chainId) errors.push(`${where}.escrow: chain does not match ${caip2}`);
+    }
+    if (!(contractPlaceholderOk && isPlaceholder(n.asset))) {
+      const asset = parseCaip19Erc20(n.asset);
+      if (!asset) errors.push(`${where}.asset: not a checksummed CAIP-19 erc20 asset`);
+      else if (asset.chainId !== chainId) errors.push(`${where}.asset: chain does not match ${caip2}`);
+    }
     if (!Number.isInteger(n.decimals) || n.decimals < 0 || n.decimals > 36) errors.push(`${where}.decimals: invalid`);
     const minRpc = DEV_ENVIRONMENTS.includes(env) ? 1 : 2;
     if (!Array.isArray(n.rpc) || n.rpc.length < minRpc) errors.push(`${where}.rpc: needs at least ${minRpc}`);
@@ -109,6 +116,28 @@ export function validateDeployments(table: Deployments, allowPlaceholder = true)
     const d = table[env];
     if (!d) errors.push(`${env}: missing`);
     else errors.push(...validateDeployment(env, d, allowPlaceholder));
+  }
+  errors.push(...sharedProductionEscrows(table));
+  return errors;
+}
+
+/**
+ * Staging must never share production's escrow on the same chain. The EIP-712 domain is
+ * (chainId, verifyingContract = escrow), so a voucher or AuthorizeDelegate signed against
+ * staging would also be valid on the production escrow, and the reverse.
+ */
+export function sharedProductionEscrows(table: Deployments): string[] {
+  const errors: string[] = [];
+  const prod = table.production?.networks ?? {};
+  for (const env of ENVIRONMENTS) {
+    if (env === "production" || DEV_ENVIRONMENTS.includes(env)) continue;
+    for (const [caip2, n] of Object.entries(table[env]?.networks ?? {})) {
+      const p = prod[caip2];
+      if (!p || isPlaceholder(n.escrow) || isPlaceholder(p.escrow)) continue;
+      if (n.escrow.toLowerCase() === p.escrow.toLowerCase()) {
+        errors.push(`${env}.networks.${caip2}.escrow: must differ from the production escrow (same EIP-712 domain)`);
+      }
+    }
   }
   return errors;
 }

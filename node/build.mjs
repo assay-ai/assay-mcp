@@ -1,8 +1,11 @@
+import { builtinModules } from "node:module";
 import { build } from "esbuild";
+
+const ALLOWED_EXTERNAL = ["@napi-rs/keyring"];
 
 // One self-contained bundle. viem and every other library are bundled in; only the
 // native keychain binding stays external (it ships prebuilt binaries per platform).
-await build({
+const result = await build({
   entryPoints: ["src/bin.ts"],
   outfile: "dist/cli.js",
   bundle: true,
@@ -13,4 +16,21 @@ await build({
   banner: { js: "#!/usr/bin/env node" },
   legalComments: "none",
   logLevel: "warning",
+  metafile: true,
 });
+
+// First layer of the bundle check (scripts/check-bundle.mjs is the second): esbuild's own list
+// of what the output still loads at run time must be Node built-ins or the keyring only.
+const bad = [];
+for (const [file, out] of Object.entries(result.metafile.outputs)) {
+  for (const imp of out.imports) {
+    const bare = imp.path.startsWith("node:") ? imp.path.slice(5) : imp.path;
+    if (!imp.external) continue;
+    if (builtinModules.includes(bare) || ALLOWED_EXTERNAL.includes(imp.path)) continue;
+    bad.push(`${file}: ${imp.kind} of "${imp.path}"`);
+  }
+}
+if (bad.length > 0) {
+  console.error(`The bundle loads modules that are not bundled:\n  ${bad.join("\n  ")}`);
+  process.exit(1);
+}
