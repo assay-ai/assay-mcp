@@ -54,9 +54,15 @@ class CallRecord implements ForwardedCall {
   }
 }
 
+/** How long a token of an ended call still answers `expired` (not `unknown`). */
+export const TOMBSTONE_MS = 10 * 60_000;
+const MAX_TOMBSTONES = 1_000;
+
 export class CallRegistry {
   private readonly open = new Map<string, CallRecord>();
   private readonly confirmations = new Map<string, CallRecord>();
+  /** Tokens of calls that ended: a late "Pay" gets `expired` (review M11). */
+  private readonly tombstones = new Map<string, { call: CallRecord; until: number }>();
 
   constructor(private readonly now: () => number = Date.now) {}
 
@@ -78,7 +84,13 @@ export class CallRegistry {
   end(call: ForwardedCall): void {
     const key = idKey(call.id);
     if (this.open.get(key) === call) this.open.delete(key);
-    for (const [token, c] of this.confirmations) if (c === call) this.confirmations.delete(token);
+    const now = this.now();
+    for (const [token, c] of this.confirmations) {
+      if (c !== call) continue;
+      this.confirmations.delete(token);
+      this.tombstones.set(token, { call: c, until: now + TOMBSTONE_MS });
+    }
+    for (const [token, t] of this.tombstones) if (t.until <= now || this.tombstones.size > MAX_TOMBSTONES) this.tombstones.delete(token);
   }
 
   get size(): number {
@@ -96,7 +108,11 @@ export class CallRegistry {
   /** Consumes a token: valid once, and only within {@link CONFIRMATION_TTL_MS} of the call. */
   consumeConfirmation(token: string): ConfirmationOutcome {
     const call = this.confirmations.get(token);
-    if (!call) return { kind: "unknown" };
+    if (!call) {
+      const t = this.tombstones.get(token);
+      this.tombstones.delete(token);
+      return t && t.until > this.now() ? { kind: "expired", call: t.call } : { kind: "unknown" };
+    }
     this.confirmations.delete(token);
     if (this.open.get(idKey(call.id)) !== call) return { kind: "unknown" };
     if (this.now() - call.startedAt > CONFIRMATION_TTL_MS) return { kind: "expired", call };

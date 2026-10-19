@@ -1,4 +1,4 @@
-import { aliasTool, NO_NAME_BUDGET } from "../clients/server-name.js";
+import { aliasTool, isValidToolName, NO_NAME_BUDGET } from "../clients/server-name.js";
 import { silentLogger, type Logger } from "../log/logger.js";
 
 /**
@@ -13,6 +13,7 @@ import { silentLogger, type Logger } from "../log/logger.js";
 export class AliasTable {
   private readonly serverName: string;
   private toOriginal = new Map<string, string>();
+  private listed = new Set<string>();
   private readonly warned = new Set<string>();
 
   constructor(
@@ -28,24 +29,39 @@ export class AliasTable {
    * cursor) starts a new table.
    */
   rewriteList(result: Record<string, unknown>, firstPage: boolean): Record<string, unknown> {
-    if (firstPage) this.toOriginal = new Map();
+    if (firstPage) {
+      this.toOriginal = new Map();
+      this.listed = new Set();
+    }
     const tools = result.tools;
     if (!Array.isArray(tools)) return result;
-    const names = new Set(tools.map((t) => (isObject(t) && typeof t.name === "string" ? t.name : null)));
+    // Every name this list has shown so far (this page and earlier pages), real or alias.
+    for (const t of tools) if (isObject(t) && typeof t.name === "string") this.listed.add(t.name);
     const out = tools.map((tool) => {
       if (!isObject(tool) || typeof tool.name !== "string") return tool;
       const original = tool.name;
-      const alias = aliasTool(this.serverName, original);
-      if (alias === null || alias === original) {
-        if (alias === null && this.warnOnce(original)) this.log.warn("tool name too long for the client and cannot be aliased", { tool: original.slice(0, 80) });
+      if (this.toOriginal.has(original)) {
+        // A real tool named like an alias from an earlier page: the alias would misroute.
+        this.toOriginal.delete(original);
+        this.log.warn("tool name equals an earlier alias; that alias is withdrawn", { tool: original.slice(0, 80) });
+      }
+      if (!isValidToolName(original)) {
+        if (this.warnOnce(original)) this.log.warn("tool name has characters clients may refuse", { tool: original.slice(0, 80) });
         return tool;
       }
-      if (names.has(alias) || (this.toOriginal.has(alias) && this.toOriginal.get(alias) !== original)) {
+      const alias = aliasTool(this.serverName, original);
+      if (alias === original) return tool;
+      if (alias === null) {
+        if (this.warnOnce(original)) this.log.warn("tool name too long for the client and cannot be aliased", { tool: original.slice(0, 80) });
+        return tool;
+      }
+      if (this.listed.has(alias) || (this.toOriginal.has(alias) && this.toOriginal.get(alias) !== original)) {
         // Another tool already has that name: leave this one as it is rather than shadow it.
         if (this.warnOnce(original)) this.log.warn("tool alias collides with another tool; left unaliased", { tool: original.slice(0, 80) });
         return tool;
       }
       this.toOriginal.set(alias, original);
+      this.listed.add(alias);
       if (this.warnOnce(original)) this.log.warn("tool listed under an alias: its full name is longer than the client allows", { tool: original.slice(0, 80), alias });
       const description = typeof tool.description === "string" ? tool.description : "";
       return { ...tool, name: alias, description: `(Assay tool ${original})${description ? ` ${description}` : ""}` };

@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -116,7 +116,11 @@ function spawnRaw(args: string[] = [], extraEnv: Record<string, string> = {}) {
   children.push(child);
   let out = "";
   let err = "";
-  child.stdout.on("data", (c: Buffer) => (out += c.toString("utf8")));
+  let newlines = 0;
+  child.stdout.on("data", (c: Buffer) => {
+    out += c.toString("utf8");
+    for (const b of c) if (b === 0x0a) newlines++;
+  });
   child.stderr.on("data", (c: Buffer) => (err += c.toString("utf8")));
   const lines = () => out.split("\n").filter((l) => l !== "");
   const messages = () => lines().map((l) => JSON.parse(l) as Record<string, unknown>);
@@ -126,6 +130,7 @@ function spawnRaw(args: string[] = [], extraEnv: Record<string, string> = {}) {
     lines,
     messages,
     stdout: () => out,
+    lineCount: () => newlines,
     stderr: () => err,
     answer: (id: unknown) => until(() => messages().find((m) => m.id === id && !("method" in m))),
   };
@@ -338,6 +343,11 @@ describe("signed-in forwarding", () => {
         res.write("data: {broken\n\n: comment\n\nevent: other\ndata: {}\n\n");
         res.end(`data: ${JSON.stringify({ jsonrpc: "2.0", id, result: { ok: true } })}\n\n`);
       },
+      noteExtra: (id, res) => {
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.write(`data: ${JSON.stringify({ jsonrpc: "2.0", method: "notifications/message", params: { level: "info", data: "n" }, result: { evil: 1 }, extra: 2 })}\n\n`);
+        res.end(`data: ${JSON.stringify({ jsonrpc: "2.0", id, result: { ok: 2 } })}\n\n`);
+      },
       notObject: (id, res) => res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ jsonrpc: "2.0", id, result: "string result" })),
       huge: (_id, res) => {
         res.writeHead(200, { "content-type": "application/json" });
@@ -379,7 +389,10 @@ describe("signed-in forwarding", () => {
     expect(byId(3)).toEqual({ jsonrpc: "2.0", id: 3, result: { content: [{ type: "text", text: "a\nb c\r\n" }] } });
     expect((byId(5).error as { message: string }).message).toBe("Assay refused the request (HTTP 500).");
     expect(byId(6)).toEqual({ jsonrpc: "2.0", id: 6, result: { ok: true } });
-    expect((byId(8).error as { message: string }).message).toBe("Assay's answer was too large.");
+    expect((byId(9).error as { message: string }).message).toBe("Assay's answer was too large.");
+    // A server notification reaches the host stripped to its JSON-RPC members (review M8).
+    expect(raw.messages().filter((m) => m.method === "notifications/message")).toEqual([{ jsonrpc: "2.0", method: "notifications/message", params: { level: "info", data: "n" } }]);
+    expect(byId(7)).toEqual({ jsonrpc: "2.0", id: 7, result: { ok: 2 } });
     expect(raw.messages().some((m) => m.id === "other" || m.id === 12345)).toBe(false);
     // Answers for other ids are never paired with this call.
     expect(byId(4)).toEqual({ jsonrpc: "2.0", id: 4, error: { code: -32000, message: "Assay's answer had no result for this request." } });
@@ -558,5 +571,169 @@ describe("serve start", () => {
     await ok.answer(0);
     ok.child.stdin.end();
     expect(await exitOf(ok)).toBe(0);
+  });
+});
+
+describe("sign-in across processes (fix round 1, I1)", () => {
+  const SIGN_IN = { name: "assay_sign_in", arguments: {} };
+  const textOf = (r: Record<string, unknown>) => (r.content as { text: string }[])[0]!.text;
+
+  it("two processes start sign-in at the same moment: one browser flow, one grant", async () => {
+    const [a, b] = await Promise.all([connect(), connect()]);
+    const [ra, rb] = await Promise.all([a.client.callTool(SIGN_IN), b.client.callTool(SIGN_IN)]);
+    const texts = [textOf(ra), textOf(rb)];
+    // One process runs the browser flow; the other is told it is in progress, or (when the
+    // first finished before its call arrived) is already connected.
+    expect(texts.filter((t) => t.startsWith("Approve in your browser: "))).toHaveLength(1);
+    const other = texts.find((t) => !t.startsWith("Approve in your browser: "))!;
+    expect([
+      "Assay sign-in is already in progress in another window. Approve it there; Assay tools appear here when you're done (if they don't, restart test-host).",
+      "Assay is connected. Its tools are listed here.",
+    ]).toContain(other);
+    await until(() => a.changed.length > 0 && b.changed.length > 0, 10_000);
+    expect(mcp.opened).toHaveLength(1);
+    expect(as.tokenCalls("authorization_code")).toHaveLength(1);
+    expect(as.grants).toHaveLength(1);
+    expect((await a.client.listTools()).tools.map((t) => t.name)).toEqual(["echo"]);
+    expect((await b.client.listTools()).tools.map((t) => t.name)).toEqual(["echo"]);
+  });
+
+  it("the profile lock stays free while a sign-in waits for the browser; others answer at once", async () => {
+    mcp.autoApprove = false;
+    const a = await connect();
+    expect(textOf(await a.client.callTool(SIGN_IN))).toMatch(/^Approve in your browser: /);
+    await until(() => mcp.opened.length === 1);
+    // What status, remove, limits and refresh do: take the profile lock. No waiting.
+    const t0 = Date.now();
+    await withLock({ dir, name: "default" }, () => {});
+    expect(Date.now() - t0).toBeLessThan(1_000);
+    const b = await connect();
+    const t1 = Date.now();
+    expect(textOf(await b.client.callTool(SIGN_IN))).toMatch(/^Assay sign-in is already in progress in another window\./);
+    expect(Date.now() - t1).toBeLessThan(3_000);
+    // The pending flow still completes, and both processes pick the grant up.
+    await fetch(as.approve(mcp.opened[0]!)).then((r) => r.text());
+    await until(() => a.changed.length > 0 && b.changed.length > 0, 10_000);
+    expect(as.grants).toHaveLength(1);
+    expect(mcp.opened).toHaveLength(1);
+  });
+
+  it("a stale marker from a dead pid is ignored", async () => {
+    const dead = spawnSync(process.execPath, ["-e", ""]).pid!;
+    mkdirSync(join(dir, "profiles"), { recursive: true, mode: 0o700 });
+    writeFileSync(join(dir, "profiles", "default.signin.json"), JSON.stringify({ version: 1, pid: dead, startedAt: Date.now(), token: "old", passive: false }), { mode: 0o600 });
+    const a = await connect();
+    expect(textOf(await a.client.callTool(SIGN_IN))).toMatch(/^Approve in your browser: /);
+    await until(() => a.changed.length > 0, 10_000);
+    expect(mcp.opened).toHaveLength(1);
+    expect(existsSync(join(dir, "profiles", "default.signin.json"))).toBe(false);
+  });
+});
+
+describe("bounds and secrets (fix round 1, I2 and I3)", () => {
+  it("12 parallel hostile 16 MiB answers: the proxy stays alive and its memory bounded", async () => {
+    await signedIn();
+    const head = (id: unknown) => `{"jsonrpc":"2.0","id":${JSON.stringify(id)},"result":{"x":[`;
+    const inner = `${"{},".repeat(Math.floor((16 * 1024 * 1024 - 100) / 3) - 1)}{}`;
+    mcp.respond = (msg, res) => {
+      if ((msg.params as { name?: string } | undefined)?.name !== "big") return false;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(`${head(msg.id)}${inner}]}}`);
+      return true;
+    };
+    const raw = spawnRaw([], { TEST_HEAP: "1" });
+    raw.send(INIT());
+    await raw.answer(0);
+    const base = raw.lineCount();
+    for (let i = 1; i <= 12; i++) raw.send(JSON.stringify({ jsonrpc: "2.0", id: i, method: "tools/call", params: { name: "big" } }));
+    await until(() => raw.lineCount() >= base + 12, 90_000);
+    raw.send(JSON.stringify({ jsonrpc: "2.0", id: 100, method: "ping" }));
+    await until(() => raw.lineCount() >= base + 13, 10_000);
+    expect(raw.child.exitCode).toBeNull();
+    const answered = raw
+      .stdout()
+      .split("\n")
+      .filter((l) => l !== "")
+      .map((l) => JSON.parse(l) as { id?: number; result?: unknown; error?: { message: string } });
+    for (let i = 1; i <= 12; i++) expect(answered.some((m) => m.id === i && ("result" in m || "error" in m))).toBe(true);
+    expect(mcp.peakHeap).toBeGreaterThan(0);
+    expect(mcp.peakHeap).toBeLessThan(1_536 * 1024 * 1024);
+  }, 120_000);
+
+  it("401 → refresh → retry succeeds, and the retry carries the new access token", async () => {
+    const pair = await signedIn();
+    const { client } = await connect();
+    mcp.refuseOnce.add(pair.accessToken);
+    expect((await client.listTools()).tools.map((t) => t.name)).toEqual(["echo"]);
+    expect(as.tokenCalls("refresh_token")).toHaveLength(1);
+    const last = mcp.requests.at(-1)!.headers.authorization!;
+    expect(last).toMatch(/^Bearer assay_at_/);
+    expect(last).not.toBe(`Bearer ${pair.accessToken}`);
+    for (const r of mcp.requests) expect(JSON.stringify(r.headers) + r.raw).not.toContain(pair.refreshToken);
+  });
+
+  it("no secret leaves except the access token: sign-in, forwarding, 401 → refresh, tools/call", async () => {
+    const KEY = `0x${"5a".repeat(32)}`;
+    const store = new Keychain(new FileKeyring(keyringFile), { profile: "default", environment: "e2e" });
+    await withLock({ dir, name: "default" }, (lock) => store.set(lock, "delegate_key", KEY));
+    const { client, changed } = await connect();
+    await client.callTool({ name: "assay_sign_in", arguments: {} });
+    await until(() => changed.length > 0, 10_000);
+    await client.listTools();
+    await client.callTool({ name: "echo", arguments: { a: 1 } });
+    const access = (JSON.parse((await store.getAccessToken()) ? JSON.stringify(await store.getAccessToken()) : "null") as { token: string }).token;
+    mcp.refuseOnce.add(access);
+    await client.callTool({ name: "echo", arguments: { a: 2 } });
+    expect(as.tokenCalls("refresh_token")).toHaveLength(1);
+
+    const keyHex = "5a".repeat(32);
+    for (const r of mcp.requests) {
+      const all = JSON.stringify(r.headers) + r.raw;
+      expect(all).not.toMatch(/assay_(rt|ac|sk_live)_/);
+      expect(all).not.toContain(keyHex);
+      expect(r.headers.authorization).toMatch(/^Bearer assay_at_[A-Za-z0-9_-]+$/);
+    }
+    for (const r of as.requests) {
+      if (r.authorization !== undefined) expect(r.authorization).toMatch(/^Bearer assay_at_[A-Za-z0-9_-]+$/);
+      expect(r.form?.toString() ?? "").not.toContain(keyHex);
+      if (r.path !== "/oauth/token" && r.path !== "/oauth/revoke") expect(r.form?.toString() ?? "").not.toMatch(/assay_rt_/);
+    }
+    for (const u of mcp.fetched) expect(u).not.toMatch(/assay_(at|rt|ac)_|5a5a5a/);
+  });
+
+  it("a later duplicate-id response is ignored (JSON and SSE), and SSE reading stops at the answer", async () => {
+    await signedIn();
+    let closedEarly = false;
+    mcp.respond = (msg, res) => {
+      const name = (msg.params as { name?: string } | undefined)?.name;
+      const answer = (v: string) => JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { v } });
+      if (name === "dupJson") {
+        res.writeHead(200, { "content-type": "application/json" }).end(`[${answer("A")},${answer("B")}]`);
+        return true;
+      }
+      if (name === "dupSse") {
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.write(`data: ${answer("A")}\n\n`);
+        res.on("close", () => {
+          if (!res.writableEnded) closedEarly = true;
+        });
+        setTimeout(() => {
+          if (!res.destroyed) res.end(`data: ${answer("B")}\n\n`);
+        }, 500);
+        return true;
+      }
+      return false;
+    };
+    const raw = spawnRaw();
+    raw.send(INIT());
+    await raw.answer(0);
+    raw.send(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "dupJson" } }));
+    raw.send(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "dupSse" } }));
+    await raw.answer(1);
+    await raw.answer(2);
+    await sleep(800);
+    expect(raw.messages().filter((m) => m.id === 1)).toEqual([{ jsonrpc: "2.0", id: 1, result: { v: "A" } }]);
+    expect(raw.messages().filter((m) => m.id === 2)).toEqual([{ jsonrpc: "2.0", id: 2, result: { v: "A" } }]);
+    expect(closedEarly).toBe(true);
   });
 });

@@ -32,6 +32,12 @@ import {
 export const REQUEST_TIMEOUT_MS = 120_000;
 /** The largest answer body read from the remote. */
 export const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
+/** Forwarded requests in flight at once; more wait in a queue (fix round 1, I2). */
+export const MAX_CONCURRENT = 4;
+/** How long a request may wait in that queue before it gets `-32002`. */
+export const QUEUE_WAIT_MS = 30_000;
+/** Bytes of answer bodies held at once across every exchange. */
+export const MAX_INFLIGHT_BYTES = 32 * 1024 * 1024;
 /** Server-to-client requests answered per exchange; more are ignored. */
 const MAX_SERVER_REQUESTS = 8;
 const SESSION_ID_RE = /^[\x21-\x7e]{1,256}$/;
@@ -51,6 +57,9 @@ export interface ForwarderOptions {
   readonly fetch: FetchLike;
   readonly timeoutMs?: number;
   readonly maxResponseBytes?: number;
+  readonly maxConcurrent?: number;
+  readonly queueWaitMs?: number;
+  readonly maxInflightBytes?: number;
   readonly log?: Logger;
 }
 
@@ -68,15 +77,64 @@ export interface Exchange {
 
 class TooLarge extends Error {}
 
+/** Bytes charged against the process-wide budget by one exchange. */
+class Charge {
+  private held = 0;
+  constructor(private readonly pool: { used: number; max: number }) {}
+  add(n: number): void {
+    if (this.pool.used + n > this.pool.max) throw new TooLarge();
+    this.pool.used += n;
+    this.held += n;
+  }
+  release(): void {
+    this.pool.used -= this.held;
+    this.held = 0;
+  }
+}
+
+/** A counting semaphore with a bounded wait. */
+class Slots {
+  private busy = 0;
+  private readonly waiting: (() => void)[] = [];
+  constructor(private readonly max: number) {}
+  async acquire(waitMs: number): Promise<boolean> {
+    if (this.busy < this.max) {
+      this.busy++;
+      return true;
+    }
+    return new Promise<boolean>((resolve) => {
+      const grant = () => {
+        clearTimeout(timer);
+        this.busy++;
+        resolve(true);
+      };
+      const timer = setTimeout(() => {
+        const i = this.waiting.indexOf(grant);
+        if (i !== -1) this.waiting.splice(i, 1);
+        resolve(false);
+      }, waitMs);
+      this.waiting.push(grant);
+    });
+  }
+  release(): void {
+    this.busy--;
+    this.waiting.shift()?.();
+  }
+}
+
 export class Forwarder {
   private sessionId: string | null = null;
   private readonly timeoutMs: number;
   private readonly maxBytes: number;
   private readonly log: Logger;
+  private readonly slots: Slots;
+  private readonly pool: { used: number; max: number };
 
   constructor(private readonly options: ForwarderOptions) {
     this.timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
     this.maxBytes = options.maxResponseBytes ?? MAX_RESPONSE_BYTES;
+    this.slots = new Slots(options.maxConcurrent ?? MAX_CONCURRENT);
+    this.pool = { used: 0, max: options.maxInflightBytes ?? MAX_INFLIGHT_BYTES };
     this.log = (options.log ?? silentLogger).child("forward");
   }
 
@@ -105,8 +163,22 @@ export class Forwarder {
     return done.kind === "unauthorized" || done.kind === "error" ? done : init;
   }
 
-  /** One exchange. Never throws. */
+  /** One exchange. Never throws. Requests wait for one of the concurrent slots. */
   async send(exchange: Exchange): Promise<Outcome> {
+    if (exchange.id === null) return this.exchange(exchange);
+    if (!(await this.slots.acquire(this.options.queueWaitMs ?? QUEUE_WAIT_MS))) {
+      this.log.warn("too many calls in flight; one was not sent");
+      return { kind: "error", code: TIMEOUT, message: "Assay is busy with other calls from this app. Try again." };
+    }
+    try {
+      return await this.exchange(exchange);
+    } finally {
+      this.slots.release();
+    }
+  }
+
+  private async exchange(exchange: Exchange): Promise<Outcome> {
+    const charge = new Charge(this.pool);
     const controller = new AbortController();
     let timedOut = false;
     const timer = setTimeout(() => {
@@ -116,7 +188,7 @@ export class Forwarder {
     const started = Date.now();
     try {
       const res = await this.post(exchange.body, exchange.bearer, exchange.version, controller.signal);
-      const outcome = await this.read(res, exchange, controller);
+      const outcome = await this.read(res, exchange, controller, charge);
       this.log.debug("exchange", { status: res.status, ms: Date.now() - started, outcome: outcome.kind });
       return outcome;
     } catch (err) {
@@ -128,6 +200,7 @@ export class Forwarder {
     } finally {
       clearTimeout(timer);
       controller.abort();
+      charge.release();
     }
   }
 
@@ -141,7 +214,7 @@ export class Forwarder {
     return this.options.fetch(this.options.url, { method: "POST", headers, body, bearer, signal, log: this.log });
   }
 
-  private async read(res: Response, exchange: Exchange, controller: AbortController): Promise<Outcome> {
+  private async read(res: Response, exchange: Exchange, controller: AbortController, charge: Charge): Promise<Outcome> {
     if (res.status === 401) {
       await cancel(res);
       return { kind: "unauthorized" };
@@ -163,9 +236,9 @@ export class Forwarder {
     const pair = new Pairing(exchange, (n) => this.answerServerRequest(n, exchange));
     const type = (res.headers.get("content-type") ?? "").toLowerCase();
     if (res.ok && type.startsWith("text/event-stream")) {
-      await this.readSse(res, pair, controller);
+      await this.readSse(res, pair, controller, charge);
     } else if (type.startsWith("application/json")) {
-      const text = await readBounded(res, this.maxBytes);
+      const text = await readBounded(res, this.maxBytes, charge);
       let parsed: unknown;
       try {
         parsed = JSON.parse(text);
@@ -181,11 +254,12 @@ export class Forwarder {
     return { kind: "error", code: SERVER_ERROR, message: "Assay's answer had no result for this request." };
   }
 
-  private async readSse(res: Response, pair: Pairing, controller: AbortController): Promise<void> {
+  private async readSse(res: Response, pair: Pairing, controller: AbortController, charge: Charge): Promise<void> {
     if (!res.body) return;
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    let scanFrom = 0;
     let total = 0;
     let data: string[] = [];
     let event = "";
@@ -206,11 +280,14 @@ export class Forwarder {
         if (done) break;
         total += value.byteLength;
         if (total > this.maxBytes) throw new TooLarge();
+        charge.add(value.byteLength);
         buffer += decoder.decode(value, { stream: true });
         let nl: number;
-        while (!pair.response && (nl = buffer.indexOf("\n")) !== -1) {
+        // Only the newly appended text is searched (an unterminated line is not rescanned).
+        while (!pair.response && (nl = buffer.indexOf("\n", scanFrom)) !== -1) {
           const line = buffer.slice(0, nl).replace(/\r$/, "");
           buffer = buffer.slice(nl + 1);
+          scanFrom = 0;
           if (line === "") dispatch();
           else if (line.startsWith(":")) continue;
           else {
@@ -221,6 +298,7 @@ export class Forwarder {
             else if (field === "event") event = value;
           }
         }
+        scanFrom = buffer.length;
       }
       if (!pair.response) dispatch();
     } finally {
@@ -274,7 +352,7 @@ async function cancel(res: Response): Promise<void> {
   }
 }
 
-async function readBounded(res: Response, max: number): Promise<string> {
+async function readBounded(res: Response, max: number, charge: Charge): Promise<string> {
   if (!res.body) return "";
   const declared = Number(res.headers.get("content-length"));
   if (Number.isFinite(declared) && declared > max) {
@@ -289,9 +367,12 @@ async function readBounded(res: Response, max: number): Promise<string> {
       const { done, value } = await reader.read();
       if (done) break;
       total += value.byteLength;
-      if (total > max) {
+      try {
+        if (total > max) throw new TooLarge();
+        charge.add(value.byteLength);
+      } catch (err) {
         await reader.cancel().catch(() => {});
-        throw new TooLarge();
+        throw err;
       }
       chunks.push(value);
     }

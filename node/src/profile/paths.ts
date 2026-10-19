@@ -76,7 +76,7 @@ export function isValidProfileName(name: string): boolean {
   return PROFILE_NAME.test(name);
 }
 
-export type ProfileFileKind = "profile" | "limits" | "paid-urls" | "state" | "settings" | "lock";
+export type ProfileFileKind = "profile" | "limits" | "paid-urls" | "state" | "settings" | "signin" | "lock";
 
 const SUFFIX: Record<ProfileFileKind, string> = {
   profile: ".json",
@@ -84,6 +84,7 @@ const SUFFIX: Record<ProfileFileKind, string> = {
   "paid-urls": ".paid-urls.json",
   state: ".state.json",
   settings: ".settings.json",
+  signin: ".signin.json",
   lock: ".lock.d",
 };
 

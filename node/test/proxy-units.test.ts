@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parseServeArgs } from "../src/commands/serve.js";
 import { AliasTable } from "../src/proxy/aliases.js";
-import { CallRegistry, CONFIRMATION_TTL_MS } from "../src/proxy/calls.js";
+import { CallRegistry, CONFIRMATION_TTL_MS, TOMBSTONE_MS } from "../src/proxy/calls.js";
 import { checkEnvironment } from "../src/proxy/environment.js";
 import { reasonOf } from "../src/proxy/forwarder.js";
 import { appName, SignInController } from "../src/proxy/presignin.js";
@@ -74,8 +74,13 @@ describe("call records (pairing, one voucher, single-use confirmation)", () => {
     now += CONFIRMATION_TTL_MS + 1;
     expect(r.consumeConfirmation(t2)).toEqual({ kind: "expired", call });
     const t3 = r.issueConfirmation(call);
+    const t4 = r.issueConfirmation(call);
     r.end(call);
+    // A "Pay" after the call ended is told apart from an unknown token, once (review M11).
+    expect(r.consumeConfirmation(t3)).toEqual({ kind: "expired", call });
     expect(r.consumeConfirmation(t3)).toEqual({ kind: "unknown" });
+    now += TOMBSTONE_MS;
+    expect(r.consumeConfirmation(t4)).toEqual({ kind: "unknown" });
     expect(() => r.issueConfirmation(call)).toThrow();
   });
 });
@@ -104,34 +109,80 @@ describe("environment checks (2.4-N1)", () => {
 });
 
 describe("sign-in controller", () => {
+  const busy = () => new Error("busy");
+
   it("prints first, opens the browser on the first call only, and runs one sign-in at a time", async () => {
     const opened: string[] = [];
     let starts = 0;
+    let activations = 0;
     let finish!: () => void;
     const c = new SignInController(
       async (hooks) => {
         starts++;
+        expect(hooks.passive).toBe(true);
+        hooks.onMarker(async () => (activations++, true));
         hooks.onLink("http://localhost:3200/oauth/authorize?x=1");
         await hooks.openBrowser("http://localhost:3200/oauth/authorize?x=1");
         await new Promise<void>((r) => (finish = r));
       },
       async (u) => (opened.push(u), true),
+      busy,
     );
     expect(await c.begin(false)).toContain("authorize");
     expect(opened).toEqual([]);
     await c.begin(true);
     await c.begin(true);
     expect(opened).toHaveLength(1);
+    expect(activations).toBe(1);
     expect(starts).toBe(1);
     finish();
     await new Promise((r) => setTimeout(r, 0));
     expect(c.active).toBe(false);
   });
 
+  it("a passive sign-in taken over elsewhere opens nothing and is cancelled", async () => {
+    const opened: string[] = [];
+    let signal!: AbortSignal;
+    const c = new SignInController(
+      async (hooks) => {
+        signal = hooks.signal;
+        hooks.onMarker(async () => false);
+        hooks.onLink("http://localhost:3200/oauth/authorize?x=1");
+        await new Promise((r) => hooks.signal.addEventListener("abort", r));
+      },
+      async (u) => (opened.push(u), true),
+      busy,
+    );
+    await c.begin(false);
+    await expect(c.begin(true)).rejects.toThrow("busy");
+    expect(opened).toEqual([]);
+    expect(signal.aborted).toBe(true);
+  });
+
+  it("an active sign-in opens the browser at once", async () => {
+    const opened: string[] = [];
+    const c = new SignInController(
+      async (hooks) => {
+        expect(hooks.passive).toBe(false);
+        hooks.onLink("http://localhost:3200/oauth/authorize?x=2");
+        await hooks.openBrowser("http://localhost:3200/oauth/authorize?x=2");
+      },
+      async (u) => (opened.push(u), true),
+      busy,
+    );
+    await c.begin(true);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(opened).toHaveLength(1);
+  });
+
   it("rejects when the sign-in cannot start", async () => {
-    const c = new SignInController(async () => {
-      throw new Error("LOCK_TIMEOUT");
-    }, async () => true);
+    const c = new SignInController(
+      async () => {
+        throw new Error("LOCK_TIMEOUT");
+      },
+      async () => true,
+      busy,
+    );
     await expect(c.begin(true)).rejects.toThrow("LOCK_TIMEOUT");
   });
 

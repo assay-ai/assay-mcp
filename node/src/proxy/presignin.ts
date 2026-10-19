@@ -78,50 +78,75 @@ export function answerSignedOut(method: string): { result: Record<string, unknow
   return { error: { code: METHOD_NOT_FOUND, message: "Method not found" } };
 }
 
+/** §7.6 step 3 when another process's sign-in is pending (Task 2.8 fix round 1). */
+export function signInBusyText(app: string): string {
+  return `Assay sign-in is already in progress in another window. Approve it there; Assay tools appear here when you're done (if they don't, restart ${app}).`;
+}
+
 export interface SignInHooks {
   /** Called with the authorize link as soon as it exists. */
   readonly onLink: (link: string) => void;
   /** Called by the flow when it would open the browser; returns whether it was opened. */
   readonly openBrowser: (link: string) => Promise<boolean>;
+  /** A link-only (startup) sign-in. */
+  readonly passive: boolean;
+  /** Cancels the wait for the browser. */
+  readonly signal: AbortSignal;
+  /** Receives the function that marks a passive sign-in active (false: taken over elsewhere). */
+  readonly onMarker: (activate: () => Promise<boolean>) => void;
 }
 
 /**
- * Runs at most one F1 sign-in at a time and decides when the browser opens: a sign-in started
- * at startup only prints its link (§7.6 step 4); the first `assay_sign_in` call opens it
- * (step 3), once.
+ * Runs at most one F1 sign-in at a time in this process and decides when the browser opens:
+ * a sign-in started at startup only prints its link (§7.6 step 4) and is passive; the first
+ * `assay_sign_in` call opens it (step 3), once, and marks it active.
  */
 export class SignInController {
   private running: {
     link: Promise<string>;
-    linkValue: string | null;
-    wantOpen: boolean;
-    opened: boolean;
+    passive: boolean;
+    opening: Promise<string> | null;
+    abort: AbortController;
+    activate: (() => Promise<boolean>) | null;
   } | null = null;
 
   constructor(
     private readonly start: (hooks: SignInHooks) => Promise<void>,
     private readonly open: (link: string) => Promise<boolean>,
+    /** The error for a sign-in another process took over. */
+    private readonly busy: () => Error,
   ) {}
 
   get active(): boolean {
     return this.running !== null;
   }
 
+  /** Stops waiting for the browser (a grant arrived some other way). */
+  cancel(): void {
+    this.running?.abort.abort();
+  }
+
   /**
    * Starts a sign-in, or joins the one running. Resolves with the link; rejects when the
-   * sign-in could not start (for example `LOCK_TIMEOUT`). `openBrowser`: open it now.
+   * sign-in could not start (`LOCK_TIMEOUT`, another process's sign-in, a stored grant).
+   * `openBrowser`: open it now (a passive sign-in is first marked active, which fails when
+   * another process took it over).
    */
   begin(openBrowser: boolean): Promise<string> {
     const current = this.running;
     if (current) {
-      if (openBrowser && !current.opened) {
-        current.wantOpen = true;
-        if (current.linkValue !== null) {
-          current.opened = true;
-          void this.open(current.linkValue).catch(() => false);
+      if (!openBrowser || !current.passive) return current.opening ?? current.link;
+      current.opening ??= (async () => {
+        const link = await current.link;
+        if (!(await (current.activate?.() ?? Promise.resolve(false)))) {
+          current.abort.abort();
+          throw this.busy();
         }
-      }
-      return current.link;
+        void this.open(link).catch(() => false);
+        return link;
+      })();
+      current.opening.catch(() => {});
+      return current.opening;
     }
     let resolveLink!: (l: string) => void;
     let rejectLink!: (e: unknown) => void;
@@ -130,18 +155,17 @@ export class SignInController {
       rejectLink = rej;
     });
     link.catch(() => {}); // observed by whoever awaits it; never an unhandled rejection
-    const state = { link, linkValue: null as string | null, wantOpen: openBrowser, opened: false };
+    const state = { link, passive: !openBrowser, opening: null as Promise<string> | null, abort: new AbortController(), activate: null as (() => Promise<boolean>) | null };
     this.running = state;
     const hooks: SignInHooks = {
-      onLink: (l) => {
-        state.linkValue = l;
-        resolveLink(l);
+      passive: !openBrowser,
+      signal: state.abort.signal,
+      onMarker: (activate) => {
+        state.activate = activate;
       },
-      openBrowser: async (l) => {
-        if (!state.wantOpen || state.opened) return true; // printed only; opened on the first call
-        state.opened = true;
-        return this.open(l).catch(() => false);
-      },
+      onLink: (l) => resolveLink(l),
+      // An active sign-in opens at once; a passive one only printed its link (opened later by `begin(true)`).
+      openBrowser: async (l) => (state.passive ? true : this.open(l).catch(() => false)),
     };
     this.start(hooks)
       .catch((err: unknown) => {

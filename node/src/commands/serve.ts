@@ -193,11 +193,13 @@ export async function serve(args: readonly string[], deps: ServeDeps = {}): Prom
       fetch: (url, init) => pinnedFetch(deployment, url, init),
       openBrowser: browser,
       signIn: (hooks) =>
-        signIn(profile, deployment, {}, {
+        signIn(profile, deployment, { passive: hooks.passive }, {
           keychain,
           log,
           onLink: hooks.onLink,
           openBrowser: hooks.openBrowser,
+          signal: hooks.signal,
+          onMarker: hooks.onMarker,
           ...(deps.lockOptions ? { lockOptions: deps.lockOptions } : {}),
           ...(deps.signInTimeoutMs !== undefined ? { timeoutMs: deps.signInTimeoutMs } : {}),
         }),
@@ -230,6 +232,9 @@ export async function serve(args: readonly string[], deps: ServeDeps = {}): Prom
  * at once: a pending sign-in or lock heartbeat must not keep it alive.
  */
 export async function run(args: readonly string[]): Promise<number> {
+  // A host that kills the server: exit through process.exit so the exit hooks release a
+  // held lock and the sign-in marker (review M6).
+  for (const [signal, n] of [["SIGTERM", 15], ["SIGINT", 2], ["SIGHUP", 1]] as const) process.once(signal, () => process.exit(128 + n));
   const code = await serve(args);
   if (code === EXIT_OK) process.exit(EXIT_OK);
   return code;

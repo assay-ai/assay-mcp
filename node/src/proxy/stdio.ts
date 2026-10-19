@@ -95,18 +95,24 @@ export class StdoutWriter {
     out.on("error", () => this.close());
   }
 
-  send(message: JsonRpcMessage): void {
-    if (this.closed) return;
+  /**
+   * Writes one message. Returns false when nothing was written: the stream is closed, or the
+   * message cannot be serialised (parsed JSON nested deeper than `JSON.stringify` can recurse).
+   */
+  send(message: JsonRpcMessage): boolean {
+    if (this.closed) return false;
     let line: string;
     try {
       line = `${JSON.stringify(message)}\n`;
     } catch {
-      return; // not serialisable (cannot happen for parsed JSON): nothing is written
+      return false;
     }
     try {
       this.out.write(line);
+      return true;
     } catch {
       this.close();
+      return false;
     }
   }
 

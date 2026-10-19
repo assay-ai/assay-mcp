@@ -1,6 +1,6 @@
 import { SIGN_IN_TOOL } from "../clients/server-name.js";
 import { silentLogger, type Logger } from "../log/logger.js";
-import { identifyCredential, SignInError, type SignInResult } from "../oauth/flow.js";
+import { identifyCredential, SignInError, signInBusyError, type SignInResult } from "../oauth/flow.js";
 import { currentAccess, hasGrant, RefreshError, refreshUnderLock, type TokenContext } from "../oauth/tokens.js";
 import type { ResolvedDeployment } from "../profile/deployments.js";
 import { KeychainError, type Keychain } from "../profile/keychain.js";
@@ -9,7 +9,7 @@ import { createProfile, readProfileFor, updateProfile } from "../profile/profile
 import { AliasTable } from "./aliases.js";
 import { CallRegistry, type ForwardedCall } from "./calls.js";
 import { Forwarder, type FetchLike, type Outcome } from "./forwarder.js";
-import { answerInitialize, answerSignedOut, appName, SignInController, signInText, type SignInHooks } from "./presignin.js";
+import { answerInitialize, answerSignedOut, appName, SignInController, signInBusyText, signInText, type SignInHooks } from "./presignin.js";
 import {
   classify,
   envelopeVersion,
@@ -17,6 +17,7 @@ import {
   INTERNAL_ERROR,
   INVALID_REQUEST,
   isModernVersion,
+  isValidId,
   LOCK_BUSY,
   MESSAGES,
   NEWEST_LEGACY_VERSION,
@@ -24,6 +25,7 @@ import {
   resultResponse,
   SERVER_ERROR,
   UNREACHABLE,
+  type JsonRpcId,
   type JsonRpcNotification,
   type JsonRpcRequest,
   type JsonRpcResponse,
@@ -63,7 +65,7 @@ export interface ProxyOptions {
   readonly writer: StdoutWriter;
   /** stderr, for the sign-in link (never stdout). */
   readonly stderr: (line: string) => void;
-  /** F1 (`oauth/flow.ts` `signIn` with the process's keychain and lock options). */
+  /** F1 (`oauth/flow.ts` `signIn` with the process's keychain and lock options; the hooks carry `passive`, `signal`, `onMarker`). */
   readonly signIn: (hooks: SignInHooks) => Promise<SignInResult>;
   /** Opens the browser on a link this process built (`oauth/flow.ts` `openBrowser`). */
   readonly openBrowser: (url: string) => Promise<boolean>;
@@ -108,7 +110,7 @@ export class Proxy {
       ...(o.requestTimeoutMs !== undefined ? { timeoutMs: o.requestTimeoutMs } : {}),
     });
     this.aliases = new AliasTable(o.serverName, o.log ?? silentLogger);
-    this.signIns = new SignInController((hooks) => this.runSignIn(hooks), (url) => o.openBrowser(url));
+    this.signIns = new SignInController((hooks) => this.runSignIn(hooks), (url) => o.openBrowser(url), signInBusyError);
   }
 
   get currentMode(): Mode {
@@ -181,7 +183,18 @@ export class Proxy {
     if (Array.isArray(parsed)) {
       // §7.6: batches are split and sent one by one.
       if (parsed.length === 0) this.o.writer.send(errorResponse(null, INVALID_REQUEST, "Invalid Request"));
-      for (const item of parsed) this.handleMessage(item, JSON.stringify(item));
+      for (const item of parsed) {
+        let raw: string;
+        try {
+          raw = JSON.stringify(item);
+        } catch {
+          // Nested deeper than JSON.stringify can go: refused, never a crash (review M2).
+          const id = typeof item === "object" && item !== null && isValidId((item as { id?: unknown }).id) ? (item as { id: JsonRpcId }).id : null;
+          this.o.writer.send(errorResponse(id, INVALID_REQUEST, "Invalid Request"));
+          continue;
+        }
+        this.handleMessage(item, raw);
+      }
       return;
     }
     this.handleMessage(parsed, text);
@@ -213,7 +226,10 @@ export class Proxy {
               this.log.error("request failed", { method: req.method, error: errorName(err) });
               return errorResponse(req.id, INTERNAL_ERROR, "Internal error");
             })
-            .then((response) => this.o.writer.send(response)),
+            .then((response) => {
+              // An answer that cannot be serialised still gets an answer (review M1).
+              if (!this.o.writer.send(response)) this.o.writer.send(errorResponse(req.id, SERVER_ERROR, "Assay's answer could not be passed on."));
+            }),
         );
         return;
       }
@@ -262,6 +278,11 @@ export class Proxy {
     try {
       link = await this.signIns.begin(true);
     } catch (err) {
+      const tool = typeof req.params?.name === "string" ? req.params.name : "";
+      if (err instanceof SignInError && err.reason === "busy") {
+        return resultResponse(req.id, { content: [{ type: "text", text: signInBusyText(this.app) }], ...(tool === SIGN_IN_TOOL ? {} : { isError: true }) });
+      }
+      if (this.mode === "signed-in") return this.forward(req, JSON.stringify(req)); // a grant was already stored
       if (err instanceof LockError && err.code === "LOCK_TIMEOUT") return errorResponse(req.id, LOCK_BUSY, MESSAGES.lockBusy);
       if (err instanceof KeychainError) return errorResponse(req.id, SERVER_ERROR, err.message);
       this.log.warn("sign-in could not start", { error: errorName(err) });
@@ -284,6 +305,12 @@ export class Proxy {
       throw err;
     }
     this.rejectedRefresh = null;
+    if (result.existing) {
+      // A grant was stored before or meanwhile (another window): use it.
+      this.credentialChecked = false;
+      this.enterSignedIn();
+      return;
+    }
     this.credentialChecked = result.credentialId !== null;
     this.credentialAttemptAt = 0;
     this.enterSignedIn();
@@ -291,7 +318,7 @@ export class Proxy {
 
   /** A signed-out process picks up a grant another process (or `login`) stored. */
   private async lookForGrant(): Promise<void> {
-    if (this.o.apiKey !== null || this.mode !== "pre-sign-in" || this.signIns.active) return;
+    if (this.o.apiKey !== null || this.mode !== "pre-sign-in") return;
     let refresh: string | null;
     try {
       refresh = await this.o.keychain.get("refresh_token");
@@ -299,6 +326,7 @@ export class Proxy {
       return;
     }
     if (refresh !== null && refresh !== this.rejectedRefresh) {
+      this.signIns.cancel(); // another process signed in: stop waiting for our own browser
       this.credentialChecked = false;
       this.enterSignedIn();
     }
