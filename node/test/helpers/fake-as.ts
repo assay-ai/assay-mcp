@@ -164,7 +164,10 @@ export class FakeAs {
       return;
     }
     if (mode === "huge") {
-      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ error: "x", pad: "a".repeat(100_000) }));
+      // A valid answer (a real pair on the token endpoint), padded past 64 KiB: only the body
+      // cap can refuse it.
+      const [status, body] = url.pathname === "/oauth/token" && form ? this.token(form) : [200, {}];
+      res.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify({ ...(body as object), pad: "a".repeat(100_000) }));
       return;
     }
     const json = (status: number, body: unknown) => {

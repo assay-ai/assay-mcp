@@ -1,7 +1,7 @@
 import { execFile as nodeExecFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
-import { hostname as osHostname, tmpdir } from "node:os";
+import { hostname as osHostname, userInfo } from "node:os";
 import { win32 } from "node:path";
 import { silentLogger, type Logger } from "../log/logger.js";
 import { pinnedFetch } from "../net/fetch.js";
@@ -171,7 +171,8 @@ export interface LauncherInputs {
 export function browserCommand(inputs: LauncherInputs, url: string): { file: string; args: string[] } | null {
   if (inputs.platform === "win32") {
     const fromEnv = inputs.env.SystemRoot ?? "";
-    const roots = WINDOWS_DIR_RE.test(fromEnv) ? [fromEnv, DEFAULT_WINDOWS_DIR] : [DEFAULT_WINDOWS_DIR];
+    // The fixed location first; `SystemRoot` (never `windir`) only when that file is missing.
+    const roots = WINDOWS_DIR_RE.test(fromEnv) ? [DEFAULT_WINDOWS_DIR, fromEnv] : [DEFAULT_WINDOWS_DIR];
     for (const root of roots) {
       const file = win32.join(root, "System32", "rundll32.exe");
       if (inputs.exists(file)) return { file, args: ["url.dll,FileProtocolHandler", url] };
@@ -183,8 +184,20 @@ export function browserCommand(inputs: LauncherInputs, url: string): { file: str
   return file ? { file, args: [url] } : null;
 }
 
-/** The launcher's environment: the process env without `BROWSER` (xdg-open would run it). */
-function launcherEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+/** Desktop-session variables `xdg-open` needs to reach the running browser. */
+const XDG_ENV_KEEP = ["HOME", "DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "XDG_RUNTIME_DIR", "XDG_CURRENT_DESKTOP", "XDG_SESSION_TYPE", "DBUS_SESSION_BUS_ADDRESS", "LANG"];
+
+/**
+ * The launcher's environment. `xdg-open` is a shell script that runs other programs by name
+ * and honours `BROWSER`, so it gets `PATH=/usr/bin:/bin` and only the desktop-session
+ * variables. Elsewhere the process env is kept, without `BROWSER`.
+ */
+export function launcherEnv(platform: NodeJS.Platform, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  if (platform !== "darwin" && platform !== "win32") {
+    const minimal: NodeJS.ProcessEnv = { PATH: "/usr/bin:/bin" };
+    for (const key of XDG_ENV_KEEP) if (typeof env[key] === "string") minimal[key] = env[key];
+    return minimal;
+  }
   const copy = { ...env };
   delete copy.BROWSER;
   return copy;
@@ -217,10 +230,11 @@ export function openBrowser(
     return Promise.resolve(false);
   }
   const env = options.env ?? process.env;
-  const command = browserCommand({ platform: options.platform ?? process.platform, env, exists: options.exists ?? existsSync }, parsed.href);
+  const platform = options.platform ?? process.platform;
+  const command = browserCommand({ platform, env, exists: options.exists ?? existsSync }, parsed.href);
   if (command === null) return Promise.resolve(false);
   const run = options.execFile ?? (nodeExecFile as unknown as ExecFile);
-  const launch: LaunchOptions = { shell: false, windowsHide: true, timeout: 15_000, cwd: options.cwd ?? tmpdir(), env: launcherEnv(env) };
+  const launch: LaunchOptions = { shell: false, windowsHide: true, timeout: 15_000, cwd: options.cwd ?? userInfo().homedir, env: launcherEnv(platform, env) };
   return new Promise((resolve) => {
     try {
       run(command.file, command.args, launch, (err) => resolve(err === null));

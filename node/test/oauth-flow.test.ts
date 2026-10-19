@@ -1,7 +1,7 @@
 import { fork, spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
-import { tmpdir } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -187,6 +187,16 @@ describe("F1 sign-in", () => {
         options: { shell: false, windowsHide: true, timeout: 15_000, cwd: "/profile/dir", env: { PATH: "/project/bin:.", HOME: "/home/user" } },
       },
     ]);
+    // xdg-open: PATH=/usr/bin:/bin and the desktop-session variables only; cwd defaults to home.
+    calls.length = 0;
+    const linuxEnv = { PATH: "/project/bin:.", BROWSER: "/project/evil", DISPLAY: ":0", LD_PRELOAD: "/project/x.so", HOME: "/home/user" };
+    expect(await openBrowser(deployment, link, { execFile, platform: "linux", env: linuxEnv, exists: everywhere })).toBe(true);
+    expect(calls[0]).toEqual({
+      file: "/usr/bin/xdg-open",
+      args: [link],
+      options: { shell: false, windowsHide: true, timeout: 15_000, cwd: userInfo().homedir, env: { PATH: "/usr/bin:/bin", HOME: "/home/user", DISPLAY: ":0" } },
+    });
+    calls.length = 1;
 
     // Anything not built from the built-in origins is never launched.
     for (const bad of ["https://evil.example/oauth/authorize", "file:///etc/passwd", "javascript:alert(1)", `http://user:pw@localhost:3200/x`, "not a url"]) {
@@ -213,7 +223,11 @@ describe("F1 sign-in", () => {
     expect(cmd("freebsd", {}, has("/usr/bin/xdg-open"))).toEqual({ file: "/usr/bin/xdg-open", args: [link] });
     const win = "C:\\Windows\\System32\\rundll32.exe";
     expect(cmd("win32", {}, has(win))).toEqual({ file: win, args: ["url.dll,FileProtocolHandler", link] });
-    expect(cmd("win32", { SystemRoot: "D:\\Windows" }, has("D:\\Windows\\System32\\rundll32.exe", win))!.file).toBe("D:\\Windows\\System32\\rundll32.exe");
+    // C:\Windows first; SystemRoot only when that file is missing; windir is never read.
+    const d = "D:\\Windows\\System32\\rundll32.exe";
+    expect(cmd("win32", { SystemRoot: "D:\\Windows" }, has(d, win))!.file).toBe(win);
+    expect(cmd("win32", { SystemRoot: "D:\\Windows" }, has(d))!.file).toBe(d);
+    expect(cmd("win32", { windir: "D:\\Windows" }, has(d))).toBeNull();
     // A project config pointing SystemRoot at the repository is ignored.
     for (const root of ["C:\\work\\repo", ".", "\\\\host\\share\\Windows", "D:\\Windows\\..\\repo"]) {
       expect(cmd("win32", { SystemRoot: root }, has(`${root}\\System32\\rundll32.exe`, win))!.file).toBe(win);
