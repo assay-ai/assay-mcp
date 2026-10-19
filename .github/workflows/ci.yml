@@ -59,3 +59,95 @@ jobs:
         with:
           node-version: "20"
       - run: node node/dist/cli.js --version
+
+  keychain:
+    # The real OS keychain (spec §7.9, §12.4): round-trip and the startup probe on every OS, and
+    # "no keychain" / "locked keychain" → exit 1 with the exact text. The default test run never
+    # touches the keychain; these runs opt in through the env vars below.
+    name: keychain (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos
+            os: macos-latest
+            env: ASSAY_MCP_REAL_KEYCHAIN=1
+            experimental: false
+          - name: windows
+            os: windows-latest
+            env: ASSAY_MCP_REAL_KEYCHAIN=1
+            experimental: false
+          - name: linux secret service
+            os: ubuntu-latest
+            env: ASSAY_MCP_REAL_KEYCHAIN=1
+            experimental: false
+          - name: linux no secret service
+            os: ubuntu-latest
+            env: ASSAY_MCP_EXPECT_KEYCHAIN=unavailable
+            experimental: false
+          - name: macos locked
+            os: macos-latest
+            env: ASSAY_MCP_EXPECT_KEYCHAIN=locked
+            # The locked-store text is matched on the platform's error text (not yet seen on a runner).
+            experimental: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+      - run: npm ci --ignore-scripts
+      - name: Temporary keychain (macOS)
+        # Never the runner's login keychain: a throwaway keychain with a random password is
+        # created, unlocked (locked again below for the "locked" run) and put first in the search
+        # list and as the default. The "always()" step at the end deletes it.
+        if: startsWith(matrix.name, 'macos')
+        shell: bash
+        run: |
+          KC="$RUNNER_TEMP/assay-ci.keychain-db"
+          KC_PASS="$(openssl rand -hex 24)"
+          echo "::add-mask::$KC_PASS"
+          security list-keychains -d user | tr -d '"' | sed 's/^ *//' > "$RUNNER_TEMP/keychains.before"
+          security create-keychain -p "$KC_PASS" "$KC"
+          security set-keychain-settings -lut 900 "$KC"
+          security unlock-keychain -p "$KC_PASS" "$KC"
+          # shellcheck disable=SC2046
+          security list-keychains -d user -s "$KC" $(cat "$RUNNER_TEMP/keychains.before")
+          security default-keychain -d user -s "$KC"
+          if [ "${{ matrix.name }}" = "macos locked" ]; then security lock-keychain "$KC"; fi
+          echo "ASSAY_CI_KEYCHAIN=$KC" >> "$GITHUB_ENV"
+      - name: Keychain tests
+        if: matrix.name == 'macos' || matrix.name == 'windows'
+        shell: bash
+        run: env ${{ matrix.env }} npx vitest run test/keychain.test.ts
+        working-directory: node
+      - name: Keychain tests (Secret Service under dbus + gnome-keyring)
+        if: matrix.name == 'linux secret service'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gnome-keyring dbus
+          dbus-run-session -- sh -c 'printf "" | gnome-keyring-daemon --unlock --components=secrets >/dev/null && env ${{ matrix.env }} npx vitest run test/keychain.test.ts'
+        working-directory: node
+      - name: Keychain tests (no Secret Service)
+        if: matrix.name == 'linux no secret service'
+        run: env -u DBUS_SESSION_BUS_ADDRESS ${{ matrix.env }} npx vitest run test/keychain.test.ts
+        working-directory: node
+      - name: Keychain tests (locked keychain)
+        if: matrix.name == 'macos locked'
+        run: env ${{ matrix.env }} npx vitest run test/keychain.test.ts
+        working-directory: node
+      - name: Delete the temporary keychain (macOS)
+        if: always() && startsWith(matrix.name, 'macos')
+        shell: bash
+        run: |
+          if [ -s "$RUNNER_TEMP/keychains.before" ]; then
+            # shellcheck disable=SC2046
+            security list-keychains -d user -s $(cat "$RUNNER_TEMP/keychains.before") || true
+          fi
+          if [ -n "${ASSAY_CI_KEYCHAIN:-}" ]; then
+            security delete-keychain "$ASSAY_CI_KEYCHAIN" || true
+          fi

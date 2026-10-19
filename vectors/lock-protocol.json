@@ -1,0 +1,41 @@
+{
+  "description": "The profile lock protocol of spec 8.4. Every implementation that shares a profile must follow it.",
+  "lockDir": "profiles/{profile}.lock.d",
+  "ownerFile": "owner.json",
+  "ownerFields": {
+    "pid": "number: the holder's process id",
+    "startedAt": "string: ISO 8601 UTC time the lock was acquired",
+    "token": "string: 32 lowercase hex characters, random per acquisition"
+  },
+  "acquire": "mkdir {lockDir} (mode 0700); the holder then writes {ownerFile} atomically (temp file in the lock directory, fsync, rename; mode 0600)",
+  "heartbeatMs": 5000,
+  "staleMs": 30000,
+  "staleReference": "mtime of ownerFile; when ownerFile is missing, mtime of the lock directory",
+  "freshMs": 15000,
+  "selfFencing": "a holder counts its lock as held only while its last successful touch is less than freshMs old (wall clock) and ownerFile still holds its token; otherwise every commit point (keychain or file write, OAuth refresh request) is refused with LOCK_LOST and nothing is stored",
+  "reclaimDir": "profiles/{profile}.lock.d.reclaim",
+  "reclaimMutex": "a waiter that finds the lock stale first takes the reclaim mutex with mkdir {reclaimDir}; without it, it just waits. A reclaim mutex whose directory mtime is older than staleMs is removed with a plain rmdir",
+  "staleRemoval": "under the reclaim mutex: observe again, rename the lock directory to the unique sibling {lockDir}.stale-{pid}-{12 hex}, check that the moved directory is the one observed stale (same directory, same owner, still stale), then delete it; otherwise put it back if the lock path is free, else leave it in place. Siblings {lockDir}.(stale|released|failed)-{pid}-{12 hex} older than staleMs are swept",
+  "retryMs": 100,
+  "timeoutMs": 30000,
+  "timeoutError": "LOCK_TIMEOUT",
+  "onTimeout": "never run the guarded operation (never refresh, never sign); the last attempt is made at the deadline",
+  "release": "only when ownerFile still holds this holder's token: rename away, check the token again, delete",
+  "freshCases": [
+    { "name": "just touched", "nowMs": 1000000, "lastTouchMs": 1000000, "fresh": true },
+    { "name": "one heartbeat ago", "nowMs": 1000000, "lastTouchMs": 995000, "fresh": true },
+    { "name": "14.999 s ago", "nowMs": 1000000, "lastTouchMs": 985001, "fresh": true },
+    { "name": "exactly 15 s ago", "nowMs": 1000000, "lastTouchMs": 985000, "fresh": false },
+    { "name": "after a 31 s stall", "nowMs": 1000000, "lastTouchMs": 969000, "fresh": false }
+  ],
+  "staleCases": [
+    { "name": "fresh owner", "nowMs": 1000000, "ownerMtimeMs": 1000000, "dirMtimeMs": 1000000, "stale": false },
+    { "name": "owner touched 5 s ago", "nowMs": 1000000, "ownerMtimeMs": 995000, "dirMtimeMs": 900000, "stale": false },
+    { "name": "owner exactly 30 s old", "nowMs": 1000000, "ownerMtimeMs": 970000, "dirMtimeMs": 900000, "stale": false },
+    { "name": "owner 30.001 s old", "nowMs": 1000000, "ownerMtimeMs": 969999, "dirMtimeMs": 900000, "stale": true },
+    { "name": "old directory, fresh owner", "nowMs": 1000000, "ownerMtimeMs": 999000, "dirMtimeMs": 0, "stale": false },
+    { "name": "no owner, fresh directory", "nowMs": 1000000, "ownerMtimeMs": null, "dirMtimeMs": 990000, "stale": false },
+    { "name": "no owner, old directory", "nowMs": 1000000, "ownerMtimeMs": null, "dirMtimeMs": 960000, "stale": true },
+    { "name": "owner mtime in the future", "nowMs": 1000000, "ownerMtimeMs": 1060000, "dirMtimeMs": 900000, "stale": false }
+  ]
+}
