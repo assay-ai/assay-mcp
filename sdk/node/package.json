@@ -1,5 +1,5 @@
 {
-  "name": "@assay-ai/sdk",
+  "name": "@goassay-ai/sdk",
   "version": "0.1.0",
   "description": "Assay buyer SDK for Node. Calls Assay tools with an API key; payments are signed locally by the caller's own signer.",
   "license": "SEE LICENSE IN LICENSE",

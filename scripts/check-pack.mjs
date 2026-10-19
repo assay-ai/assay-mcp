@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const PACKAGE_NAME = "@assay-ai/mcp";
+export const PACKAGE_NAME = "@goassay-ai/mcp";
 export const RUNTIME_DEPENDENCIES = ["@napi-rs/keyring"];
 export const INSTALL_SCRIPTS = ["preinstall", "install", "postinstall", "prepare"];
 const EXACT = /^\d+\.\d+\.\d+$/;
@@ -63,7 +63,7 @@ export function checkLockRuntime(lock) {
   return errors;
 }
 
-export const SDK_PACKAGE_NAME = "@assay-ai/sdk";
+export const SDK_PACKAGE_NAME = "@goassay-ai/sdk";
 const SDK_FILE = /^(package\.json|README\.md|LICENSE|dist\/index\.js|dist\/types\/.+\.d\.ts)$/;
 
 /** The SDK ships a self-contained bundle: exact versions, no runtime dependencies, no install scripts. */

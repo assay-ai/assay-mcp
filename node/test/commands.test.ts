@@ -808,7 +808,7 @@ describe("settings (env-proxy opt-in)", () => {
 });
 
 describe("doctor", () => {
-  const pinned = { command: "npx", args: ["-y", "@assay-ai/mcp@1.2.3", "--url", "https://mcp.assay.ai/c/weather"] };
+  const pinned = { command: "npx", args: ["-y", "@goassay-ai/mcp@1.2.3", "--url", "https://mcp.assay.ai/c/weather"] };
 
   it("flags env keys other than ASSAY_* on project-scope assay entries", async () => {
     writeFileSync(
@@ -831,7 +831,7 @@ describe("doctor", () => {
     expect(text).toContain('server "assay-ok" has nothing unexpected');
     expect(text).not.toContain('"unrelated"');
     expect(text).toContain('server "assay-x" loads its environment from a file (envFile)');
-    expect(text).toContain('server "assay-x" does not run the pinned @assay-ai/mcp package');
+    expect(text).toContain('server "assay-x" does not run the pinned @goassay-ai/mcp package');
     expect(text).toContain(T13_RISK_TEXT);
   });
 
@@ -886,7 +886,7 @@ describe("R-MCP-7: no command emits the delegate key or a token", () => {
       seedSecret("default", "e2e", "access_token", JSON.stringify({ token: pair.accessToken, expiresAt: pair.expiresAt }));
       seedSecret("default", "e2e", "delegate_key", PRIVATE_KEY);
       chainResult = { ok: false, code: "CHAIN_UNCONFIRMED", reason: "x" };
-      writeFileSync(join(cwd, ".mcp.json"), JSON.stringify({ mcpServers: { assay: { command: "npx", args: ["-y", "@assay-ai/mcp@1.2.3"], env: { ASSAY_API_KEY: "assay_sk_live_projectsecret0000" } } } }));
+      writeFileSync(join(cwd, ".mcp.json"), JSON.stringify({ mcpServers: { assay: { command: "npx", args: ["-y", "@goassay-ai/mcp@1.2.3"], env: { ASSAY_API_KEY: "assay_sk_live_projectsecret0000" } } } }));
       const stdout = vi.spyOn(process.stdout, "write");
       confirmAnswer = true;
       const tty = deps({ isTTY: true, env: E2E_ENV });
@@ -1107,7 +1107,7 @@ describe("doctor escapes hostile names (review M3)", () => {
   it("control characters in server names and env keys are printed as \\uXXXX", async () => {
     writeFileSync(
       join(cwd, ".mcp.json"),
-      JSON.stringify({ mcpServers: { "assay\u001b[2K": { command: "npx", args: ["-y", "@assay-ai/mcp@1.2.3"], env: { "X\u001b]8;;http://evil\u0007": "1" } } } }),
+      JSON.stringify({ mcpServers: { "assay\u001b[2K": { command: "npx", args: ["-y", "@goassay-ai/mcp@1.2.3"], env: { "X\u001b]8;;http://evil\u0007": "1" } } } }),
     );
     expect(await runDoctor([], deps())).toBe(1);
     expect(output()).not.toContain("\u001b");

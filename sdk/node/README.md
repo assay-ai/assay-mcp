@@ -1,9 +1,9 @@
-# @assay-ai/sdk
+# @goassay-ai/sdk
 
 Node SDK for [Assay](https://mcp.assay.ai). It calls Assay tools with an API key over Streamable HTTP. Only the built-in origin is reachable (a development origin must be listed in `dev.origins` in code), redirects are an error, and the key is sent to pinned origins only.
 
 ```ts
-import { AssayClient, Signers } from "@assay-ai/sdk";
+import { AssayClient, Signers } from "@goassay-ai/sdk";
 
 const signer = Signers.fromAccount(kmsAccount); // preferred: a KMS-backed viem Account
 

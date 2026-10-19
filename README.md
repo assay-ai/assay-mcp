@@ -2,22 +2,22 @@
 
 `assay-mcp` is a local MCP server (stdio) that connects your AI app to [Assay](https://mcp.assay.ai). It runs on your computer, keeps your agent's payment key in the OS keychain, and signs each payment itself within limits you set in a terminal. Assay's servers never hold a key that can sign a payment.
 
-npm package: **`@assay-ai/mcp`**. The binary is `assay-mcp`.
+npm package: **`@goassay-ai/mcp`**. The binary is `assay-mcp`.
 
 > **Status:** pre-release. The package is not published to npm yet. The commands below show the canonical form. Each command pins an exact version.
 
 ## Install
 
-Every command pins `@assay-ai/mcp` to an exact version. Do not run an unpinned or unscoped form, and do not trust a page that shows a different command from this README.
+Every command pins `@goassay-ai/mcp` to an exact version. Do not run an unpinned or unscoped form, and do not trust a page that shows a different command from this README.
 
 These examples connect the default URL `/`, under the server name `assay`. For another URL, add `--url <url>` and use its server name, for example `--url /c/weather --name assay-weather`.
 
 | Client | Command |
 |---|---|
-| Claude Code | `claude mcp add --scope user assay -- npx -y @assay-ai/mcp@0.1.0 --name assay` |
-| Codex CLI | `codex mcp add assay -- npx -y @assay-ai/mcp@0.1.0 --name assay` |
-| Gemini CLI | `gemini mcp add --scope user assay npx -y @assay-ai/mcp@0.1.0 --name assay` |
-| VS Code | `code --add-mcp '{"name":"assay","type":"stdio","command":"npx","args":["-y","@assay-ai/mcp@0.1.0","--name","assay"]}'` |
+| Claude Code | `claude mcp add --scope user assay -- npx -y @goassay-ai/mcp@0.1.0 --name assay` |
+| Codex CLI | `codex mcp add assay -- npx -y @goassay-ai/mcp@0.1.0 --name assay` |
+| Gemini CLI | `gemini mcp add --scope user assay npx -y @goassay-ai/mcp@0.1.0 --name assay` |
+| VS Code | `code --add-mcp '{"name":"assay","type":"stdio","command":"npx","args":["-y","@goassay-ai/mcp@0.1.0","--name","assay"]}'` |
 
 **Cursor** (`~/.cursor/mcp.json`), **Windsurf** (`~/.config/devin/mcp_config.json`) and **Claude Desktop** (`claude_desktop_config.json`):
 
@@ -26,7 +26,7 @@ These examples connect the default URL `/`, under the server name `assay`. For a
   "mcpServers": {
     "assay": {
       "command": "npx",
-      "args": ["-y", "@assay-ai/mcp@0.1.0", "--name", "assay"]
+      "args": ["-y", "@goassay-ai/mcp@0.1.0", "--name", "assay"]
     }
   }
 }
@@ -35,7 +35,7 @@ These examples connect the default URL `/`, under the server name `assay`. For a
 To install any URL into any client and also allow it for paid calls, run this in a terminal:
 
 ```sh
-npx -y @assay-ai/mcp@0.1.0 add /c/weather --client claude-code
+npx -y @goassay-ai/mcp@0.1.0 add /c/weather --client claude-code
 ```
 
 Client ids: `claude-code`, `codex`, `cursor`, `vscode`, `windsurf`, `gemini`, `claude-desktop`.
@@ -61,7 +61,7 @@ Hosted apps (claude.ai, ChatGPT and Claude Desktop connectors) connect to `https
 - **Built-in hosts.** The MCP, API, web and RPC addresses come only from the built-in [`deployments.json`](deployments.json). Your credentials are sent only to the built-in Assay hosts. Redirects are never followed.
 - **One bundle.** The npm package is a single bundled file. Its only runtime dependency is `@napi-rs/keyring`, pinned exactly, with prebuilt binaries and no install scripts.
 - **No telemetry.** Logs go to stderr only and never contain tokens, keys, signatures, tool arguments or results.
-- **Residual risk (T11): the name `assay-mcp`.** The unscoped npm name `assay-mcp` belongs to a third party, not to Assay. Every command here is written as `npx -y @assay-ai/mcp@0.1.0 …` (the current version), and so is every hint the tool prints. If you run the bare name through `npx` yourself, or follow a page or message that tells you to, you run someone else's code on the computer that holds your payment key. Copy commands from this README, check the scope `@assay-ai`, and never use `latest`.
+- **Residual risk (T11): the name `assay-mcp`.** The unscoped npm name `assay-mcp` belongs to a third party, not to Assay. Every command here is written as `npx -y @goassay-ai/mcp@0.1.0 …` (the current version), and so is every hint the tool prints. If you run the bare name through `npx` yourself, or follow a page or message that tells you to, you run someone else's code on the computer that holds your payment key. Copy commands from this README, check the scope `@assay-ai`, and never use `latest`.
 
 See [SECURITY.md](SECURITY.md) to report a vulnerability or verify a release.
 
@@ -71,9 +71,9 @@ Spending is bounded in layers:
 
 | Limit | Default | Set where |
 |---|---|---|
-| Per call (local) | $0.50 | `npx -y @assay-ai/mcp@0.1.0 limits set` in a terminal |
-| Per rolling 24 hours (local) | $5 | `npx -y @assay-ai/mcp@0.1.0 limits set` in a terminal |
-| Confirm above (local) | off | `npx -y @assay-ai/mcp@0.1.0 limits set --confirm-above <usd>` |
+| Per call (local) | $0.50 | `npx -y @goassay-ai/mcp@0.1.0 limits set` in a terminal |
+| Per rolling 24 hours (local) | $5 | `npx -y @goassay-ai/mcp@0.1.0 limits set` in a terminal |
+| Confirm above (local) | off | `npx -y @goassay-ai/mcp@0.1.0 limits set --confirm-above <usd>` |
 | Payment key caps (on chain) | $0.50 a call, $5 per 24 hours, for 30 days | the "Enable paid calls" page, signed by your wallet |
 
 The most a payment key can spend before it expires is `per-24h cap × (1 + days)`: $155 at the defaults. One budget covers every Assay server on this computer. Your agent's limits apply across all your computers.
@@ -83,26 +83,26 @@ Local limits change only from an interactive terminal. No server response, web p
 ## Commands
 
 ```
-npx -y @assay-ai/mcp@0.1.0 [serve] [--url <url|/path>] [--profile <name>] [--no-paid] [--log-level <level>] [--log-file <path>]
-npx -y @assay-ai/mcp@0.1.0 add <url|/path> [--client <id>] [--name <name>] [--scope user|project] [--profile <name>] [--force]
-npx -y @assay-ai/mcp@0.1.0 list
-npx -y @assay-ai/mcp@0.1.0 remove <name> [--client <id>] [--scope user|project]
-npx -y @assay-ai/mcp@0.1.0 login [--profile <name>] [--url <url|/path>]
-npx -y @assay-ai/mcp@0.1.0 logout | status [--profile <name>]
-npx -y @assay-ai/mcp@0.1.0 enable-paid [--profile <name>]
-npx -y @assay-ai/mcp@0.1.0 limits [set --per-call <usd> --per-day <usd> [--confirm-above <usd>|off] [--providers <0x...,...>|off]] [--profile <name>]
-npx -y @assay-ai/mcp@0.1.0 allow-paid <url> | disallow-paid <url> [--profile <name>]
-npx -y @assay-ai/mcp@0.1.0 dev allow <origin>
-npx -y @assay-ai/mcp@0.1.0 settings [set --allow-env-proxy on|off] [--profile <name>]
-npx -y @assay-ai/mcp@0.1.0 doctor [--profile <name>]
-npx -y @assay-ai/mcp@0.1.0 --version
+npx -y @goassay-ai/mcp@0.1.0 [serve] [--url <url|/path>] [--profile <name>] [--no-paid] [--log-level <level>] [--log-file <path>]
+npx -y @goassay-ai/mcp@0.1.0 add <url|/path> [--client <id>] [--name <name>] [--scope user|project] [--profile <name>] [--force]
+npx -y @goassay-ai/mcp@0.1.0 list
+npx -y @goassay-ai/mcp@0.1.0 remove <name> [--client <id>] [--scope user|project]
+npx -y @goassay-ai/mcp@0.1.0 login [--profile <name>] [--url <url|/path>]
+npx -y @goassay-ai/mcp@0.1.0 logout | status [--profile <name>]
+npx -y @goassay-ai/mcp@0.1.0 enable-paid [--profile <name>]
+npx -y @goassay-ai/mcp@0.1.0 limits [set --per-call <usd> --per-day <usd> [--confirm-above <usd>|off] [--providers <0x...,...>|off]] [--profile <name>]
+npx -y @goassay-ai/mcp@0.1.0 allow-paid <url> | disallow-paid <url> [--profile <name>]
+npx -y @goassay-ai/mcp@0.1.0 dev allow <origin>
+npx -y @goassay-ai/mcp@0.1.0 settings [set --allow-env-proxy on|off] [--profile <name>]
+npx -y @goassay-ai/mcp@0.1.0 doctor [--profile <name>]
+npx -y @goassay-ai/mcp@0.1.0 --version
 ```
 
 Exit codes: 0 at the end of input, 1 on a fatal startup error, 2 on a usage error.
 
 `limits set`, `allow-paid`, `disallow-paid`, `dev allow` and `settings set` run only in an interactive terminal; anything else (an agent, a script, your MCP app) is refused with exit code 2. `settings set --allow-env-proxy on` (which asks you to type the profile name) lets `assay-mcp` use an HTTP proxy from its environment, which it refuses by default because a project config can set that environment. `doctor` checks project configs and this terminal for settings that change how `assay-mcp` runs.
 
-On Windows, `npx -y @assay-ai/mcp@0.1.0 add` runs a client CLI (`claude`, `codex`, `gemini`) only from your home directory and refuses a project-scope install through it; use `--scope user` or a file client. It also refuses a CLI path or URL with characters outside plain ASCII letters, digits and URL punctuation (for example a user name with accents, or `%`), because `cmd.exe` would interpret them; add the server in that client's own settings instead.
+On Windows, `npx -y @goassay-ai/mcp@0.1.0 add` runs a client CLI (`claude`, `codex`, `gemini`) only from your home directory and refuses a project-scope install through it; use `--scope user` or a file client. It also refuses a CLI path or URL with characters outside plain ASCII letters, digits and URL punctuation (for example a user name with accents, or `%`), because `cmd.exe` would interpret them; add the server in that client's own settings instead.
 
 ## Repository layout
 
@@ -110,9 +110,9 @@ On Windows, `npx -y @assay-ai/mcp@0.1.0 add` runs a client CLI (`claude`, `codex
 |---|---|
 | `deployments.json` | The built-in table of hosts, networks, contracts and RPCs. The one source for every build. |
 | `vectors/` | Shared test vectors for every implementation. |
-| `node/` | The `@assay-ai/mcp` package. |
-| `sdk/node/` | The `@assay-ai/sdk` package (not started). |
-| `placeholders/` | Packages that reserve look-alike names and point to `@assay-ai/mcp`. |
+| `node/` | The `@goassay-ai/mcp` package. |
+| `sdk/node/` | The `@goassay-ai/sdk` package (not started). |
+| `placeholders/` | Packages that reserve look-alike names and point to `@goassay-ai/mcp`. |
 
 ## Development
 

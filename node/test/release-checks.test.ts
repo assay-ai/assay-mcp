@@ -67,7 +67,7 @@ describe("check-no-unscoped", () => {
   it("detects the unscoped form and accepts the scoped one", () => {
     expect(containsUnscoped(`run ${UNSCOPED} add /`)).toBe(true);
     expect(containsUnscoped(UNSCOPED.replace(/ /g, "  "))).toBe(true);
-    expect(containsUnscoped("npx -y @assay-ai/mcp@1.2.3")).toBe(false);
+    expect(containsUnscoped("npx -y @goassay-ai/mcp@1.2.3")).toBe(false);
     for (const runner of ["npx --yes", "npx", "pnpm dlx", "yarn dlx", "bunx"]) {
       expect(containsUnscoped(`${runner} ${BARE} add /`), runner).toBe(true);
     }
@@ -80,7 +80,7 @@ describe("check-no-unscoped", () => {
     for (const bad of [`Run \`${B} login\` first.`, `print("${B} settings set --allow-env-proxy on")`, `${B} --version`, `${B} add <url>`, `run ${B} enable-paid`]) {
       expect(containsBareCommand(bad), bad).toBe(true);
     }
-    for (const ok of ["npx -y @assay-ai/mcp@1.2.3 login", `"${B}/refused"`, `${B}-cmd-`, `"bin": { "${B}": "dist/cli.js" }`, `the ${B} proxy`, `${B} refuses to run`]) {
+    for (const ok of ["npx -y @goassay-ai/mcp@1.2.3 login", `"${B}/refused"`, `${B}-cmd-`, `"bin": { "${B}": "dist/cli.js" }`, `the ${B} proxy`, `${B} refuses to run`]) {
       expect(containsBareCommand(ok), ok).toBe(false);
     }
     // Comment-only lines in source are internal notes; a string in code is not.
@@ -105,7 +105,7 @@ describe("check-no-unscoped", () => {
     try {
       execFileSync("git", ["init", "-q"], { cwd: dir });
       writeFileSync(join(dir, "doc.md"), `Install: ${UNSCOPED}\n`);
-      writeFileSync(join(dir, "ok.md"), "Install: npx -y @assay-ai/mcp@1.2.3\n");
+      writeFileSync(join(dir, "ok.md"), "Install: npx -y @goassay-ai/mcp@1.2.3\n");
       expect(findUnscoped(dir)).toEqual(["doc.md"]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -114,10 +114,10 @@ describe("check-no-unscoped", () => {
 });
 
 describe("README install commands", () => {
-  it("pin @assay-ai/mcp to the package version exactly", () => {
+  it("pin @goassay-ai/mcp to the package version exactly", () => {
     for (const file of ["README.md", "node/README.md"]) {
       const text = readFileSync(join(ROOT, file), "utf8");
-      const pins = [...text.matchAll(/@assay-ai\/mcp@([^\s"'`,\]]+)/g)].map((m) => m[1]);
+      const pins = [...text.matchAll(/@goassay-ai\/mcp@([^\s"'`,\]]+)/g)].map((m) => m[1]);
       expect(pins.length, file).toBeGreaterThan(0);
       for (const v of pins) expect(v, file).toBe(pkg.version);
     }

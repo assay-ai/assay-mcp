@@ -135,7 +135,7 @@ export function appendText(result: Record<string, unknown>, suffix: string): Rec
 
 /** §7.7 step 5. */
 export function notAllowedText(url: string): string {
-  return `Paid calls through this server are off. To allow them, run in a terminal: npx -y @assay-ai/mcp@${VERSION} allow-paid ${shellQuote(url)}`;
+  return `Paid calls through this server are off. To allow them, run in a terminal: npx -y @goassay-ai/mcp@${VERSION} allow-paid ${shellQuote(url)}`;
 }
 
 /** The payment key as people compare it: its last 8 hex digits, upper case, in two groups (`1A2B 9F3C`). */

@@ -37,7 +37,7 @@ describe("check-no-fork symlinks (4.1 M9)", () => {
 
 describe("check-pack for the sdk", () => {
   it("refuses runtime dependencies", () => {
-    expect(checkSdkManifest({ name: "@assay-ai/sdk", version: "0.1.0", dependencies: { viem: "2.57.3" } })).toEqual([
+    expect(checkSdkManifest({ name: "@goassay-ai/sdk", version: "0.1.0", dependencies: { viem: "2.57.3" } })).toEqual([
       "dependencies.viem is not allowed: the SDK bundles everything",
     ]);
   });

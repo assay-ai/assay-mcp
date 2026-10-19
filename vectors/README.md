@@ -57,7 +57,7 @@ The spec 7.12 install commands for every client, with `V = 1.2.3` standing in fo
 
 - `install`: per client and URL, the paid-capable user-scope `command` (a POSIX shell line, or the config object for Cursor, Windsurf and Claude Desktop), the `entry` that lands in the client config under the server name, the one-click `link` (Cursor, VS Code) and the free-only `remote` alternative.
 - `project`: the args `add --scope project` writes (R-MU-4): the pinned package, `--url` and a non-default `--profile` only.
-- `add`: the `npx -y @assay-ai/mcp@V add {url} --client {id}` one-liner.
+- `add`: the `npx -y @goassay-ai/mcp@V add {url} --client {id}` one-liner.
 - `ownership`: which stored entries `remove` treats as written by `assay-mcp` (by command and args, never by name).
 - Consumers:
   - `node/test/clients.test.ts` (`node/src/clients/install-command.ts`, and `add`'s written entries, R-MU-9);
@@ -68,4 +68,4 @@ The spec 7.12 install commands for every client, with `V = 1.2.3` standing in fo
 
 ## The `{run}` placeholder
 
-A user-facing text that names a command writes `{run}` where the command goes. An implementation replaces it with `npx -y @assay-ai/mcp@<its own exact version>`: the unscoped `assay-mcp` name belongs to someone else and is never printed as a command.
+A user-facing text that names a command writes `{run}` where the command goes. An implementation replaces it with `npx -y @goassay-ai/mcp@<its own exact version>`: the unscoped `assay-mcp` name belongs to someone else and is never printed as a command.

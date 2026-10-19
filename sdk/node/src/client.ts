@@ -41,7 +41,7 @@ const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0
 const WARNED = new Set<string>();
 /** The dev-mode warning, worded for the SDK and written once per process and message. */
 function warnOnce(line: string): void {
-  const text = line.replace(/^assay-mcp: assay-mcp is/, "@assay-ai/sdk is");
+  const text = line.replace(/^assay-mcp: assay-mcp is/, "@goassay-ai/sdk is");
   if (WARNED.has(text)) return;
   WARNED.add(text);
   process.stderr.write(text);

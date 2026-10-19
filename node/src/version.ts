@@ -7,4 +7,4 @@ export const VERSION: string = pkg.version;
  * How a user runs this exact package from a terminal: scoped and pinned to the running version,
  * never the unscoped `assay-mcp` name (which belongs to someone else) and never `latest`.
  */
-export const RUN = `npx -y @assay-ai/mcp@${VERSION}`;
+export const RUN = `npx -y @goassay-ai/mcp@${VERSION}`;

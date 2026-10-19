@@ -18,7 +18,7 @@ export function isClientId(value: string): value is ClientId {
 
 export type Scope = "user" | "project";
 
-export const PACKAGE_NAME = "@assay-ai/mcp";
+export const PACKAGE_NAME = "@goassay-ai/mcp";
 export const DEFAULT_PROFILE = "default";
 
 /** An exact version: no range, no tag (R-MCP-14). */
@@ -100,7 +100,7 @@ export function pinnedPackage(V: string): string {
 
 /**
  * The arguments after `npx`.
- * - User scope (spec 7.12): `-y @assay-ai/mcp@V {url-args}`, plus `--profile` when not default.
+ * - User scope (spec 7.12): `-y @goassay-ai/mcp@V {url-args}`, plus `--profile` when not default.
  * - Project scope (R-MU-4): only the pinned package, `--url` and `--profile`. No name, no log file.
  */
 export function serverArgs(input: InstallInput, scope: Scope = "user"): string[] {
@@ -216,7 +216,7 @@ export function remoteCommand(client: ClientId, input: Pick<InstallInput, "url" 
   }
 }
 
-/** `npx -y @assay-ai/mcp@V add {url} --client {id}` (spec 7.12, 8.3). `url` may be a path. */
+/** `npx -y @goassay-ai/mcp@V add {url} --client {id}` (spec 7.12, 8.3). `url` may be a path. */
 export function addCommand(client: ClientId, input: { V: string; url: string }): string {
   if (input.url.startsWith("/")) {
     if (!URL_CHARS.test(input.url)) throw new InstallInputError("invalid path");
@@ -231,7 +231,7 @@ const ENTRY_KEYS = new Set(["command", "args", "type", "env"]);
 const OUR_FLAGS_WITH_VALUE =new Set(["--url", "--name", "--profile", "--log-file"]);
 
 /**
- * True when a config entry is one `assay-mcp add` writes: `npx -y @assay-ai/mcp@<exact>` followed
+ * True when a config entry is one `assay-mcp add` writes: `npx -y @goassay-ai/mcp@<exact>` followed
  * only by our own flags, each with a value, and no `env`. `remove` touches nothing else.
  */
 export function isAssayEntry(entry: unknown): boolean {

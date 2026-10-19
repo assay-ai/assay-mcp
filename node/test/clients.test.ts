@@ -251,7 +251,7 @@ describe("install commands equal vectors/commands.json", () => {
   it("pins the package exactly and never uses the unscoped form", () => {
     for (const c of vectors.install) {
       const text = JSON.stringify(c);
-      expect(text).toContain(`@assay-ai/mcp@${V}`);
+      expect(text).toContain(`@goassay-ai/mcp@${V}`);
       expect(text).not.toContain(["npx", "-y", "assay-mcp"].join(" "));
     }
   });
@@ -305,7 +305,7 @@ describe("install commands equal vectors/commands.json", () => {
 
 describe("README install commands equal vectors/commands.json (R-WEB-7, repo half)", () => {
   const readme = readFileSync(join(ROOT, "README.md"), "utf8");
-  const withVersion = (s: string) => s.split(`@assay-ai/mcp@${V}`).join(`@assay-ai/mcp@${VERSION}`);
+  const withVersion = (s: string) => s.split(`@goassay-ai/mcp@${V}`).join(`@goassay-ai/mcp@${VERSION}`);
   const root = (client: ClientId) => vectors.install.find((c) => c.client === client && c.input.url === `${MCP}/`)!;
 
   it.each(["claude-code", "codex", "gemini", "vscode"] as ClientId[])("%s", (client) => {
@@ -495,7 +495,7 @@ describe("add --scope project", () => {
     const text = readFileSync(path, "utf8");
     expect(text).not.toMatch(/assay_(sk_live|at|rt|ac)_|localhost|log-file|--name|HOME|APPDATA|XDG/);
     const entry = entriesOf(client, "project").get("assay-weather") as Record<string, unknown>;
-    expect(entry.args).toEqual(["-y", `@assay-ai/mcp@${V}`, "--url", `${MCP}/c/weather`, "--profile", "work"]);
+    expect(entry.args).toEqual(["-y", `@goassay-ai/mcp@${V}`, "--url", `${MCP}/c/weather`, "--profile", "work"]);
     expect(entry.env === undefined || JSON.stringify(entry.env) === "{}").toBe(true);
     // R-MU-5 / R-MU-13: never allowed for paid calls from here.
     expect(h.paid).toEqual([]);
@@ -559,7 +559,7 @@ describe("config file edits", () => {
     const h = harness();
     expect(await runAdd(["/", "--client", "claude-desktop"], h.deps)).toBe(0);
     const path = userConfig("claude-desktop");
-    expect(readJson(path)).toEqual({ mcpServers: { assay: { command: "npx", args: ["-y", `@assay-ai/mcp@${V}`, "--name", "assay"] } } });
+    expect(readJson(path)).toEqual({ mcpServers: { assay: { command: "npx", args: ["-y", `@goassay-ai/mcp@${V}`, "--name", "assay"] } } });
     expect(existsSync(`${path}.bak`)).toBe(false);
   });
 });
@@ -656,11 +656,11 @@ describe("remove", () => {
 
 describe("helpers", () => {
   it("the Codex reader: a real TOML parser, exact ownership, fail closed", () => {
-    const ours = `command = "npx"\nargs = ["-y", "@assay-ai/mcp@${V}", "--name", "assay"]`;
+    const ours = `command = "npx"\nargs = ["-y", "@goassay-ai/mcp@${V}", "--name", "assay"]`;
     const codexOurs = (toml: string, name: string) => CLIENTS.codex.isOurs(parseCodexServers(toml).get(name));
     expect(codexOurs(`model = "x"\n[mcp_servers.assay]\n${ours}\n`, "assay")).toBe(true);
     // multi-line array, literal strings
-    expect(codexOurs(`[mcp_servers.assay]\ncommand = 'npx'\nargs = [\n  "-y",\n  '@assay-ai/mcp@${V}',\n  "--name", "assay",\n]\n`, "assay")).toBe(true);
+    expect(codexOurs(`[mcp_servers.assay]\ncommand = 'npx'\nargs = [\n  "-y",\n  '@goassay-ai/mcp@${V}',\n  "--name", "assay",\n]\n`, "assay")).toBe(true);
     // any extra key keeps the entry: env subtable, dotted env key, quoted key, inline env, another key
     for (const extra of [
       `${ours}\n[mcp_servers.assay.env]\nHOME = "/tmp"`,

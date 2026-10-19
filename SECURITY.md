@@ -10,7 +10,7 @@ Please include the version, your OS, the steps to reproduce, and the impact you 
 
 ## Supported versions
 
-Only the latest published version of `@assay-ai/mcp` gets security fixes. There is no self-update, so update by changing the pinned version in your install command.
+Only the latest published version of `@goassay-ai/mcp` gets security fixes. There is no self-update, so update by changing the pinned version in your install command.
 
 ## Verifying a release
 
@@ -19,7 +19,7 @@ Each release is published from this repository by GitHub Actions, through a prot
 1. Check provenance. Install the exact version in an empty folder, then run `npm audit signatures`:
 
    ```sh
-   npm install --ignore-scripts @assay-ai/mcp@<version>
+   npm install --ignore-scripts @goassay-ai/mcp@<version>
    npm audit signatures
    ```
 

@@ -10,7 +10,7 @@ name: Release
 # Needed outside this file: the "release" environment with a required reviewer and a deployment
 # policy limited to v* tags; a tag ruleset (v*, signed, maintainers only); the repository
 # variable RELEASE_TAGGERS (comma list of maintainer tagger emails); npm trusted publishing for
-# @assay-ai/mcp bound to this workflow and environment "release"; the npm setting
+# @goassay-ai/mcp bound to this workflow and environment "release"; the npm setting
 # "Require 2FA and disallow tokens".
 on:
   push:
@@ -125,7 +125,7 @@ jobs:
           SHA256: ${{ needs.build.outputs.sha256 }}
         run: |
           set -euo pipefail
-          [[ "$TARBALL" =~ ^assay-ai-mcp-[0-9]+\.[0-9]+\.[0-9]+\.tgz$ ]] || { echo "Unexpected tarball name."; exit 1; }
+          [[ "$TARBALL" =~ ^goassay-ai-mcp-[0-9]+\.[0-9]+\.[0-9]+\.tgz$ ]] || { echo "Unexpected tarball name."; exit 1; }
           [[ "$SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "Missing build digest."; exit 1; }
           echo "$SHA256  $TARBALL" | sha256sum --check --strict
       - name: Publish with provenance (npm trusted publishing)
