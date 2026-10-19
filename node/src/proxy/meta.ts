@@ -68,6 +68,24 @@ export interface VoucherEnvelope {
   contractVersion?: number;
 }
 
+const MAX_PROVIDER_ID_LENGTH = 256;
+
+/** The requirement's `providerId` when it is usable (1–256 characters), else `null`. */
+export function providerIdOf(requirement: Readonly<Record<string, unknown>>): string | null {
+  const id = requirement.providerId;
+  return typeof id === "string" && id.length > 0 && id.length <= MAX_PROVIDER_ID_LENGTH ? id : null;
+}
+
+/** The `assay/voucher` envelope; `contractVersion` only when it is a positive safe integer. */
+export function voucherEnvelope(voucher: unknown, signature: string, providerId: string, contractVersion: unknown): VoucherEnvelope {
+  return {
+    voucher,
+    signature,
+    providerId,
+    ...(typeof contractVersion === "number" && Number.isSafeInteger(contractVersion) && contractVersion >= 1 ? { contractVersion } : {}),
+  };
+}
+
 /** The same params with the voucher added (and nothing else changed, the idempotency key included). */
 export function withVoucher(params: Readonly<Record<string, unknown>>, envelope: VoucherEnvelope): Record<string, unknown> {
   const meta: Record<string, unknown> = isObject(params._meta) ? { ...params._meta } : {};

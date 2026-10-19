@@ -39,6 +39,8 @@ jobs:
         run: npm run check:unscoped
       - name: Package contents, exact versions, no install scripts
         run: npm run check:pack
+      - name: The SDK reuses the signer and guards, never a copy
+        run: npm run check:no-fork
       - name: Smoke test
         run: node node/dist/cli.js --version
 
