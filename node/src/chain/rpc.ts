@@ -22,6 +22,8 @@ export interface RpcOptions {
   /** The RPC URLs of the selected deployment entry; `url` must be one of them. */
   allowed: readonly string[];
   timeoutMs?: number;
+  /** Plain http to loopback; dev entries only. */
+  allowLoopbackHttp?: boolean;
 }
 
 const HEX = /^0x(?:[0-9a-f]{2})*$/i;
@@ -39,6 +41,7 @@ async function call(url: string, method: string, params: unknown[], opts: RpcOpt
       allowed: opts.allowed,
       timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
       maxBytes: MAX_RESPONSE_BYTES,
+      allowLoopbackHttp: opts.allowLoopbackHttp === true,
     });
   } catch (err) {
     throw new RpcError(`${method}: ${err instanceof Error ? err.message : "failed"}`);

@@ -98,7 +98,9 @@ type Behaviour =
   | { kind: "ok" }
   | { kind: "down" }
   | { kind: "hang" }
-  | { kind: "redirect" }
+  | { kind: "redirect"; to: string }
+  | { kind: "slowCalls"; ms: number }
+  | { kind: "custom"; handle: (res: ServerResponse) => void }
   | { kind: "status"; status: number }
   | { kind: "raw"; body: string }
   | { kind: "huge" }
@@ -126,7 +128,12 @@ async function fakeRpc(): Promise<FakeRpc> {
       }
       if (b.kind === "hang") return;
       if (b.kind === "redirect") {
-        res.writeHead(307, { location: "http://127.0.0.1:1/" }).end();
+        // A 307 keeps the method and body, so a client that follows it re-posts to `to`.
+        res.writeHead(307, { location: b.to }).end();
+        return;
+      }
+      if (b.kind === "custom") {
+        b.handle(res);
         return;
       }
       if (b.kind === "status") {
@@ -137,12 +144,13 @@ async function fakeRpc(): Promise<FakeRpc> {
         res.writeHead(200, { "content-type": "application/json" }).end(b.body);
         return;
       }
+      const msg = JSON.parse(body) as { id: unknown; method: string; params: unknown[] };
       if (b.kind === "huge") {
+        // A well-formed answer (the request id echoed) that is only wrong in size.
         res.writeHead(200, { "content-type": "application/json" });
-        res.end(`{"jsonrpc":"2.0","id":1,"result":"0x${"0".repeat(MAX_RESPONSE_BYTES * 2)}"}`);
+        res.end(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: `0x${"0".repeat(MAX_RESPONSE_BYTES * 2)}` }));
         return;
       }
-      const msg = JSON.parse(body) as { id: unknown; method: string; params: unknown[] };
       let result: unknown;
       if (msg.method === "eth_chainId") {
         fake.calls.push({ method: msg.method });
@@ -168,8 +176,13 @@ async function fakeRpc(): Promise<FakeRpc> {
         res.end(JSON.stringify({ jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: "no" } }));
         return;
       }
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result }));
+      const send = () => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result }));
+      };
+      // The answer is computed on receipt; `slowCalls` only delays sending it.
+      if (b.kind === "slowCalls" && msg.method === "eth_call") setTimeout(send, b.ms);
+      else send();
     });
   });
   server.on("connection", (s) => {
@@ -207,17 +220,20 @@ afterEach(() => {
   }
 });
 
-/** The built-in table with production's RPCs replaced by the two fake servers. */
-function tableWith(rpc: string[]): Deployments {
+/**
+ * The built-in table with `env`'s RPCs replaced. The fake servers are plain http on loopback,
+ * which only dev entries accept, so the reading tests run as `anvil` with both servers listed.
+ */
+function tableWith(rpc: string[], env: "anvil" | "production" = "anvil"): Deployments {
   const t = structuredClone(builtInDeployments());
-  t.production.networks[NETWORK]!.rpc = rpc;
+  t[env].networks[NETWORK]!.rpc = rpc;
   return t;
 }
 
 function reader(extra: Partial<ChainReaderOptions> = {}, rpc = [a.url, b.url]) {
   let now = 1_000_000;
   const r = createChainReader({
-    environment: "production",
+    environment: "anvil",
     profile: "default",
     deployments: tableWith(rpc),
     timeoutMs: 300,
@@ -236,6 +252,7 @@ const AGREED = {
   maxPerWindow: "10000000",
   delegateMaxVoucherAmount: "500000",
   delegateMaxPerWindow: "5000000",
+  readAt: 1000,
 };
 
 describe("readDelegation", () => {
@@ -253,8 +270,10 @@ describe("readDelegation", () => {
       expect(f.calls.some((c) => c.method === "eth_blockNumber")).toBe(true);
       expect(f.calls.some((c) => c.method === "eth_chainId")).toBe(true);
     }
-    expect(toGuardChain(res)).toEqual({
+    expect(toGuardChain(res, DELEGATE)).toEqual({
       payer: PAYER,
+      delegate: DELEGATE,
+      readAt: 1000,
       active: true,
       validUntil: "1788591800",
       maxVoucherAmount: "1000000",
@@ -267,7 +286,16 @@ describe("readDelegation", () => {
     const { r } = reader();
     const res = await r.readDelegation(NETWORK, PAYER, DELEGATE);
     expect(res).toMatchObject({ ok: false, code: "CHAIN_UNCONFIRMED" });
-    expect(toGuardChain(res)).toBeNull();
+    expect(toGuardChain(res, DELEGATE)).toBeNull();
+  });
+
+  it("toGuardChain refuses a read made for another delegate than the local key", async () => {
+    const { r } = reader();
+    const res = await r.readDelegation(NETWORK, PAYER, DELEGATE);
+    expect(res.ok).toBe(true);
+    expect(toGuardChain(res, DELEGATE.toLowerCase())).toMatchObject({ delegate: DELEGATE });
+    expect(toGuardChain(res, "0x90F79bf6EB2c4f870365E785982E1f101E93b906")).toBeNull();
+    expect(toGuardChain(res, "not-a-key")).toBeNull();
   });
 
   it("disagree on delegationOf alone → CHAIN_UNCONFIRMED", async () => {
@@ -276,11 +304,18 @@ describe("readDelegation", () => {
     expect(await r.readDelegation(NETWORK, PAYER, DELEGATE)).toMatchObject({ ok: false, code: "CHAIN_UNCONFIRMED" });
   });
 
-  it("one RPC on another chain → CHAIN_UNCONFIRMED", async () => {
-    b.view.chainId = "0x1";
-    a.view.chainId = "0x1";
+  it.each([
+    ["only the second RPC", ["b"]],
+    ["only the first RPC", ["a"]],
+    ["both RPCs", ["a", "b"]],
+  ])("%s on another chain → CHAIN_UNCONFIRMED", async (_name, which) => {
+    for (const w of which) (w === "a" ? a : b).view.chainId = "0x1";
     const { r } = reader();
-    expect(await r.readDelegation(NETWORK, PAYER, DELEGATE)).toMatchObject({ ok: false, code: "CHAIN_UNCONFIRMED" });
+    expect(await r.readDelegation(NETWORK, PAYER, DELEGATE)).toMatchObject({
+      ok: false,
+      code: "CHAIN_UNCONFIRMED",
+      reason: "an RPC is on another chain",
+    });
   });
 
   it("one down → CHAIN_UNCONFIRMED", async () => {
@@ -304,7 +339,7 @@ describe("readDelegation", () => {
   });
 
   it.each<[string, Behaviour]>([
-    ["a redirect", { kind: "redirect" }],
+    ["a redirect", { kind: "redirect", to: "" }],
     ["HTTP 500", { kind: "status", status: 500 }],
     ["not JSON", { kind: "raw", body: "<html>" }],
     ["a JSON-RPC error", { kind: "raw", body: '{"jsonrpc":"2.0","id":1,"error":{"code":3,"message":"execution reverted"}}' }],
@@ -315,7 +350,8 @@ describe("readDelegation", () => {
     ["an empty result", { kind: "result", result: "0x" }],
     ["an over-long result", { kind: "result", result: `0x${"00".repeat(32 * 12)}` }],
   ])("one RPC answering %s → CHAIN_UNCONFIRMED", async (_name, behaviour) => {
-    b.behaviour = behaviour;
+    // The redirect points at the other, honest server: following it would make both agree.
+    b.behaviour = behaviour.kind === "redirect" ? { kind: "redirect", to: a.url } : behaviour;
     const { r } = reader();
     expect(await r.readDelegation(NETWORK, PAYER, DELEGATE)).toMatchObject({ ok: false, code: "CHAIN_UNCONFIRMED" });
   });
@@ -374,7 +410,7 @@ describe("readDelegation", () => {
     advance(1);
     expect(await r.readDelegation(NETWORK, PAYER, DELEGATE)).toEqual({
       ok: true,
-      value: { ...AGREED, delegateMaxVoucherAmount: "400000" },
+      value: { ...AGREED, delegateMaxVoucherAmount: "400000", readAt: 1600 },
     });
     expect(a.calls.length).toBeGreaterThan(callsAfterFirst);
   });
@@ -382,8 +418,8 @@ describe("readDelegation", () => {
   it("the cache is per profile, payer and delegate; a failure is not cached", async () => {
     const t = tableWith([a.url, b.url]);
     const now = () => 5;
-    const one = createChainReader({ environment: "production", profile: "one", deployments: t, now });
-    const two = createChainReader({ environment: "production", profile: "two", deployments: t, now });
+    const one = createChainReader({ environment: "anvil", profile: "one", deployments: t, now });
+    const two = createChainReader({ environment: "anvil", profile: "two", deployments: t, now });
     await one.readDelegation(NETWORK, PAYER, DELEGATE);
     const n = a.calls.length;
     await two.readDelegation(NETWORK, PAYER, DELEGATE);
@@ -394,6 +430,97 @@ describe("readDelegation", () => {
     expect(await one.readDelegation(NETWORK, other, DELEGATE)).toMatchObject({ ok: false });
     b.behaviour = { kind: "ok" };
     expect(await one.readDelegation(NETWORK, other, DELEGATE)).toMatchObject({ ok: true });
+  });
+
+  it("the cache key includes the delegate: another key of the same payer is read afresh", async () => {
+    const { r } = reader();
+    expect(await r.readDelegation(NETWORK, PAYER, DELEGATE)).toMatchObject({ ok: true, value: { active: true } });
+    const n = a.calls.length;
+    // The second key has no grant on chain.
+    for (const f of [a, b]) {
+      f.view.delegation = { ...f.view.delegation, validUntil: 0n, maxVoucherAmount: 0n, maxPerWindow: 0n };
+    }
+    const otherKey = "0x90F79bf6EB2c4f870365E785982E1f101E93b906";
+    const res = await r.readDelegation(NETWORK, PAYER, otherKey);
+    expect(a.calls.length).toBeGreaterThan(n);
+    expect(res).toMatchObject({ ok: true, value: { delegate: otherKey, active: false } });
+  });
+
+  it("the cache key includes the payer: another payer of the same key is read afresh", async () => {
+    const { r } = reader();
+    await r.readDelegation(NETWORK, PAYER, DELEGATE);
+    const n = a.calls.length;
+    const otherPayer = "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC";
+    const res = await r.readDelegation(NETWORK, otherPayer, DELEGATE);
+    expect(a.calls.length).toBeGreaterThan(n);
+    expect(res).toMatchObject({ ok: true, value: { payer: otherPayer } });
+  });
+
+  it("the cache key includes the network: the same payer and key on another network is read afresh", async () => {
+    // A second network whose RPCs are the same servers; they answer chain 46630, so a real read
+    // for eip155:31337 refuses. A key without the network would return the cached 46630 read.
+    const t = tableWith([a.url, b.url]);
+    t.anvil.networks["eip155:31337"] = {
+      ...t.anvil.networks[NETWORK]!,
+      escrow: `eip155:31337:${ESCROW}`,
+      asset: "eip155:31337/erc20:0xDbbC156dD414f43f2c952C1Be0f16A0B9a826Cd3",
+    };
+    const r = createChainReader({ environment: "anvil", profile: "default", deployments: t, now: () => 1_000_000 });
+    expect(await r.readDelegation(NETWORK, PAYER, DELEGATE)).toMatchObject({ ok: true });
+    const n = a.calls.length;
+    expect(await r.readDelegation("eip155:31337", PAYER, DELEGATE)).toMatchObject({
+      ok: false,
+      reason: "an RPC is on another chain",
+    });
+    expect(a.calls.length).toBeGreaterThan(n);
+  });
+
+  it("CAIP-10 and case variants of one key share one cache entry", async () => {
+    const { r } = reader();
+    await r.readDelegation(NETWORK, PAYER, DELEGATE);
+    const n = a.calls.length;
+    await r.readDelegation(NETWORK, `${NETWORK}:${PAYER}`, DELEGATE.toLowerCase());
+    expect(a.calls.length).toBe(n);
+  });
+
+  it("invalidate(payer, delegate, network) makes the next read go to the chain", async () => {
+    const { r } = reader();
+    await r.readDelegation(NETWORK, PAYER, DELEGATE);
+    for (const f of [a, b]) f.view.delegation = { ...f.view.delegation, revoked: true };
+    expect(await r.readDelegation(NETWORK, PAYER, DELEGATE)).toMatchObject({ value: { active: true } });
+    r.invalidate(PAYER, DELEGATE, NETWORK);
+    expect(await r.readDelegation(NETWORK, PAYER, DELEGATE)).toMatchObject({ value: { active: false } });
+  });
+
+  it("an older read still in flight never overwrites a newer one (fresh, or after invalidate)", async () => {
+    const waitForCalls = async () => {
+      while (a.calls.filter((c) => c.method === "eth_call").length < 3) await new Promise((r) => setTimeout(r, 5));
+    };
+    for (const mode of ["fresh", "invalidate"] as const) {
+      for (const f of [a, b]) {
+        f.calls = [];
+        f.view = baseView();
+        f.behaviour = { kind: "slowCalls", ms: 150 };
+      }
+      const { r } = reader({ timeoutMs: 2000 });
+      // Read A: its eth_call answers (old state) are computed now and sent 150 ms later.
+      const older = r.readDelegation(NETWORK, PAYER, DELEGATE);
+      await waitForCalls();
+      for (const f of [a, b]) {
+        f.view.delegation = { ...f.view.delegation, revoked: true };
+        f.behaviour = { kind: "ok" };
+      }
+      let newer;
+      if (mode === "fresh") newer = await r.readDelegation(NETWORK, PAYER, DELEGATE, { fresh: true });
+      else {
+        r.invalidate(PAYER, DELEGATE, NETWORK);
+        newer = await r.readDelegation(NETWORK, PAYER, DELEGATE);
+      }
+      expect(newer).toMatchObject({ ok: true, value: { active: false } });
+      expect(await older).toMatchObject({ ok: true, value: { active: true } });
+      // The cache keeps the newer state.
+      expect(await r.readDelegation(NETWORK, PAYER, DELEGATE)).toMatchObject({ ok: true, value: { active: false } });
+    }
   });
 
   it("fresh: true skips the cache (enable-paid confirmation)", async () => {
@@ -432,23 +559,33 @@ describe("readDelegation", () => {
     expect(res).toEqual({ ok: true, value: AGREED });
   });
 
-  it("refuses production with fewer than two RPCs", async () => {
-    const { r } = reader({}, [a.url]);
-    expect(await r.readDelegation(NETWORK, PAYER, DELEGATE)).toMatchObject({ ok: false, code: "CHAIN_UNCONFIRMED" });
-    expect(a.calls).toEqual([]);
+  // Production refusals are decided before any request: none of these URLs is ever contacted.
+  it.each([
+    ["fewer than two RPCs", ["https://rpc-a.example.com"], "not enough RPCs"],
+    ["placeholder RPCs", ["<operator RPC>", "<public RPC>"], "RPC not usable"],
+    ["plain http to a non-loopback host", ["https://rpc-a.example.com", "http://rpc-b.example.com"], "RPC not usable"],
+    ["plain http to loopback (dev entries only)", ["https://rpc-a.example.com", "http://127.0.0.1:8547"], "RPC not usable"],
+    ["two RPCs on one host", ["https://rpc.example.com/a", "https://RPC.example.com/b"], "RPCs share a host"],
+  ])("production refuses %s", async (_name, rpc, reason) => {
+    const r = createChainReader({ environment: "production", profile: "default", deployments: tableWith(rpc, "production") });
+    expect(await r.readDelegation(NETWORK, PAYER, DELEGATE)).toEqual({ ok: false, code: "CHAIN_UNCONFIRMED", reason });
   });
 
-  it("refuses placeholder RPCs and plain http to a non-loopback host", async () => {
-    for (const rpc of [["<operator RPC>", "<public RPC>"], [a.url, "http://rpc.example.com"]]) {
-      const { r } = reader({}, rpc);
-      expect(await r.readDelegation(NETWORK, PAYER, DELEGATE)).toMatchObject({ ok: false, code: "CHAIN_UNCONFIRMED" });
-    }
+  it("production refuses the fake loopback servers even though they would agree", async () => {
+    const r = createChainReader({
+      environment: "production",
+      profile: "default",
+      deployments: tableWith([a.url, b.url], "production"),
+    });
+    expect(await r.readDelegation(NETWORK, PAYER, DELEGATE)).toMatchObject({ ok: false, reason: "RPC not usable" });
+    expect(a.calls).toEqual([]);
+    expect(b.calls).toEqual([]);
   });
 
   it("a single-RPC dev entry reads its one RPC", async () => {
     const t = structuredClone(builtInDeployments());
     t.e2e.networks[NETWORK]!.rpc = [a.url];
-    const r = createChainReader({ environment: "e2e", profile: "default", deployments: t });
+    const r = createChainReader({ environment: "e2e", profile: "default", deployments: t, now: () => 1_000_000 });
     expect(await r.readDelegation(NETWORK, PAYER, DELEGATE)).toEqual({ ok: true, value: AGREED });
   });
 
@@ -477,7 +614,7 @@ describe("readDelegation", () => {
     const { r } = reader();
     const res = await r.readDelegation(NETWORK, PAYER, DELEGATE);
     expect(res).toMatchObject({ ok: true, value: { maxVoucherAmount: "300000", maxPerWindow: "3000000" } });
-    expect(toGuardChain(res)).toMatchObject({ maxVoucherAmount: "300000" });
+    expect(toGuardChain(res, DELEGATE)).toMatchObject({ maxVoucherAmount: "300000" });
 
     // The payer raised them: the envelope keeps the lower held value for the tighten delay.
     for (const f of [a, b]) f.view.escrow = { ...baseView().escrow, maxVoucherAmount: 9000000n, maxPerWindow: 90000000n };
@@ -548,17 +685,59 @@ describe("readDelegation", () => {
 });
 
 describe("rpc / pinned fetch", () => {
+  const BODY = JSON.stringify({ jsonrpc: "2.0", id: 7, method: "eth_chainId", params: [] });
+  const loop = (allowed: string[], maxBytes = 1024) => ({ allowed, timeoutMs: 1000, maxBytes, allowLoopbackHttp: true });
+
   it("pinnedPost refuses a URL outside its allow-list", async () => {
-    await expect(
-      pinnedPost("http://127.0.0.1:1/", "{}", { allowed: [a.url], timeoutMs: 100, maxBytes: 1024 }),
-    ).rejects.toThrow();
+    await expect(pinnedPost(b.url, BODY, loop([a.url]))).rejects.toThrow("url not allowed");
+    expect(b.calls).toEqual([]);
+  });
+
+  it("pinnedPost refuses loopback http unless the caller allows it", async () => {
+    await expect(pinnedPost(a.url, BODY, { allowed: [a.url], timeoutMs: 1000, maxBytes: 1024 })).rejects.toThrow(
+      "url scheme or host not allowed",
+    );
     expect(a.calls).toEqual([]);
+    await expect(pinnedPost(a.url, BODY, loop([a.url]))).resolves.toContain('"result":"0xb626"');
+  });
+
+  it("pinnedPost refuses a redirect and never reaches its target, even an allowed one", async () => {
+    a.behaviour = { kind: "redirect", to: b.url };
+    await expect(pinnedPost(a.url, BODY, loop([a.url, b.url]))).rejects.toThrow("redirect refused");
+    expect(b.calls).toEqual([]);
+  });
+
+  it("pinnedPost refuses a declared content-length over the cap", async () => {
+    a.behaviour = {
+      kind: "custom",
+      handle: (res) => {
+        const body = JSON.stringify({ jsonrpc: "2.0", id: 7, result: "0x" + "0".repeat(2000) });
+        res.writeHead(200, { "content-type": "application/json", "content-length": String(Buffer.byteLength(body)) });
+        res.end(body);
+      },
+    };
+    await expect(pinnedPost(a.url, BODY, loop([a.url]))).rejects.toThrow("response too large");
+  });
+
+  it("pinnedPost cuts a chunked body (no content-length) at the cap", async () => {
+    a.behaviour = {
+      kind: "custom",
+      handle: (res) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.write('{"jsonrpc":"2.0","id":7,"result":"0x');
+        for (let i = 0; i < 8; i++) res.write("0".repeat(256));
+        res.end('"}');
+      },
+    };
+    await expect(pinnedPost(a.url, BODY, loop([a.url]))).rejects.toThrow("response too large");
+    // The same answer passes under a cap it fits in, so the refusal above is the cap.
+    await expect(pinnedPost(a.url, BODY, loop([a.url], 4096))).resolves.toContain('"id":7');
   });
 
   it("ethCall rejects a mismatched JSON-RPC id", async () => {
     b.behaviour = { kind: "raw", body: '{"jsonrpc":"2.0","id":999,"result":"0x"}' };
     await expect(
-      ethCall(b.url, { to: ESCROW, data: "0x" }, 1n, { allowed: [b.url], timeoutMs: 300 }),
+      ethCall(b.url, { to: ESCROW, data: "0x" }, 1n, { allowed: [b.url], timeoutMs: 300, allowLoopbackHttp: true }),
     ).rejects.toBeInstanceOf(RpcError);
   });
 });

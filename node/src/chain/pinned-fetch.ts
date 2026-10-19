@@ -4,7 +4,7 @@
  * Task 2.4 owns the proxy's general origin-pinned fetch. This is a small local stand-in with the
  * same rules, to be folded into that one when the branches meet:
  * - the URL must be exactly one of the allowed URLs (the RPCs of the selected deployment entry);
- * - https, or plain http to a loopback host only (the dev and anvil entries);
+ * - https; plain http only to a loopback host, and only when the caller allows it (dev entries);
  * - redirects are refused, never followed;
  * - every request has a timeout;
  * - the body is read with a byte cap, and anything larger is a failure.
@@ -23,12 +23,17 @@ export interface PinnedPostOptions {
   allowed: readonly string[];
   timeoutMs: number;
   maxBytes: number;
+  /** Allow plain http to a loopback host. Only dev entries (`e2e`, `anvil`) set this. */
+  allowLoopbackHttp?: boolean;
 }
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
 
-/** https anywhere, or http to a loopback host; no credentials, query or fragment. */
-export function isAllowedRpcUrl(value: string): boolean {
+/**
+ * https anywhere, or http to a loopback host when `allowLoopbackHttp` (dev entries only); no
+ * credentials, query or fragment.
+ */
+export function isAllowedRpcUrl(value: string, allowLoopbackHttp = false): boolean {
   let url: URL;
   try {
     url = new URL(value);
@@ -37,13 +42,13 @@ export function isAllowedRpcUrl(value: string): boolean {
   }
   if (url.username || url.password || url.search || url.hash) return false;
   if (url.protocol === "https:") return true;
-  return url.protocol === "http:" && LOOPBACK_HOSTS.has(url.hostname);
+  return allowLoopbackHttp && url.protocol === "http:" && LOOPBACK_HOSTS.has(url.hostname);
 }
 
 /** POSTs a JSON body to a pinned URL and returns the response text. */
 export async function pinnedPost(url: string, body: string, opts: PinnedPostOptions): Promise<string> {
   if (!opts.allowed.includes(url)) throw new PinnedFetchError("url not allowed");
-  if (!isAllowedRpcUrl(url)) throw new PinnedFetchError("url scheme or host not allowed");
+  if (!isAllowedRpcUrl(url, opts.allowLoopbackHttp === true)) throw new PinnedFetchError("url scheme or host not allowed");
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), opts.timeoutMs);

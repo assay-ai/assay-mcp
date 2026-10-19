@@ -120,6 +120,28 @@ describe("deployments.json", () => {
     expect(devModeWarning("e2e")).toMatch(/single RPC.*dev entries only/);
     expect(devModeWarning("anvil")).not.toMatch(/single RPC/);
   });
+
+  it("outside dev, RPCs must be https on distinct hosts; dev entries may use loopback http", () => {
+    const withRpc = (d: Deployment, rpc: string[]): Deployment => ({
+      ...d,
+      networks: { "eip155:46630": { ...d.networks["eip155:46630"]!, rpc } },
+    });
+    for (const env of ["production", "staging"] as const) {
+      const where = `${env}.networks.eip155:46630.rpc`;
+      expect(validateDeployment(env, withRpc(table[env], ["https://a.example.com", "http://localhost:8547"]))).toContain(
+        `${where}: http://localhost:8547 must be https`,
+      );
+      expect(
+        validateDeployment(env, withRpc(table[env], ["https://rpc.example.com/a", "https://RPC.example.com/b"])),
+      ).toContain(`${where}: RPCs must be distinct hosts`);
+      expect(
+        validateDeployment(env, withRpc(table[env], ["https://a.example.com", "https://b.example.org"])).filter((e) =>
+          e.startsWith(where),
+        ),
+      ).toEqual([]);
+    }
+    expect(validateDeployment("anvil", table.anvil)).toEqual([]);
+  });
 });
 
 describe("CAIP parsing", () => {

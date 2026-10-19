@@ -71,26 +71,46 @@ export interface DelegationState {
   delegateMaxVoucherAmount: string;
   /** Same rule for the delegate's window cap. */
   delegateMaxPerWindow: string;
+  /** When the read started, Unix seconds on the reader's clock. Kept on cached hits. */
+  readAt: number;
 }
 
 export type DelegationResult =
   | { ok: true; value: DelegationState }
   | { ok: false; code: "CHAIN_UNCONFIRMED"; reason: string };
 
-/** The guard's `chain` input (G4, G6): the agreed state, or `null` when there is none. */
-export interface GuardChainState {
+/**
+ * The guard's `chain` input (G4, G6). Same shape as Task 2.3's `ChainState`
+ * (`guards/types.ts`), so the proxy passes it without a cast.
+ */
+export interface ChainState {
+  /** The payer the delegation was read for. */
   payer: string;
-  active: boolean;
-  validUntil: string;
-  maxVoucherAmount: string;
+  /** The key the delegation was read for; must be the local key. */
+  delegate: string;
+  /** When the read was made, Unix seconds on the same clock as `nowSeconds`; at most 600 s old. */
+  readAt: number;
   delegateMaxVoucherAmount: string;
+  maxVoucherAmount: string;
+  /** The grant exists and is not revoked. */
+  active: boolean;
+  /** `delegationOf(...).validUntil`, Unix seconds. */
+  validUntil: string | number;
 }
 
-export function toGuardChain(result: DelegationResult): GuardChainState | null {
+/**
+ * The agreed state for the guard, or `null` when there is none (fail closed). A read made for
+ * any key other than `localKey` (the proxy's own delegate key) is also `null`.
+ */
+export function toGuardChain(result: DelegationResult, localKey: string): ChainState | null {
   if (!result.ok) return null;
   const v = result.value;
+  const local = /^0x[0-9a-fA-F]{40}$/.test(localKey) && isAddress(localKey, { strict: false }) ? getAddress(localKey) : null;
+  if (local === null || getAddress(v.delegate) !== local) return null;
   return {
     payer: v.payer,
+    delegate: v.delegate,
+    readAt: v.readAt,
     active: v.active,
     validUntil: v.validUntil,
     maxVoucherAmount: v.maxVoucherAmount,
@@ -117,6 +137,12 @@ export interface ChainReader {
     delegate: string,
     opts?: { fresh?: boolean },
   ): Promise<DelegationResult>;
+  /**
+   * Drops the cached read for one payer and delegate on one network, so the next read goes to
+   * the chain. The proxy (Task 2.9) calls it when the server refuses a voucher for a revoked or
+   * expired delegate, or when G4/G6 refuses, so a revocation stops signing on the next call.
+   */
+  invalidate(payer: string, delegate: string, network: string): void;
   /** Drops every cached read of this reader. */
   clear(): void;
 }
@@ -149,10 +175,24 @@ export function createChainReader(options: ChainReaderOptions): ChainReader {
   const table = options.deployments ?? builtInDeployments();
   const now = options.now ?? Date.now;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const cache = new Map<string, { at: number; value: DelegationState }>();
-  const inFlight = new Map<string, Promise<DelegationResult>>();
+  const dev = DEV_ENVIRONMENTS.includes(options.environment);
+  // `gen` orders reads: a result is stored only when no newer read or invalidation came first,
+  // so a slow, older read never overwrites a newer one.
+  let gen = 0;
+  let clearedAt = 0;
+  const cache = new Map<string, { at: number; gen: number; value: DelegationState }>();
+  const floors = new Map<string, number>();
+  const inFlight = new Map<string, { gen: number; promise: Promise<DelegationResult> }>();
 
-  async function readOnce(network: string, payerIn: string, delegateIn: string): Promise<DelegationResult> {
+  /** The cache key, with addresses normalised so CAIP-10 and case variants share one entry. */
+  function keyOf(network: string, payer: string, delegate: string): string {
+    const chain = /^eip155:([1-9][0-9]*)$/.exec(String(network));
+    const chainId = chain ? Number(chain[1]) : 0;
+    const norm = (x: string) => account(x, chainId) ?? String(x).toLowerCase();
+    return JSON.stringify([options.profile, String(network), norm(payer), norm(delegate)]);
+  }
+
+  async function readOnce(network: string, payerIn: string, delegateIn: string, readAt: number): Promise<DelegationResult> {
     const entry = table[options.environment];
     const n = entry && Object.hasOwn(entry.networks, network) ? entry.networks[network] : undefined;
     const chain = /^eip155:([1-9][0-9]*)$/.exec(network);
@@ -166,14 +206,17 @@ export function createChainReader(options: ChainReaderOptions): ChainReader {
     if (!payer || !delegate) return unconfirmed("bad payer or delegate");
 
     const rpcs = Array.isArray(n.rpc) ? n.rpc : [];
-    const minRpc = DEV_ENVIRONMENTS.includes(options.environment) ? 1 : 2;
-    if (rpcs.length < minRpc || new Set(rpcs).size !== rpcs.length) return unconfirmed("not enough RPCs");
-    if (rpcs.some((u) => isPlaceholder(u) || !isAllowedRpcUrl(u))) return unconfirmed("RPC not usable");
+    if (rpcs.length < (dev ? 1 : 2) || new Set(rpcs).size !== rpcs.length) return unconfirmed("not enough RPCs");
+    if (rpcs.some((u) => isPlaceholder(u) || !isAllowedRpcUrl(u, dev))) return unconfirmed("RPC not usable");
+    // Outside dev, agreement means something only if the RPCs are different hosts.
+    if (!dev && new Set(rpcs.map((u) => new URL(u).hostname.toLowerCase())).size !== rpcs.length) {
+      return unconfirmed("RPCs share a host");
+    }
 
     const to = getAddress(escrow.address);
     const delegationData = encodeFunctionData({ abi: ESCROW_READ_ABI, functionName: "delegationOf", args: [payer, delegate] });
     const capsData = encodeFunctionData({ abi: ESCROW_READ_ABI, functionName: "effectiveCapsOf", args: [payer, delegate] });
-    const rpcOpts = { allowed: rpcs, timeoutMs };
+    const rpcOpts = { allowed: rpcs, timeoutMs, allowLoopbackHttp: dev };
 
     const escrowData = encodeFunctionData({ abi: ESCROW_READ_ABI, functionName: "escrowOf", args: [payer] });
 
@@ -235,40 +278,66 @@ export function createChainReader(options: ChainReaderOptions): ChainReader {
         maxPerWindow: min(caps[1], e.maxPerWindow).toString(),
         delegateMaxVoucherAmount: min(caps[2], d.maxVoucherAmount).toString(),
         delegateMaxPerWindow: min(caps[3], d.maxPerWindow).toString(),
+        readAt,
       },
     };
   }
 
+  /** The newest generation an invalidation or clear has passed for `key`. */
+  const floor = (key: string): number => Math.max(clearedAt, floors.get(key) ?? 0);
+
   return {
     async readDelegation(network, payer, delegate, opts = {}) {
-      const key = JSON.stringify([options.profile, network, String(payer).toLowerCase(), String(delegate).toLowerCase()]);
+      const key = keyOf(network, payer, delegate);
       if (!opts.fresh) {
         const hit = cache.get(key);
-        if (hit && now() - hit.at < CACHE_TTL_MS && now() >= hit.at) return { ok: true, value: hit.value };
+        const t = now();
+        if (hit && hit.gen > floor(key) && t >= hit.at && t - hit.at < CACHE_TTL_MS) {
+          return { ok: true, value: hit.value };
+        }
         const pending = inFlight.get(key);
-        if (pending) return pending;
+        if (pending && pending.gen > floor(key)) return pending.promise;
       }
+      const myGen = ++gen;
       const started = now();
-      const p = readOnce(network, payer, delegate)
+      const promise = readOnce(network, payer, delegate, Math.floor(started / 1000))
         .catch(() => unconfirmed("read failed"))
         .then((res) => {
-          if (res.ok) {
-            cache.delete(key);
-            cache.set(key, { at: started, value: res.value });
-            if (cache.size > MAX_CACHE_ENTRIES) cache.delete(cache.keys().next().value!);
-          } else {
-            cache.delete(key);
+          const current = cache.get(key);
+          const newest = myGen > floor(key) && (!current || current.gen < myGen);
+          if (newest) {
+            if (res.ok) {
+              cache.delete(key);
+              cache.set(key, { at: started, gen: myGen, value: res.value });
+              if (cache.size > MAX_CACHE_ENTRIES) cache.delete(cache.keys().next().value!);
+            } else {
+              cache.delete(key);
+            }
           }
           return res;
         })
         .finally(() => {
-          if (inFlight.get(key) === p) inFlight.delete(key);
+          if (inFlight.get(key)?.gen === myGen) inFlight.delete(key);
         });
-      inFlight.set(key, p);
-      return p;
+      inFlight.set(key, { gen: myGen, promise });
+      return promise;
+    },
+    invalidate(payer, delegate, network) {
+      const key = keyOf(network, payer, delegate);
+      floors.set(key, gen);
+      cache.delete(key);
+      inFlight.delete(key);
+      if (floors.size > MAX_CACHE_ENTRIES * 4) {
+        // Bounded: collapse every per-key floor into one reader-wide floor.
+        floors.clear();
+        clearedAt = gen;
+      }
     },
     clear() {
+      clearedAt = gen;
       cache.clear();
+      floors.clear();
+      inFlight.clear();
     },
   };
 }
