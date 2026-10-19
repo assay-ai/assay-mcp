@@ -2,7 +2,7 @@
 import { RUN } from "../version.js";
 import { existsSync } from "node:fs";
 import type { ClientAdapter } from "../clients/client.js";
-import { CLIENT_IDS, DEFAULT_PROFILE, isClientId, type InstallInput, type Scope } from "../clients/install-command.js";
+import { CLIENT_IDS, DEFAULT_PROFILE, isClientId, shellQuote, type InstallInput, type Scope } from "../clients/install-command.js";
 import { chooseName } from "../clients/install-name.js";
 import { recordInstall } from "../clients/installs.js";
 import { UrlRefused, type ResolvedUrl } from "../clients/ports.js";
@@ -119,7 +119,7 @@ export async function add(options: AddOptions, deps: InstallDeps): Promise<void>
   // Recorded right after the write, so `list` and `remove` always see what was installed.
   await recordInstall(deps.installs, { client: client.id, scope: options.scope, name, url: url.url, profile, configPath: target.configPath });
 
-  const allowHint = `Run \`${RUN} allow-paid ${url.url}\` in a terminal to allow paid calls through it.`;
+  const allowHint = `Run \`${RUN} allow-paid ${shellQuote(url.url)}\` in a terminal to allow paid calls through it.`;
   if (options.scope === "user" && deps.isTTY) {
     try {
       await deps.profiles.addPaidUrl(profile, url);
