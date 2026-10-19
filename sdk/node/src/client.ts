@@ -79,7 +79,8 @@ export class AssayClient {
     if (typeof options?.apiKey !== "string" || options.apiKey.trim() === "") {
       throw new AssayConfigError("apiKey is required: the SDK authenticates with an API key only");
     }
-    if (/\s/.test(options.apiKey.trim())) throw new AssayConfigError("apiKey is not valid");
+    // Printable ASCII only: a control byte (NUL) would otherwise reach a header error that echoes the value.
+    if (!/^[\x21-\x7e]+$/.test(options.apiKey.trim())) throw new AssayConfigError("apiKey is not valid");
     if (options.signer !== undefined && !isSigner(options.signer)) {
       throw new AssayConfigError("signer must come from Signers.fromAccount, Signers.fromKeychain or Signers.fromPrivateKey");
     }

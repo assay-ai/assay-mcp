@@ -41,10 +41,13 @@ afterEach(async () => {
   await fake.stop();
 });
 
-/** A KMS stand-in: a viem custom account whose `signTypedData` is a spy over a local key. */
-function kms(pk: Hex = generatePrivateKey()) {
+/** A KMS stand-in: a viem custom account whose `signTypedData` is a spy over a local key; `delayMs` makes it slow like a real KMS. */
+function kms(pk: Hex = generatePrivateKey(), delayMs = 0) {
   const local = privateKeyToAccount(pk);
-  const signTypedData = vi.fn((params: Parameters<LocalAccount["signTypedData"]>[0]) => local.signTypedData(params));
+  const signTypedData = vi.fn(async (params: Parameters<LocalAccount["signTypedData"]>[0]) => {
+    if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
+    return local.signTypedData(params);
+  });
   const account = toAccount({
     address: local.address,
     signMessage: () => Promise.reject(new Error("not used")),
@@ -214,8 +217,9 @@ describe("paid calls", () => {
     expect(voucherSigns(a.signTypedData) + voucherSigns(b.signTypedData)).toBe(3);
   });
 
-  it("concurrent calls never pass maxPerDay together", async () => {
-    const k = kms();
+  it("concurrent calls never pass maxPerDay together, even with a slow signer", async () => {
+    // A slow KMS opens the window between the guards and the signature: the spend must be recorded before it.
+    const k = kms(generatePrivateKey(), 200);
     enable(k.address);
     const client = await make(k.signer, { maxPerDay: "1" });
     const results = await Promise.all(Array.from({ length: 6 }, () => client.callTool("weather")));

@@ -83,6 +83,16 @@ describe("construction", () => {
     // @ts-expect-error apiKey is required
     expect(() => new AssayClient({ url: "https://mcp.assay.ai/" })).toThrow(/apiKey is required/);
     expect(() => new AssayClient({ url: "https://mcp.assay.ai/", apiKey: "  " })).toThrow(/apiKey is required/);
+    // A control byte never reaches a request (whose error would echo the key), and the refusal never shows it.
+    for (const bad of ["assay_sk_live_SECRET\u0000x", "assay_sk_live_SECRET\u001fx", "assay_sk_live_SECRETé"]) {
+      let message = "";
+      try {
+        new AssayClient({ url: "https://mcp.assay.ai/", apiKey: bad });
+      } catch (e) {
+        message = String((e as Error).message);
+      }
+      expect(message).toBe("apiKey is not valid");
+    }
   });
 
   it("the production origin needs no dev.origins", () => {
