@@ -85,10 +85,11 @@ describe("server-name vectors", () => {
 });
 
 describe("server-name rule", () => {
-  it('"/" search no pins: L 12 gives max 45', () => {
-    expect(maxNameLength(12)).toBe(45);
-    expect(fits("a".repeat(45), 12)).toBe(true);
-    expect(fits("a".repeat(46), 12)).toBe(false);
+  it('"/" search no pins: L 13 (assay_sign_in counts) gives max 44', () => {
+    expect(longestTool({ mode: "search", pinned: [] })).toBe(13);
+    expect(maxNameLength(13)).toBe(44);
+    expect(fits("a".repeat(44), 13)).toBe(true);
+    expect(fits("a".repeat(45), 13)).toBe(false);
   });
 
   it("/c/weather full, longest 20: max 37, and assay-weather fits", () => {

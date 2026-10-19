@@ -16,9 +16,9 @@
   ],
   "maxLength": [
     {
-      "name": "root, search mode, no pins (L 12)",
-      "L": 12,
-      "max": 45
+      "name": "root, search mode, no pins (L 13: assay_sign_in counts)",
+      "L": 13,
+      "max": 44
     },
     {
       "name": "/c/weather, full mode, longest 20",
