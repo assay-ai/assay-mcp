@@ -266,6 +266,12 @@ export function readLimits(profile: ProfileRef): Limits {
   return v === undefined ? { ...DEFAULT_LIMITS } : validateLimits(v);
 }
 
+/** The limits on disk, or `undefined` when the file does not exist; throws when it is unreadable or invalid. */
+export function readLimitsIfPresent(profile: ProfileRef): Limits | undefined {
+  const v = readJson(profile, profileFile(profile.name, "limits"));
+  return v === undefined ? undefined : validateLimits(v);
+}
+
 /** Only `limits set` (on a TTY) calls this. */
 export function writeLimits(profile: ProfileRef, lock: LockHandle, limits: Omit<Limits, "version">): Limits {
   assertLock(profile, lock);
