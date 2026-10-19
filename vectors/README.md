@@ -65,3 +65,7 @@ The spec 7.12 install commands for every client, with `V = 1.2.3` standing in fo
   - the frontend Connect UI commands (`assay-frontend/src/features/buyer-money/mcp-config.ts`, Part 3).
 - `quoting`: words outside `[A-Za-z0-9_./:@,=+%-]` are POSIX single-quoted (a URL with `?`, `&`, `$`, `;`, `!`, `*`, parentheses). The Cursor link percent-encodes its base64 `config`. Gemini passes `--scope user` (spec 7.12 amendment).
 - `names`: the server name `add` picks per scope; project-scope names fit the proxy's 16-character no-name budget.
+
+## The `{run}` placeholder
+
+A user-facing text that names a command writes `{run}` where the command goes. An implementation replaces it with `npx -y @assay-ai/mcp@<its own exact version>`: the unscoped `assay-mcp` name belongs to someone else and is never printed as a command.

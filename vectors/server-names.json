@@ -7,7 +7,7 @@
     "signInTool": "assay_sign_in",
     "noNameBudget": 16,
     "maxLength": 56,
-    "signedOutHint": "Sign in first (`assay-mcp login`) to allow a longer name.",
+    "signedOutHint": "Sign in first (`{run} login`) to allow a longer name.",
     "pattern": "^[a-z][a-z0-9-]*$",
     "note": "Anchors are whole-string: a trailing newline is invalid. L values in the cases below are arbitrary unless a case says root (L 13). Tool names are ASCII [A-Za-z0-9_-]; L is measured in UTF-8 bytes."
   },

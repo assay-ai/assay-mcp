@@ -268,6 +268,21 @@ describe("paid calls", () => {
     expect(k.signTypedData).not.toHaveBeenCalled();
   });
 
+  it("4.2 m4: a SignerRefusal (a non-positive issuedAt) is ok:false with a refusal, not a throw; nothing is signed", async () => {
+    const k = kms();
+    enable(k.address);
+    // A local clock 60 s past the epoch and a server 200 s behind it: the Date offset clamps to
+    // -120 s, so issuedAt = 60 - 120 < 0 and the signer refuses.
+    fake.skewSeconds = -200;
+    const spy = vi.spyOn(Date, "now").mockReturnValue(60_000);
+    const client = await make(k.signer);
+    const r = await client.callTool("weather");
+    spy.mockRestore();
+    expect(r.ok).toBe(false);
+    expect(r.refused?.reason).toContain("issuedAt");
+    expect(voucherSigns(k.signTypedData)).toBe(0);
+  });
+
   it("payTo other than the built-in escrow → G2, nothing signed", async () => {
     const k = kms();
     enable(k.address);

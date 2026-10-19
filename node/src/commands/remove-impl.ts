@@ -3,6 +3,7 @@
  * record. Only an entry `add` wrote (identified by its command, not its name) is removed. It does
  * not sign out.
  */
+import { RUN } from "../version.js";
 import { CLIENT_IDS, isClientId, type Scope } from "../clients/install-command.js";
 import { forgetInstall, type InstallRecord } from "../clients/installs.js";
 import { isValidName } from "../clients/server-name.js";
@@ -43,7 +44,7 @@ export async function remove(name: string, options: RemoveOptions, deps: Install
     if (!adapter.scopes.includes(s)) throw new UsageError(`${adapter.label} has no ${s} scope`);
     record = { client: clientId, scope: s, name, configPath: adapter.target(s, deps.clientEnv).configPath };
   } else {
-    throw new UsageError(`no Assay server named "${name}"${scope ? ` in ${scope} scope` : ""} (see \`assay-mcp list\`)`);
+    throw new UsageError(`no Assay server named "${name}"${scope ? ` in ${scope} scope` : ""} (see \`${RUN} list\`)`);
   }
 
   const client = deps.clients[record.client];
@@ -62,7 +63,7 @@ export async function remove(name: string, options: RemoveOptions, deps: Install
   }
   await client.uninstall(target, name, deps.clientEnv);
   if (matches.length === 1) await forgetInstall(deps.installs, record);
-  deps.print(`Removed ${name} from ${client.label} (${record.scope}). You are still signed in; \`assay-mcp logout\` signs out.\n`);
+  deps.print(`Removed ${name} from ${client.label} (${record.scope}). You are still signed in; \`${RUN} logout\` signs out.\n`);
 }
 
 export async function runRemove(args: readonly string[], deps: InstallDeps): Promise<number> {
@@ -71,7 +72,7 @@ export async function runRemove(args: readonly string[], deps: InstallDeps): Pro
     await remove(positionals[0]!, { client: values.client as string | undefined, scope: values.scope as string | undefined }, deps);
     return EXIT_OK;
   } catch (err) {
-    deps.print(`assay-mcp remove: ${(err as Error).message}\n`);
+    deps.print(`${RUN} remove: ${(err as Error).message}\n`);
     return err instanceof UsageError ? EXIT_USAGE : EXIT_FATAL;
   }
 }

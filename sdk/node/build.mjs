@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { builtinModules } from "node:module";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
@@ -10,6 +11,21 @@ const core = fileURLToPath(new URL("../../node/src/", import.meta.url));
  * "No OS keychain is available" and every other signer works.
  */
 const OPTIONAL_EXTERNAL = ["@napi-rs/keyring"];
+
+
+/**
+ * Bundles `package.json` as `{name, version}` only (4.1 M7): its scripts and devDependencies are
+ * not part of the shipped file.
+ */
+const manifestOnly = {
+  name: "manifest-only",
+  setup(b) {
+    b.onLoad({ filter: /[\\/]package\.json$/ }, (args) => {
+      const { name, version } = JSON.parse(readFileSync(args.path, "utf8"));
+      return { contents: JSON.stringify({ name, version }), loader: "json" };
+    });
+  },
+};
 
 // One self-contained file with no runtime dependencies: the MCP client, viem and the proxy's
 // signer and guards (reached through the `@assay-core/*` alias, never copied) are bundled in.
@@ -25,6 +41,7 @@ const result = await build({
   legalComments: "none",
   logLevel: "warning",
   metafile: true,
+  plugins: [manifestOnly],
   // Bundled CommonJS dependencies call require() on Node built-ins.
   banner: { js: 'import { createRequire as __createRequire } from "node:module"; const require = __createRequire(import.meta.url);' },
 });

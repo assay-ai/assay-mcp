@@ -1,4 +1,5 @@
 /** `assay-mcp add <url|/path>` (spec 8.3, Task 2.11). */
+import { RUN } from "../version.js";
 import { existsSync } from "node:fs";
 import type { ClientAdapter } from "../clients/client.js";
 import { CLIENT_IDS, DEFAULT_PROFILE, isClientId, type InstallInput, type Scope } from "../clients/install-command.js";
@@ -118,7 +119,7 @@ export async function add(options: AddOptions, deps: InstallDeps): Promise<void>
   // Recorded right after the write, so `list` and `remove` always see what was installed.
   await recordInstall(deps.installs, { client: client.id, scope: options.scope, name, url: url.url, profile, configPath: target.configPath });
 
-  const allowHint = `Run \`assay-mcp allow-paid ${url.url}\` in a terminal to allow paid calls through it.`;
+  const allowHint = `Run \`${RUN} allow-paid ${url.url}\` in a terminal to allow paid calls through it.`;
   if (options.scope === "user" && deps.isTTY) {
     try {
       await deps.profiles.addPaidUrl(profile, url);
@@ -142,7 +143,7 @@ export async function runAdd(args: readonly string[], deps: InstallDeps): Promis
     await add(parseAddArgs(args), deps);
     return EXIT_OK;
   } catch (err) {
-    deps.print(`assay-mcp add: ${(err as Error).message}\n`);
+    deps.print(`${RUN} add: ${(err as Error).message}\n`);
     return err instanceof UsageError ? EXIT_USAGE : EXIT_FATAL;
   }
 }

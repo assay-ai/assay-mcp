@@ -7,6 +7,7 @@
  * profile's checked delegate address (R-MCP-18), and the browser is launched without a shell.
  * The key itself is made and bound on the first paid call (F4 steps 2-3), never here.
  */
+import { RUN } from "../version.js";
 import { isPlaceholder } from "../deployments.js";
 import { EXIT_FATAL, EXIT_OK } from "../exit-codes.js";
 import { fingerprint } from "../profile/fingerprint.js";
@@ -36,7 +37,7 @@ export async function enablePaid(args: readonly string[], deps: ProfileDeps): Pr
   const deployment = profileDeployment(deps, profile);
   const record = readProfileFor(profileRef(deps, profile), deployment.environment);
   if (record === null) {
-    deps.print("This profile is not signed in. Run `assay-mcp login` first.\n");
+    deps.print(`This profile is not signed in. Run \`${RUN} login\` first.\n`);
     return EXIT_FATAL;
   }
   if (record.delegateAddress === null) {

@@ -1,3 +1,4 @@
+import { RUN } from "../version.js";
 import { getAddress, isAddress } from "viem";
 import { parseCaip10, type Deployment } from "../deployments.js";
 import { MAX_CLOCK_CORRECTION_SECONDS } from "../signer/clock.js";
@@ -46,7 +47,7 @@ export const MAX_TIMEOUT_SECONDS = 300;
 export const TOOL_RESOURCE_PREFIX = "/mcp/tools/";
 
 /** G4: the text the user sees when the server names a payer other than the recorded one. */
-export const PAYER_CHANGED_REASON = "payer changed; run assay-mcp enable-paid";
+export const PAYER_CHANGED_REASON = `payer changed; run ${RUN} enable-paid`;
 
 const MAX_UINT64 = 2n ** 64n - 1n;
 const CANONICAL_UINT = /^(0|[1-9][0-9]*)$/;

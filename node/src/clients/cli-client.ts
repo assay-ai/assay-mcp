@@ -3,6 +3,7 @@
  * the client's command through `execFile`; the config file is only read, to list names, to check
  * that an entry is ours before removing it, and to confirm what the CLI wrote.
  */
+import { RUN } from "../version.js";
 import type { ClientAdapter, ClientEnv, Target } from "./client.js";
 import { ClientError } from "./client.js";
 import { projectConfigPath, projectRootOf } from "./config-file.js";
@@ -76,7 +77,7 @@ export function cliClient(spec: CliClientSpec): ClientAdapter {
       await env.run(bin, argv, { cwd });
       const written = spec.read(t.configPath).get(input.name);
       if (!sameArgs(isOurs, written, serverEntry(spec.id, input, t.scope).args)) {
-        throw new ClientError(`${spec.label} did not write the expected entry to ${t.configPath}; check it with \`assay-mcp list\``);
+        throw new ClientError(`${spec.label} did not write the expected entry to ${t.configPath}; check it with \`${RUN} list\``);
       }
     },
     async uninstall(t, name, env) {

@@ -18,6 +18,7 @@ import {
   GET_TOOL,
 } from "@assay-core/proxy/meta.js";
 import { issuedAt } from "@assay-core/signer/clock.js";
+import { SignerRefusal } from "@assay-core/signer/errors.js";
 
 /**
  * Paid calls in the SDK (spec §10, R-SDK-4, R-SDK-5): the `assay-mcp` paid path's guards and
@@ -199,7 +200,15 @@ export class PaidCalls {
       providers: this.d.providers,
       nowSeconds,
     });
-    const built = guardVoucher(ctx, issuedAt(nowSeconds, this.d.dateOffset()), env);
+    // A `SignerRefusal` (an invalid issuedAt, or a built voucher that differs from the guarded
+    // values) is a refusal like any guard's: `ok: false`, nothing signed, never a throw.
+    let built: ReturnType<typeof guardVoucher>;
+    try {
+      built = guardVoucher(ctx, issuedAt(nowSeconds, this.d.dateOffset()), env);
+    } catch (err) {
+      if (err instanceof SignerRefusal) return refused("G1", err.message);
+      throw err;
+    }
     if (!built.ok) {
       if ((built.guard === "G4" || built.guard === "G6") && payer !== null) this.d.chain.invalidate(payer, signer, network.id);
       return refused(built.guard, built.reason);

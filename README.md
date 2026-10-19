@@ -61,6 +61,7 @@ Hosted apps (claude.ai, ChatGPT and Claude Desktop connectors) connect to `https
 - **Built-in hosts.** The MCP, API, web and RPC addresses come only from the built-in [`deployments.json`](deployments.json). Your credentials are sent only to the built-in Assay hosts. Redirects are never followed.
 - **One bundle.** The npm package is a single bundled file. Its only runtime dependency is `@napi-rs/keyring`, pinned exactly, with prebuilt binaries and no install scripts.
 - **No telemetry.** Logs go to stderr only and never contain tokens, keys, signatures, tool arguments or results.
+- **Residual risk (T11): the name `assay-mcp`.** The unscoped npm name `assay-mcp` belongs to a third party, not to Assay. Every command here is written as `npx -y @assay-ai/mcp@0.1.0 …` (the current version), and so is every hint the tool prints. If you run the bare name through `npx` yourself, or follow a page or message that tells you to, you run someone else's code on the computer that holds your payment key. Copy commands from this README, check the scope `@assay-ai`, and never use `latest`.
 
 See [SECURITY.md](SECURITY.md) to report a vulnerability or verify a release.
 
@@ -70,9 +71,9 @@ Spending is bounded in layers:
 
 | Limit | Default | Set where |
 |---|---|---|
-| Per call (local) | $0.50 | `assay-mcp limits set` in a terminal |
-| Per rolling 24 hours (local) | $5 | `assay-mcp limits set` in a terminal |
-| Confirm above (local) | off | `assay-mcp limits set --confirm-above <usd>` |
+| Per call (local) | $0.50 | `npx -y @assay-ai/mcp@0.1.0 limits set` in a terminal |
+| Per rolling 24 hours (local) | $5 | `npx -y @assay-ai/mcp@0.1.0 limits set` in a terminal |
+| Confirm above (local) | off | `npx -y @assay-ai/mcp@0.1.0 limits set --confirm-above <usd>` |
 | Payment key caps (on chain) | $0.50 a call, $5 per 24 hours, for 30 days | the "Enable paid calls" page, signed by your wallet |
 
 The most a payment key can spend before it expires is `per-24h cap × (1 + days)`: $155 at the defaults. One budget covers every Assay server on this computer. Your agent's limits apply across all your computers.
@@ -82,26 +83,26 @@ Local limits change only from an interactive terminal. No server response, web p
 ## Commands
 
 ```
-assay-mcp [serve] [--url <url|/path>] [--profile <name>] [--no-paid] [--log-level <level>] [--log-file <path>]
-assay-mcp add <url|/path> [--client <id>] [--name <name>] [--scope user|project] [--profile <name>] [--force]
-assay-mcp list
-assay-mcp remove <name> [--client <id>] [--scope user|project]
-assay-mcp login [--profile <name>] [--url <url|/path>]
-assay-mcp logout | status [--profile <name>]
-assay-mcp enable-paid [--profile <name>]
-assay-mcp limits [set --per-call <usd> --per-day <usd> [--confirm-above <usd>|off] [--providers <0x...,...>|off]] [--profile <name>]
-assay-mcp allow-paid <url> | disallow-paid <url> [--profile <name>]
-assay-mcp dev allow <origin>
-assay-mcp settings [set --allow-env-proxy on|off] [--profile <name>]
-assay-mcp doctor [--profile <name>]
-assay-mcp --version
+npx -y @assay-ai/mcp@0.1.0 [serve] [--url <url|/path>] [--profile <name>] [--no-paid] [--log-level <level>] [--log-file <path>]
+npx -y @assay-ai/mcp@0.1.0 add <url|/path> [--client <id>] [--name <name>] [--scope user|project] [--profile <name>] [--force]
+npx -y @assay-ai/mcp@0.1.0 list
+npx -y @assay-ai/mcp@0.1.0 remove <name> [--client <id>] [--scope user|project]
+npx -y @assay-ai/mcp@0.1.0 login [--profile <name>] [--url <url|/path>]
+npx -y @assay-ai/mcp@0.1.0 logout | status [--profile <name>]
+npx -y @assay-ai/mcp@0.1.0 enable-paid [--profile <name>]
+npx -y @assay-ai/mcp@0.1.0 limits [set --per-call <usd> --per-day <usd> [--confirm-above <usd>|off] [--providers <0x...,...>|off]] [--profile <name>]
+npx -y @assay-ai/mcp@0.1.0 allow-paid <url> | disallow-paid <url> [--profile <name>]
+npx -y @assay-ai/mcp@0.1.0 dev allow <origin>
+npx -y @assay-ai/mcp@0.1.0 settings [set --allow-env-proxy on|off] [--profile <name>]
+npx -y @assay-ai/mcp@0.1.0 doctor [--profile <name>]
+npx -y @assay-ai/mcp@0.1.0 --version
 ```
 
 Exit codes: 0 at the end of input, 1 on a fatal startup error, 2 on a usage error.
 
 `limits set`, `allow-paid`, `disallow-paid`, `dev allow` and `settings set` run only in an interactive terminal; anything else (an agent, a script, your MCP app) is refused with exit code 2. `settings set --allow-env-proxy on` (which asks you to type the profile name) lets `assay-mcp` use an HTTP proxy from its environment, which it refuses by default because a project config can set that environment. `doctor` checks project configs and this terminal for settings that change how `assay-mcp` runs.
 
-On Windows, `assay-mcp add` runs a client CLI (`claude`, `codex`, `gemini`) only from your home directory and refuses a project-scope install through it; use `--scope user` or a file client. It also refuses a CLI path or URL with characters outside plain ASCII letters, digits and URL punctuation (for example a user name with accents, or `%`), because `cmd.exe` would interpret them; add the server in that client's own settings instead.
+On Windows, `npx -y @assay-ai/mcp@0.1.0 add` runs a client CLI (`claude`, `codex`, `gemini`) only from your home directory and refuses a project-scope install through it; use `--scope user` or a file client. It also refuses a CLI path or URL with characters outside plain ASCII letters, digits and URL punctuation (for example a user name with accents, or `%`), because `cmd.exe` would interpret them; add the server in that client's own settings instead.
 
 ## Repository layout
 

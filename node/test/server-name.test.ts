@@ -1,3 +1,4 @@
+import { RUN } from "../src/version.js";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -49,7 +50,7 @@ describe("server-name vectors", () => {
     expect(new RegExp(vectors.rule.pattern).test("assay")).toBe(true);
     expect(isValidName("a".repeat(vectors.rule.maxLength))).toBe(true);
     expect(isValidName("a".repeat(vectors.rule.maxLength + 1))).toBe(false);
-    expect(SIGN_IN_HINT).toBe(vectors.rule.signedOutHint);
+    expect(SIGN_IN_HINT).toBe(vectors.rule.signedOutHint.replace("{run}", RUN));
   });
 
   it.each(vectors.maxLength)("max length: $name", ({ L, max }) => {

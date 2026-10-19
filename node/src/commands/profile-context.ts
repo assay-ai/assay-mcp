@@ -6,6 +6,7 @@
  *
  * Every human-readable line goes to stderr: stdout is reserved for MCP JSON-RPC (R-MCP-3).
  */
+import { RUN } from "../version.js";
 import { userInfo } from "node:os";
 import { createInterface } from "node:readline/promises";
 import { createChainReader, type ChainReader } from "../chain/reads.js";
@@ -122,11 +123,11 @@ export function installRecords(deps: Pick<ProfileDeps, "dir">): InstallRecord[] 
 export function reportFailure(command: string, err: unknown, deps: Pick<ProfileDeps, "print">): number {
   if (err instanceof KeychainError) return reportKeychainError(err, (line) => deps.print(line));
   if (err instanceof TtyRequired || err instanceof UsageError) {
-    deps.print(`assay-mcp ${command}: ${printable(redact(err.message))}\n`);
+    deps.print(`${RUN} ${command}: ${printable(redact(err.message))}\n`);
     return EXIT_USAGE;
   }
   if (err instanceof OriginError) {
-    deps.print(`assay-mcp ${command}: ${printable(redact(err.message))}\n`);
+    deps.print(`${RUN} ${command}: ${printable(redact(err.message))}\n`);
     return EXIT_USAGE;
   }
   if (err instanceof LockError && err.code === "LOCK_TIMEOUT") {
@@ -142,7 +143,7 @@ export function reportFailure(command: string, err: unknown, deps: Pick<ProfileD
     return EXIT_FATAL;
   }
   const message = err instanceof Error ? err.message : String(err);
-  deps.print(`assay-mcp ${command}: ${printable(redact(message))}\n`);
+  deps.print(`${RUN} ${command}: ${printable(redact(message))}\n`);
   return EXIT_FATAL;
 }
 

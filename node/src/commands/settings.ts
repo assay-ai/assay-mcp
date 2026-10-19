@@ -9,6 +9,7 @@
  * to type the profile name; it writes `profiles/{profile}.settings.json` as a 0600 file under the lock.
  * Turning it off needs the terminal too, but no confirmation.
  */
+import { RUN } from "../version.js";
 import { EXIT_OK } from "../exit-codes.js";
 import { withLock } from "../profile/lock.js";
 import { profileFile } from "../profile/paths.js";
@@ -46,7 +47,7 @@ export async function settings(args: readonly string[], deps: ProfileDeps): Prom
   await withLock(ref, (lock) => writeSettings(ref, lock, { allowEnvProxy: allow }), deps.lockOptions);
   deps.print(
     allow
-      ? `An env proxy is now allowed for profile "${profile}" (${profileFile(profile, "settings")}). Run \`assay-mcp settings set --allow-env-proxy off\` to undo.\n`
+      ? `An env proxy is now allowed for profile "${profile}" (${profileFile(profile, "settings")}). Run \`${RUN} settings set --allow-env-proxy off\` to undo.\n`
       : `An env proxy is refused again for profile "${profile}".\n`,
   );
   return EXIT_OK;

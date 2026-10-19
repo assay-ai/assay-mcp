@@ -64,6 +64,20 @@ describe("Signers.fromKeychain", () => {
     memory.ring.entries.set(`${KEYCHAIN_SERVICE}\u0000ci@e2e/delegate_key`, "not-a-key");
     await expect(resolveSigner(Signers.fromKeychain({ profile: "ci" }), "e2e")).rejects.toThrow("the payment key stored in the keychain is unreadable");
   });
+
+  it("4.2 m2: a stored key outside the curve range is unreadable, and its value never shows in the error", async () => {
+    const zero = `0x${"0".repeat(64)}`;
+    const huge = `0x${"f".repeat(64)}`;
+    for (const bad of [zero, huge]) {
+      memory.ring = new MemoryKeyring();
+      memory.ring.entries.set(`${KEYCHAIN_SERVICE}\u0000ci@e2e/delegate_key`, bad);
+      const error = await resolveSigner(Signers.fromKeychain({ profile: "ci" }), "e2e").catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(SignerError);
+      expect(String((error as Error).message)).toBe("the payment key stored in the keychain is unreadable");
+      expect(String((error as Error).message) + String((error as Error).stack)).not.toContain(bad.slice(2));
+      expect(String((error as Error).message).includes("0000")).toBe(false);
+    }
+  });
 });
 
 describe("the global keychain guard", () => {

@@ -38,6 +38,15 @@ const RECEIPT_META = "assay/receipt";
 const CAP_DECIMALS = 6;
 const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
+const WARNED = new Set<string>();
+/** The dev-mode warning, worded for the SDK and written once per process and message. */
+function warnOnce(line: string): void {
+  const text = line.replace(/^assay-mcp: assay-mcp is/, "@assay-ai/sdk is");
+  if (WARNED.has(text)) return;
+  WARNED.add(text);
+  process.stderr.write(text);
+}
+
 export class AssayConfigError extends Error {
   override readonly name = "AssayConfigError";
 }
@@ -71,6 +80,7 @@ export class AssayClient {
   readonly #paid: PaidCalls | null;
   readonly #quotes = new QuoteCache();
   #client: Client | null = null;
+  #connecting: Promise<void> | null = null;
   #dateOffset = 0;
   #credentialId: string | null = null;
   #boundAddress: string | null = null;
@@ -115,10 +125,12 @@ export class AssayClient {
           url,
           env: origins.length > 0 ? { [DEV_ORIGINS_ENV]: origins.join(",") } : {},
           devOrigins: origins,
-          ...(warn ? { warn } : {}),
+          warn: warn ?? warnOnce,
         });
       } catch (err) {
-        throw new AssayConfigError(err instanceof Error ? err.message : "invalid url");
+        const message = err instanceof Error ? err.message : "invalid url";
+        // The proxy's text names its CLI; an SDK caller lists the origin in `dev.origins`.
+        throw new AssayConfigError(message.replace(/A dev origin needs both .*$/, "To use a development origin, list it in dev.origins."));
       }
     };
     this.#deployment = resolve(options.url);
@@ -156,8 +168,16 @@ export class AssayClient {
     }
   }
 
-  /** Opens the MCP session. */
-  async connect(): Promise<void> {
+  /** Opens the MCP session. Concurrent calls share one connection attempt. */
+  connect(): Promise<void> {
+    this.#connecting ??= this.#open().catch((err: unknown) => {
+      this.#connecting = null;
+      throw err;
+    });
+    return this.#connecting;
+  }
+
+  async #open(): Promise<void> {
     if (this.#client) return;
     const deployment = this.#deployment;
     const bearer = this.#apiKey;
@@ -192,7 +212,10 @@ export class AssayClient {
   }
 
   /**
-   * Calls a tool. Without a signer, a paid tool comes back as `ok: false` and nothing is signed.
+   * Calls a tool. A tool error, and a payment request that is not paid (no signer, or none to
+   * pay), come back as `ok: false` with `error` (the server's `PAYMENT_REQUIRED` code among them);
+   * `refused` is set only when a local guard refused to sign. A protocol-level JSON-RPC error
+   * (for example an unknown tool) is thrown. Nothing is signed without a signer.
    * With one, a payment request runs every local guard (G1–G12) and is signed only when all pass;
    * at most one voucher per call.
    */
@@ -276,6 +299,7 @@ export class AssayClient {
   async close(): Promise<void> {
     const client = this.#client;
     this.#client = null;
+    this.#connecting = null;
     if (client) await client.close();
   }
 

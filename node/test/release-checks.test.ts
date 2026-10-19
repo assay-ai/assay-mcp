@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { checkLockRuntime, checkManifest, checkPackFiles } from "../../scripts/check-pack.mjs";
-import { containsUnscoped, findUnscoped } from "../../scripts/check-no-unscoped.mjs";
+import { containsBareCommand, containsUnscoped, findUnscoped, withoutComments } from "../../scripts/check-no-unscoped.mjs";
 import { checkReleaseDeployments, isPlaceholder as releaseIsPlaceholder } from "../../scripts/check-deployments.mjs";
 import { isPlaceholder } from "../src/deployments.js";
 import { checkBundle } from "../../scripts/check-bundle.mjs";
@@ -57,6 +57,8 @@ describe("check-pack", () => {
   });
 });
 
+const BARE = ["assay", "mcp"].join("-");
+
 describe("check-no-unscoped", () => {
   it(`no tracked file contains "${UNSCOPED}"`, () => {
     expect(findUnscoped(ROOT)).toEqual([]);
@@ -67,10 +69,35 @@ describe("check-no-unscoped", () => {
     expect(containsUnscoped(UNSCOPED.replace(/ /g, "  "))).toBe(true);
     expect(containsUnscoped("npx -y @assay-ai/mcp@1.2.3")).toBe(false);
     for (const runner of ["npx --yes", "npx", "pnpm dlx", "yarn dlx", "bunx"]) {
-      expect(containsUnscoped(`${runner} assay-mcp add /`), runner).toBe(true);
+      expect(containsUnscoped(`${runner} ${BARE} add /`), runner).toBe(true);
     }
     expect(containsUnscoped("npx -y assay-mcp-other")).toBe(false);
-    expect(containsUnscoped("run assay-mcp status")).toBe(false);
+    expect(containsUnscoped(`run ${BARE} status`)).toBe(false);
+  });
+
+  it("T11: a bare command in a user-facing string or doc fails; identifiers and the bin name pass", () => {
+    const B = BARE;
+    for (const bad of [`Run \`${B} login\` first.`, `print("${B} settings set --allow-env-proxy on")`, `${B} --version`, `${B} add <url>`, `run ${B} enable-paid`]) {
+      expect(containsBareCommand(bad), bad).toBe(true);
+    }
+    for (const ok of ["npx -y @assay-ai/mcp@1.2.3 login", `"${B}/refused"`, `${B}-cmd-`, `"bin": { "${B}": "dist/cli.js" }`, `the ${B} proxy`, `${B} refuses to run`]) {
+      expect(containsBareCommand(ok), ok).toBe(false);
+    }
+    // Comment-only lines in source are internal notes; a string in code is not.
+    expect(containsBareCommand(withoutComments("a.ts", ` * \`${B} login\` does x\n// ${B} list`))).toBe(false);
+    expect(containsBareCommand(withoutComments("a.ts", `const t = "${B} login";`))).toBe(true);
+    expect(containsBareCommand(withoutComments("a.md", `run ${B} login`))).toBe(true);
+  });
+
+  it("T11: the repo check fails on a fixture file with a bare command", () => {
+    const dir = mkdtempSync(join(tmpdir(), "assay-t11-"));
+    try {
+      execFileSync("git", ["init", "-q"], { cwd: dir });
+      writeFileSync(join(dir, "hint.ts"), `export const hint = "run ${BARE} login";\n`);
+      expect(findUnscoped(dir)).toEqual(["hint.ts"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("finds the form in a new file of a repo", () => {

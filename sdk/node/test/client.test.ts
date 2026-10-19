@@ -79,6 +79,18 @@ describe("construction", () => {
     }
   });
 
+  it("4.1 M5: the refusal for a dev origin names dev.origins, not the CLI", () => {
+    let message = "";
+    try {
+      new AssayClient({ url: `${DEV_ORIGIN}/`, apiKey: KEY });
+    } catch (e) {
+      message = String((e as Error).message);
+    }
+    expect(message).toContain("dev.origins");
+    expect(message).not.toContain(["assay", "mcp"].join("-") + " dev allow");
+    expect(message).not.toContain("ASSAY_MCP_DEV_ORIGINS");
+  });
+
   it("apiKey missing → throws", () => {
     // @ts-expect-error apiKey is required
     expect(() => new AssayClient({ url: "https://mcp.assay.ai/" })).toThrow(/apiKey is required/);
@@ -135,6 +147,12 @@ describe("free calls", () => {
     await client.listTools();
     expect(mcp.seen.length).toBeGreaterThan(1);
     for (const s of mcp.seen) expect(s.authorization).toBe(`Bearer ${KEY}`);
+  });
+
+  it("4.1 M9: concurrent connect() calls open one session", async () => {
+    client = new AssayClient({ url: `${DEV_ORIGIN}/`, apiKey: KEY, dev: { origins: [DEV_ORIGIN] } });
+    await Promise.all([client.connect(), client.connect(), client.connect()]);
+    expect(mcp.seen.filter((r) => r.body.method === "initialize")).toHaveLength(1);
   });
 
   it("calls before connect throw", async () => {

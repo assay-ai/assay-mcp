@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import { privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
 import { getAddress, type Hex } from "viem";
 import { toGuardChain, type ChainReader, type ChainState } from "../chain/reads.js";
@@ -13,7 +12,7 @@ import { identifyCredential } from "../oauth/flow.js";
 import type { ResolvedDeployment } from "../profile/deployments.js";
 import type { Keychain } from "../profile/keychain.js";
 import { withLock, type LockHandle, type LockOptions, type ProfileRef } from "../profile/lock.js";
-import { createProfile, paidUrlKey, readLimits, readPaidUrls, readProfileFor, readState, updateProfile, updateState, type PendingBinding } from "../profile/profile.js";
+import { createProfile, paidUrlKey, readLimits, readPaidUrls, readProfileFor, readState, updateProfile } from "../profile/profile.js";
 import { issuedAt } from "../signer/clock.js";
 import { generate } from "../signer/keygen.js";
 import { openThroughGate } from "./browser-gate.js";
@@ -108,6 +107,7 @@ export interface PaidOptions {
 export const POLL_MS = 5_000;
 export const POLL_MAX_MS = 15 * 60_000;
 const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+const SIGNED_OUT_DURING_BIND = "Paid calls could not be set up: you signed out while the payment key was being bound. Sign in again, then ask again.";
 const PRIVATE_KEY_RE = /^0x[0-9a-fA-F]{64}$/;
 
 /** A refusal for the host, with `_meta["assay-mcp/refused"]`. */
@@ -445,13 +445,14 @@ export class PaidPath {
   /**
    * F4 steps 2–3, in two short holds of the profile lock with the network outside them (review I1):
    * - the bearer is taken first, outside any lock (a refresh takes the profile lock itself);
-   * - hold 1: re-read the keychain, generate and store a key if there is none, and write a
-   *   pending-binding record for it in `state.json`;
+   * - hold 1: re-read the keychain and generate and store a key if there is none;
    * - no lock: challenge, every field checked, signature, `POST /agents/me/delegate`, and the
    *   answer must name this key;
-   * - hold 2 (compare-and-set): the keychain still holds that key and a pending record for it is
-   *   still there; only then is the binding recorded (our own pending record is cleared).
-   * If hold 2's check fails (another window changed the key meanwhile) the binding is redone once.
+   * - hold 2 (compare-and-set): the keychain is re-read; the binding is recorded only if it still
+   *   holds the key that was bound. If the key is gone (a sign-out ran meanwhile) nothing is
+   *   recorded, no key is made and the call ends with a message. If another window replaced the
+   *   key, the binding is redone once. The keychain is the single source of truth: no side record
+   *   is kept, so any number of windows binding at once do not invalidate each other.
    * The clock is corrected from the challenge answer's `Date` header (clamped to ±120 s); a
    * challenge refused on its expiry is retried once with a fresh one. Returns the bound address.
    */
@@ -461,48 +462,44 @@ export class PaidPath {
       const bearer = await this.host.bearer();
       if (bearer === null) throw new SetupError("Paid calls could not be set up: this app is not signed in to Assay.");
 
-      const pending = await withLock(
+      const account = await withLock(
         profile,
         async (lock) => {
           let account = await this.account();
           if (account === null) {
+            // Round 2 only follows a key that was replaced a moment ago; a missing key then means
+            // a sign-out, and a new key must not appear after it.
+            if (round > 0) throw new SetupError(SIGNED_OUT_DURING_BIND);
             const key = generate();
             await keychain.set(lock, "delegate_key", key.privateKey);
             account = await this.account();
             if (account === null || account.address !== key.address) throw new SetupError("Paid calls could not be set up: the payment key could not be stored. Try again.");
             this.log.info("payment key created");
           }
-          const record: PendingBinding = { address: account.address, token: randomBytes(16).toString("base64url"), at: Math.floor(this.now() / 1000) };
-          updateState(profile, lock, (state) => ({ ...state, pendingBinding: record }));
-          return { account, record };
+          return account;
         },
         this.o.lockOptions,
       );
 
-      await this.bindOnServer(pending.account, network, credentialId, bearer);
+      await this.bindOnServer(account, network, credentialId, bearer);
 
-      const recorded = await withLock(
+      const outcome = await withLock(
         profile,
         async (lock) => {
-          const account = await this.account();
-          const state = readState(profile);
-          const same = account !== null && account.address === pending.account.address && state.pendingBinding?.address === pending.record.address;
-          if (state.pendingBinding?.token === pending.record.token) {
-            updateState(profile, lock, (current) => {
-              const rest = { ...current };
-              delete rest.pendingBinding;
-              return rest;
-            });
-          }
-          if (!same) return false;
-          this.recordBinding(lock, credentialId, pending.account.address, network.id);
-          return true;
+          const now = await this.account();
+          // Signed out during the network phase (the sign-out deletes the key): record nothing and
+          // make no key; the next paid call starts from a clean state.
+          if (now === null) return "signed-out" as const;
+          if (now.address !== account.address) return "changed" as const;
+          this.recordBinding(lock, credentialId, account.address, network.id);
+          return "recorded" as const;
         },
         this.o.lockOptions,
       );
-      if (recorded) {
+      if (outcome === "signed-out") throw new SetupError(SIGNED_OUT_DURING_BIND);
+      if (outcome === "recorded") {
         this.log.info("payment key bound", { credential: credentialId.slice(0, 8) });
-        return pending.account.address;
+        return account.address;
       }
       this.log.warn("payment key changed during the binding; binding again");
     }

@@ -3,7 +3,7 @@ import OpenAI from "openai";
 import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import type { AssayClient } from "../src/index.js";
-import { clientFromEnv } from "./client.js";
+import { clientFromEnv, connectFromEnv } from "./client.js";
 
 export async function run(assay: AssayClient, openai: OpenAI = new OpenAI()): Promise<void> {
   const tools = (await assay.listTools()).map((t) => ({ type: "function" as const, name: t.name, description: t.description, parameters: t.inputSchema, strict: false }));
@@ -26,7 +26,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.ar
     process.exit(2);
   }
   const assay = clientFromEnv();
-  await assay.connect();
+  await connectFromEnv(assay);
   try {
     await run(assay);
   } finally {

@@ -13,6 +13,7 @@
  *   assay-mcp code; only the MCP client's approval of project servers stops it.
  * Exit 0 when nothing was flagged, 1 otherwise.
  */
+import { RUN } from "../version.js";
 import type { ClientEnv, Target } from "../clients/client.js";
 import { isAssayEntry, PACKAGE_NAME } from "../clients/install-command.js";
 import { EXIT_FATAL, EXIT_OK } from "../exit-codes.js";
@@ -66,7 +67,7 @@ export function checkProjectEntry(where: string, name: string, entry: unknown): 
   }
   if (e.envFile !== undefined) out.push({ level: "problem", text: `${at} loads its environment from a file (envFile).` });
   if (!isAssayEntry({ command: e.command, args: e.args, ...(e.type !== undefined ? { type: e.type } : {}) })) {
-    out.push({ level: "problem", text: `${at} does not run the pinned ${PACKAGE_NAME} package the way \`assay-mcp add\` writes it.` });
+    out.push({ level: "problem", text: `${at} does not run the pinned ${PACKAGE_NAME} package the way \`${RUN} add\` writes it.` });
   } else if ((e.args as string[]).includes("--log-file")) {
     out.push({ level: "problem", text: `${at} passes --log-file, which a project config must not.` });
   }
@@ -143,7 +144,7 @@ export async function doctorFindings(args: readonly string[], deps: ProfileDeps)
     findings.push({ level: "problem", text: "NODE_TLS_REJECT_UNAUTHORIZED=0 is set in this terminal: certificate checks are off. assay-mcp refuses to serve with it." });
   }
   const proxies = PROXY_VARS.filter((k) => (env[k] ?? "").trim() !== "");
-  if (proxies.length > 0) findings.push({ level: "note", text: `${proxies.join(", ")} set in this terminal: assay-mcp serves through it only if \`assay-mcp settings set --allow-env-proxy on\` was run for the profile.` });
+  if (proxies.length > 0) findings.push({ level: "note", text: `${proxies.join(", ")} set in this terminal: ${RUN} serves through it only if \`${RUN} settings set --allow-env-proxy on\` was run for the profile.` });
   if ((env.NODE_EXTRA_CA_CERTS ?? "").trim() !== "") findings.push({ level: "problem", text: "NODE_EXTRA_CA_CERTS is set in this terminal: extra certificate authorities are trusted for Assay traffic." });
   const nodeOptions = env.NODE_OPTIONS ?? "";
   if (PRELOAD_OPTIONS.test(nodeOptions)) findings.push({ level: "problem", text: "NODE_OPTIONS in this terminal preloads code into every Node program, assay-mcp included." });

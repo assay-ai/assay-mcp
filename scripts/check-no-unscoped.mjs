@@ -14,6 +14,24 @@ export function containsUnscoped(text) {
   return /(?:npx(?:\s+(?:-y|--yes))?|pnpm\s+dlx|yarn\s+dlx|bunx)\s+assay-mcp(?![\w-])/.test(text);
 }
 
+const SUBCOMMANDS = "serve|login|logout|status|doctor|limits|settings|enable-paid|allow-paid|disallow-paid|add|remove|list|dev|paid-urls|measure-tools";
+
+/**
+ * True when the text writes a bare `assay-mcp <subcommand>` (T11): the unscoped name belongs to a
+ * third party, so a user who types it runs a stranger's code. Allowed: the bin name in package.json
+ * (not a command line) and identifiers such as `assay-mcp/refused` or `assay-mcp-cmd-`, which are
+ * not followed by a space and a subcommand. Written scoped it is `@assay-ai/mcp@V <cmd>`.
+ */
+export function containsBareCommand(text) {
+  return new RegExp(String.raw`(?<![@/\w.-])assay-mcp\s+(?:(?:${SUBCOMMANDS})(?![\w-])|--[a-z]|<|\[)`).test(text);
+}
+
+/** Source files: comment-only lines are internal notes, not user-facing text, so they are not scanned. */
+export function withoutComments(file, text) {
+  if (!/\.(?:[cm]?[jt]s)$/.test(file)) return text;
+  return text.split("\n").filter((l) => !/^\s*(?:\*|\/\/|\/\*)/.test(l)).join("\n");
+}
+
 export function listRepoFiles(root) {
   const out = execFileSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], {
     cwd: root,
@@ -32,7 +50,7 @@ export function findUnscoped(root) {
     } catch {
       continue; // deleted in the working tree
     }
-    if (containsUnscoped(text)) hits.push(file);
+    if (containsUnscoped(text) || (!file.endsWith("package.json") && !file.endsWith("package-lock.json") && containsBareCommand(withoutComments(file, text)))) hits.push(file);
   }
   return hits;
 }

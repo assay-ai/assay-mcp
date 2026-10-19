@@ -875,7 +875,7 @@
         "ok": false,
         "guard": "G4",
         "code": "G4_PAYER_CHANGED",
-        "reason": "payer changed; run assay-mcp enable-paid"
+        "reason": "payer changed; run {run} enable-paid"
       }
     },
     {

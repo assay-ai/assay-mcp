@@ -1,3 +1,4 @@
+import { RUN } from "../src/version.js";
 import { fork } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -334,7 +335,7 @@ describe("paid path (SDK client → proxy → fake Assay)", () => {
     fake.grant(address);
     const r = await client.callTool({ name: "weather", arguments: {} });
     expect(r.isError).toBe(true);
-    expect(metaOf(r)["assay-mcp/refused"]).toEqual({ guard: "G4", reason: "payer changed; run assay-mcp enable-paid" });
+    expect(metaOf(r)["assay-mcp/refused"]).toEqual({ guard: "G4", reason: `payer changed; run ${RUN} enable-paid` });
     expect(fake.accepted).toHaveLength(1);
     expect(readProfile(profile())!.payer).toBe(PAYER);
   });
@@ -790,11 +791,32 @@ describe("PaidPath units", () => {
       // Every API request carried the refreshed token, never the expired one.
       expect(u.bearers.length).toBeGreaterThanOrEqual(2);
       for (const b of u.bearers) expect(b).not.toBe(pair.accessToken);
-      expect(readState(profile()).pendingBinding).toBeUndefined();
     } finally {
       globalThis.fetch = realFetch;
       await as.stop();
     }
+  });
+
+  it("2.9 m2: signing out during the bind network phase records nothing and creates no key afterwards", async () => {
+    const u = await unit({ key: false, bound: false });
+    fake.beforeChallenge = async () => {
+      // The sign-out: it deletes the payment key under the profile lock.
+      await withLock(profile(), (lock) => u.kc.delete(lock, "delegate_key"));
+    };
+    const call = u.calls.begin(1, "weather", prepareCallParams({ name: "weather", arguments: {} }))!;
+    const out = await u.paid.onToolResult(call, { jsonrpc: "2.0", id: 1, result: u.required() });
+    expect(textOf((out as { result: unknown }).result)).toContain("you signed out while the payment key was being bound");
+    expect(await u.kc.get("delegate_key")).toBeNull();
+    expect(readProfile(profile())?.delegateAddress ?? null).toBeNull();
+    expect(u.sent).toEqual([]);
+  });
+
+  it("2.9 m1: three windows binding at once end with one key, no 'changed in another window' error", async () => {
+    const u = await unit({ key: false, bound: false });
+    const calls = [1, 2, 3].map((id) => u.calls.begin(id, "weather", prepareCallParams({ name: "weather", arguments: {} }))!);
+    const outs = await Promise.all(calls.map((call, i) => u.paid.onToolResult(call, { jsonrpc: "2.0", id: i + 1, result: u.required() })));
+    for (const out of outs) expect(textOf((out as { result: unknown }).result)).not.toContain("changed in another window");
+    expect(await u.kc.get("delegate_key")).not.toBeNull();
   });
 
   it("hold 2 compare-and-set: a key replaced during the network phase is not recorded; the binding is redone for the new key", async () => {

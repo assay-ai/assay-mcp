@@ -1,3 +1,4 @@
+import { RUN } from "../src/version.js";
 import { describe, expect, it } from "vitest";
 import guardVectors from "../../vectors/guards.json" with { type: "json" };
 import seqVectors from "../../vectors/seq.json" with { type: "json" };
@@ -55,7 +56,7 @@ describe("guards.json", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect({ guard: result.guard, code: result.code }).toEqual({ guard: c.expect.guard, code: c.expect.code });
-    if (c.expect.reason !== undefined) expect(result.reason).toBe(c.expect.reason);
+    if (c.expect.reason !== undefined) expect(result.reason).toBe(c.expect.reason.replace("{run}", RUN));
     expect(result.reason.length).toBeGreaterThan(0);
   });
 
@@ -110,11 +111,11 @@ describe("the brief's cases", () => {
   it("rail A -> G1", () => refuses("rail A", "G1"));
   it("providers set and provider absent -> G8", () => refuses("providers set and provider absent", "G8"));
 
-  it('recordedPayer differs -> G4 "payer changed; run assay-mcp enable-paid"', () => {
+  it('recordedPayer differs -> G4 "payer changed; run <pinned command> enable-paid"', () => {
     expect(run("recordedPayer differs")).toMatchObject({
       ok: false,
       guard: "G4",
-      reason: "payer changed; run assay-mcp enable-paid",
+      reason: `payer changed; run ${RUN} enable-paid`,
     });
   });
 

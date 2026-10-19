@@ -3,7 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import type { AssayClient } from "../src/index.js";
-import { clientFromEnv } from "./client.js";
+import { clientFromEnv, connectFromEnv } from "./client.js";
 
 export async function run(assay: AssayClient, anthropic: Anthropic = new Anthropic()): Promise<void> {
   const tools = (await assay.listTools()).map((t) => ({ name: t.name, description: t.description, input_schema: t.inputSchema }));
@@ -29,7 +29,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.ar
     process.exit(2);
   }
   const assay = clientFromEnv();
-  await assay.connect();
+  await connectFromEnv(assay);
   try {
     await run(assay);
   } finally {

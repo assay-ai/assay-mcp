@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // The SDK reuses the proxy's signer and guards through the `@assay-core/*` alias (R-SDK-1).
-// Fails when sdk/node/src holds a copy: a `signer` or `guards` directory, or any file named for one.
+// Fails when sdk/node/src holds a copy: a `signer` or `guards` directory, any file named for one, or any symlink.
 import { readdirSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,7 +18,9 @@ export function findForks(dir, root = dir) {
   }
   for (const e of entries) {
     const path = join(dir, e.name);
-    if (e.isDirectory()) {
+    // A symlink could point at a copy (or at the proxy's own folder under another name): refused.
+    if (e.isSymbolicLink()) hits.push(relative(root, path));
+    else if (e.isDirectory()) {
       if (FORBIDDEN_DIRS.has(e.name.toLowerCase())) hits.push(relative(root, path));
       else hits.push(...findForks(path, root));
     } else if (/^(signer|guards)(\.[^.]+)*\.[cm]?[jt]s$/i.test(e.name)) {

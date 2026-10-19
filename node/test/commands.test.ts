@@ -4,7 +4,7 @@
  * fake chain. Never the real keychain, real client configs or the real profile directory.
  */
 import { createServer, type Server } from "node:http";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, lutimesSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -30,6 +30,7 @@ import { tokenLongestTool } from "../src/commands/wiring.js";
 import { main } from "../src/cli.js";
 import { getAddress } from "viem";
 import { TOKEN_PATTERN as TOKEN_G, HEX32_PATTERN as HEX32_G } from "../src/log/redact.js";
+import { clearDeadMarker } from "../src/oauth/signin-marker.js";
 import { RefreshError } from "../src/oauth/tokens.js";
 import { resolveDeployment } from "../src/profile/deployments.js";
 import { addDevOrigin, readDevOrigins } from "../src/profile/dev-origins.js";
@@ -41,6 +42,7 @@ import { testHome } from "./setup/temp-home.js";
 import { addPaidUrl, createProfile, readLimits, readPaidUrls, readProfile, updateProfile } from "../src/profile/profile.js";
 import { readSettings } from "../src/profile/settings.js";
 import { checkEnvironment, readProfileSettings } from "../src/proxy/environment.js";
+import { RUN } from "../src/version.js";
 import { spawnSync } from "node:child_process";
 import { isInteractive, requireTty, TtyRequired } from "../src/tty.js";
 import { E2E_MCP, FakeAs } from "./helpers/fake-as.js";
@@ -295,18 +297,18 @@ describe("status", () => {
     expect(await keyLine()).toBe("Payment key 1A2B 9F3C · can't confirm on chain right now");
     const v = { payer: PAYER, delegate: DELEGATE, maxVoucherAmount: "1", maxPerWindow: "1", delegateMaxVoucherAmount: "1", delegateMaxPerWindow: "1", readAt: NOW };
     chainResult = { ok: true, value: { ...v, active: false, validUntil: String(UNTIL) } };
-    expect(await keyLine()).toBe("Payment key 1A2B 9F3C · stopped (read from chain) · run `assay-mcp enable-paid`");
+    expect(await keyLine()).toBe(`Payment key 1A2B 9F3C · stopped (read from chain) · run \`${RUN} enable-paid\``);
     chainResult = { ok: true, value: { ...v, active: true, validUntil: String(NOW - 1) } };
-    expect(await keyLine()).toBe("Payment key 1A2B 9F3C · expired 2026-10-19 (read from chain) · run `assay-mcp enable-paid`");
+    expect(await keyLine()).toBe(`Payment key 1A2B 9F3C · expired 2026-10-19 (read from chain) · run \`${RUN} enable-paid\``);
     chainResult = { ok: true, value: { ...v, active: false, validUntil: "0" } };
-    expect(await keyLine()).toBe("Payment key 1A2B 9F3C · off (read from chain) · run `assay-mcp enable-paid`");
+    expect(await keyLine()).toBe(`Payment key 1A2B 9F3C · off (read from chain) · run \`${RUN} enable-paid\``);
   });
 
   it("signed out, with no profile: defaults and no key", async () => {
     expect(await runStatus([], deps({ platform: "linux" }))).toBe(0);
     const lines = output().split("\n");
     expect(lines[0]).toBe("Profile     default  (https://mcp.assay.ai)");
-    expect(lines[1]).toBe("Signed in   no · run `assay-mcp login`");
+    expect(lines[1]).toBe(`Signed in   no · run \`${RUN} login\``);
     expect(lines[3]).toBe("Payment key none yet · made on the first paid call");
     expect(lines[4]).toBe("Local caps  $0.50 a call · $5 per 24 h · spent today $0 · confirm above: off · providers: any");
     expect(lines[5]).toBe("Paid URLs   /");
@@ -334,7 +336,7 @@ describe("status", () => {
   it("refuses a dev profile while dev mode is off", async () => {
     await seedProfile("e2e");
     expect(await runStatus([], deps())).toBe(2);
-    expect(output()).toContain("assay-mcp status:");
+    expect(output()).toContain(`${RUN} status:`);
   });
 });
 
@@ -478,7 +480,7 @@ describe("login and logout (fake AS)", () => {
     expect(readProfile(ref())).toBeNull();
   });
 
-  it("R1-N3: logout removes a sign-in marker of a dead pid or of this process, and leaves another live process's marker", async () => {
+  it("R1-N3: logout removes a sign-in marker of a dead pid, and leaves a live one (another process's or this process's own, by token)", async () => {
     const markerPath = join(dir, profileFile("default", "signin"));
     const writeMarker = (pid: number) =>
       withLock(ref(), (lock) => {
@@ -487,12 +489,21 @@ describe("login and logout (fake AS)", () => {
       });
     // A child that has already exited: its pid no longer runs.
     const dead = spawnSync(process.execPath, ["-e", ""]).pid!;
-    for (const pid of [dead, process.pid]) {
-      await seedFull();
-      await writeMarker(pid);
-      expect(await runLogout([], deps({ env: E2E_ENV }))).toBe(0);
-      expect(existsSync(markerPath)).toBe(false);
-    }
+    await seedFull();
+    await writeMarker(dead);
+    expect(await runLogout([], deps({ env: E2E_ENV }))).toBe(0);
+    expect(existsSync(markerPath)).toBe(false);
+    // M1: a live marker of this very pid is kept too (ownership is by token, not pid).
+    await seedFull();
+    await writeMarker(process.pid);
+    expect(await runLogout([], deps({ env: E2E_ENV }))).toBe(0);
+    expect(existsSync(markerPath)).toBe(true);
+    // ... and it is removed only when the caller names its token.
+    await withLock(ref(), (lock) => {
+      expect(clearDeadMarker(ref(), lock, undefined, "other-token")).toBe(false);
+      expect(clearDeadMarker(ref(), lock, undefined, "marker-token")).toBe(true);
+    });
+    expect(existsSync(markerPath)).toBe(false);
     // The parent process is alive and is not this process: its pending sign-in is left alone.
     await seedFull();
     await writeMarker(process.ppid);
@@ -1130,9 +1141,26 @@ describe("global guard (review I2)", () => {
     const other = join(base, "other-target");
     mkdirSync(other);
     const repoint = guard(link);
+    const before = statSync(link, { bigint: false }).mtimeMs;
     unlinkSync(link);
     symlinkSync(other, link);
+    // Same link mtime as before, so only the resolved path tells the two apart.
+    lutimesSync(link, new Date(before), new Date(before));
+    const fp = fingerprintDir(link);
+    expect(fp).toContain(`resolves to ${realpathSync(other)}`);
     expect(() => repoint()).toThrow(/changed the real profile directory/);
+  });
+
+  it("F4 M4: catches a write through a symlink below the profile directory, and survives a cycle", () => {
+    const root = join(base, "m4-root");
+    const elsewhere = join(base, "m4-elsewhere");
+    mkdirSync(root);
+    mkdirSync(elsewhere);
+    symlinkSync(elsewhere, join(root, "profiles"));
+    symlinkSync(root, join(root, "loop"));
+    const teardown = guard(root);
+    writeFileSync(join(elsewhere, "default.json"), "{}");
+    expect(() => teardown()).toThrow(/changed the real profile directory/);
   });
 
   it("every default dependency points at the temporary home", async () => {

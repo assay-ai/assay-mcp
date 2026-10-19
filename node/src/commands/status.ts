@@ -6,6 +6,7 @@
  * `paidCalls` is used only when the chain cannot be asked yet (no payer recorded), and is
  * labelled as such. No secret is printed: the payment key appears only as its fingerprint.
  */
+import { RUN } from "../version.js";
 import { EXIT_OK } from "../exit-codes.js";
 import { SPEND_WINDOW_SECONDS } from "../guards/guards.js";
 import { MAX_BODY_BYTES, readCapped, REQUEST_TIMEOUT_MS, requestSignal } from "../oauth/endpoints.js";
@@ -80,7 +81,7 @@ async function paymentKeyLine(
   if (delegate === null) return "none yet · made on the first paid call";
   const fp = fingerprint(delegate);
   const network = networkOf(record, deployment);
-  const enable = "run `assay-mcp enable-paid`";
+  const enable = `run \`${RUN} enable-paid\``;
   if (record?.payer && network !== null) {
     const read = await deps.chain(deployment.environment, profile).readDelegation(network, record.payer, delegate, { fresh: true });
     if (!read.ok) return `${fp} · can't confirm on chain right now`;
@@ -119,7 +120,7 @@ export async function statusText(args: readonly string[], deps: ProfileDeps): Pr
       ? `yes · API key from ${deployment.dev ? "ASSAY_DEV_API_KEY" : "ASSAY_API_KEY"}${credential}`
       : oauth
         ? `yes · Assay app on ${thisComputer(deps.platform)}${credential} (OAuth)`
-        : "no · run `assay-mcp login`";
+        : `no · run \`${RUN} login\``;
   const bearer = key ?? (oauth ? await signedInBearer(keychain, now) : null);
 
   const network = networkOf(record, deployment);
