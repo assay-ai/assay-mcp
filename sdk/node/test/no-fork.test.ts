@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -16,6 +16,19 @@ describe("check-no-fork", () => {
       mkdirSync(join(dir, "lib/signer"), { recursive: true });
       writeFileSync(join(dir, "guards.ts"), "");
       expect(findForks(dir).sort()).toEqual(["guards.ts", join("lib", "signer")]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("check-no-fork symlinks (4.1 M9)", () => {
+  it("fails on a symlink under any name", () => {
+    const dir = mkdtempSync(join(tmpdir(), "assay-fork-"));
+    try {
+      mkdirSync(join(dir, "real"));
+      symlinkSync(join(dir, "real"), join(dir, "helpers"));
+      expect(findForks(dir)).toEqual(["helpers"]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

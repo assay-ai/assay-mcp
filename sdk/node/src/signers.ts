@@ -157,7 +157,13 @@ export const Signers = Object.freeze({
         });
       }
       if (!PRIVATE_KEY_RE.test(pk)) throw new SignerError("the payment key stored in the keychain is unreadable");
-      const local = privateKeyToAccount(pk as Hex);
+      let local;
+      try {
+        local = privateKeyToAccount(pk as Hex);
+      } catch {
+        // Out of the curve range (0 or >= n): the library's message would quote the value.
+        throw new SignerError("the payment key stored in the keychain is unreadable");
+      }
       return signingOnly(local.address, local.signTypedData);
     };
     return new Signer("keychain", null, (environment) => {
@@ -172,7 +178,7 @@ export const Signers = Object.freeze({
   },
 
   /**
-   * FOR TESTS AND LOCAL DEVELOPMENT ONLY. A raw private key in process memory: anything that can
+   * FOR TESTS AND CI ONLY. A raw private key in process memory: anything that can
    * read the process environment or memory can spend with it, within its on-chain caps. In
    * production use {@link Signers.fromAccount} with a KMS-backed account.
    *

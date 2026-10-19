@@ -252,6 +252,7 @@ export class Forwarder {
 
     const pair = new Pairing(exchange, (n) => this.answerServerRequest(n, exchange));
     const type = (res.headers.get("content-type") ?? "").toLowerCase();
+    let refusalCode: string | null = null;
     if (res.ok && type.startsWith("text/event-stream")) {
       await this.readSse(res, pair, controller, charge);
     } else if (type.startsWith("application/json")) {
@@ -262,12 +263,15 @@ export class Forwarder {
       } catch {
         parsed = undefined;
       }
-      if (parsed !== undefined) pair.take(parsed);
+      if (parsed !== undefined) {
+        pair.take(parsed);
+        if (!res.ok) refusalCode = refusalCodeOf(parsed);
+      }
     } else {
       await cancel(res);
     }
     if (pair.response) return { kind: "response", response: pair.response };
-    if (!res.ok) return { kind: "response", response: errorResponse(exchange.id, SERVER_ERROR, `Assay refused the request (HTTP ${res.status}).`) };
+    if (!res.ok) return { kind: "response", response: errorResponse(exchange.id, SERVER_ERROR, refusalMessage(res.status, refusalCode)) };
     return { kind: "error", code: SERVER_ERROR, message: "Assay's answer had no result for this request." };
   }
 
@@ -337,6 +341,34 @@ export class Forwarder {
 }
 
 /** Pairs a remote answer with the forwarded request by JSON-RPC id. */
+const REFUSAL_REASONS: Readonly<Record<string, string>> = {
+  AUTH_AGENT_SUSPENDED: "this agent is suspended",
+  AUTH_ORGANIZATION_SUSPENDED: "this organization is suspended",
+  ACCOUNT_BLOCKED: "this account is blocked",
+};
+
+/**
+ * The backend's reason code from a refused request's JSON body (`code`, or `error.code`), only
+ * when it has the shape of a code: nothing else of the body is ever shown.
+ */
+export function refusalCodeOf(body: unknown): string | null {
+  const find = (v: unknown): string | null => {
+    if (typeof v !== "object" || v === null || Array.isArray(v)) return null;
+    const code = (v as Record<string, unknown>).code;
+    return typeof code === "string" && /^[A-Z][A-Z0-9_]{2,63}$/.test(code) ? code : null;
+  };
+  const top = find(body);
+  if (top !== null) return top;
+  return typeof body === "object" && body !== null ? find((body as Record<string, unknown>).error) : null;
+}
+
+/** "Assay refused the request (HTTP 403)", plus the reason code and, for a known one, its meaning. */
+export function refusalMessage(status: number, code: string | null): string {
+  if (code === null) return `Assay refused the request (HTTP ${status}).`;
+  const reason = REFUSAL_REASONS[code];
+  return reason !== undefined ? `Assay refused the request (HTTP ${status}): ${reason} (${code}).` : `Assay refused the request (HTTP ${status}, ${code}).`;
+}
+
 class Pairing {
   response: JsonRpcResponse | null = null;
   private serverRequests = 0;

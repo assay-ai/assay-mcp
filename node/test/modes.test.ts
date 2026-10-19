@@ -154,7 +154,6 @@ async function script(mode: Mode) {
         },
         profile: { credentialId: record?.credentialId, delegateAddress: record?.delegateAddress, network: record?.network, payer: record?.payer },
         spent: readState(w.profile).signed.map((s) => s.amount),
-        pendingBinding: readState(w.profile).pendingBinding ?? null,
       },
       key,
     ),

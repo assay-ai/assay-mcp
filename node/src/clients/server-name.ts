@@ -1,3 +1,4 @@
+import { RUN } from "../version.js";
 import { createHash } from "node:crypto";
 
 /** Spec 8.3.1: one rule for every client, kept as data so one client can get its own values later. */
@@ -17,7 +18,7 @@ export const SEARCH_META_TOOLS = ["search_tools", "get_tool", "call_tool"] as co
 export const NO_NAME_BUDGET = 16;
 /** `agent_connect_urls.server_name` is varchar(56). */
 export const MAX_NAME_LENGTH = 56;
-export const SIGN_IN_HINT = "Sign in first (`assay-mcp login`) to allow a longer name.";
+export const SIGN_IN_HINT = `Sign in first (\`${RUN} login\`) to allow a longer name.`;
 
 const NAME_PATTERN = /^[a-z][a-z0-9-]*$/;
 /** Clients accept tool names of ASCII letters, digits, `_` and `-` only. */

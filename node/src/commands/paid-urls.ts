@@ -6,6 +6,7 @@
  * pinning and the server URL parser (the same resolver as `add`), and is stored as its
  * canonical `path?query`, never a host, under the profile lock.
  */
+import { RUN } from "../version.js";
 import { EXIT_OK } from "../exit-codes.js";
 import { UrlRefused, type ResolvedUrl } from "../clients/ports.js";
 import { withLock } from "../profile/lock.js";
@@ -54,7 +55,7 @@ export async function changePaidUrl(command: PaidUrlChange, args: readonly strin
   if (command === "allow-paid") {
     deps.print(
       result.changed
-        ? `Paid calls are allowed through ${url.url} for profile "${profile}". Local caps still apply (\`assay-mcp limits\`).\n`
+        ? `Paid calls are allowed through ${url.url} for profile "${profile}". Local caps still apply (\`${RUN} limits\`).\n`
         : `Paid calls were already allowed through ${url.url} for profile "${profile}".\n`,
     );
   } else {

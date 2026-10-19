@@ -1,4 +1,5 @@
 /** `assay-mcp list`: `installs.json`, each checked against the client's config (spec 8.3). */
+import { RUN } from "../version.js";
 import { entryFlag } from "../clients/install-command.js";
 import type { InstallRecord } from "../clients/installs.js";
 import { EXIT_FATAL, EXIT_OK, EXIT_USAGE } from "../exit-codes.js";
@@ -33,7 +34,7 @@ export async function runList(args: readonly string[], deps: InstallDeps): Promi
     parseFlags(args, {}, 0);
     const rows = listInstalls(deps);
     if (rows.length === 0) {
-      deps.print("No Assay servers installed with assay-mcp add.\n");
+      deps.print(`No Assay servers installed with ${RUN} add.\n`);
       return EXIT_OK;
     }
     for (const { record: r, status } of rows) {
@@ -42,7 +43,7 @@ export async function runList(args: readonly string[], deps: InstallDeps): Promi
     }
     return EXIT_OK;
   } catch (err) {
-    deps.print(`assay-mcp list: ${(err as Error).message}\n`);
+    deps.print(`${RUN} list: ${(err as Error).message}\n`);
     return err instanceof UsageError ? EXIT_USAGE : EXIT_FATAL;
   }
 }

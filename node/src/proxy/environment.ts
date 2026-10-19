@@ -1,3 +1,4 @@
+import { RUN } from "../version.js";
 import type { ProfileRef } from "../profile/lock.js";
 import { readSettings } from "../profile/settings.js";
 
@@ -61,7 +62,7 @@ export function checkEnvironment(
   if (proxyVars.length > 0 && !settings().allowEnvProxy) {
     refusals.push(
       `${proxyVars.join(", ")} would send Assay traffic through an HTTP proxy from the environment; assay-mcp refuses to. ` +
-        `To allow it for this profile, run in a terminal: assay-mcp settings set --allow-env-proxy on${profileName === "default" ? "" : ` --profile ${profileName}`}`,
+        `To allow it for this profile, run in a terminal: ${RUN} settings set --allow-env-proxy on${profileName === "default" ? "" : ` --profile ${profileName}`}`,
     );
   }
   if (set(env.NODE_EXTRA_CA_CERTS)) {

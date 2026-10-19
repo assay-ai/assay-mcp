@@ -4,7 +4,7 @@ import { AssayClient, Signers } from "../src/index.js";
 export function requireEnv(name: string): string {
   const value = process.env[name]?.trim();
   if (!value) {
-    console.error(`${name} is not set. See sdk/node/README.md ("Running the examples").`);
+    console.error(`${name} is not set. See sdk/node/README.md ("Examples").`);
     process.exit(2);
   }
   return value;
@@ -28,4 +28,16 @@ export function clientFromEnv(): AssayClient {
     ...(devOrigin ? { dev: { origins: [devOrigin] } } : {}),
     ...(testKey ? { signer: Signers.fromPrivateKey(testKey as `0x${string}`), maxPerCall: "0.50", maxPerDay: "5" } : {}),
   });
+}
+
+/**
+ * Connects, and with a test key binds it to the API key first (idempotent), so the paid path works
+ * on a stack where the key is not bound yet. The key still needs the on-chain approval at
+ * `enablePaidCallsUrl()`, printed here without the key.
+ */
+export async function connectFromEnv(assay: AssayClient): Promise<void> {
+  await assay.connect();
+  if (!process.env.ASSAY_EXAMPLE_TEST_KEY?.trim()) return;
+  const bound = await assay.bindDelegate();
+  if (!bound.alreadyBound) console.error(`Payment key bound. Approve it at ${assay.enablePaidCallsUrl()} before paid calls work.`);
 }

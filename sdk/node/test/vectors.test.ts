@@ -1,3 +1,4 @@
+import { RUN } from "@assay-core/version.js";
 import { readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { hashTypedData, type Hex } from "viem";
@@ -13,6 +14,7 @@ import type { GuardContext } from "@assay-core/guards/types.js";
 import { DEFAULT_TIMEOUT_MS, HEARTBEAT_MS, LOCK_DIR_SUFFIX, OWNER_FILE, RECLAIM_SUFFIX, RETRY_MS, STALE_MS } from "@assay-core/profile/lock.js";
 import { BindError, bindDelegateKey } from "@assay-core/proxy/delegate-bind.js";
 import { checkBindingChallenge } from "@assay-core/signer/binding.js";
+import { SignerRefusal } from "@assay-core/signer/errors.js";
 import { buildVoucher, type VoucherRequirement } from "@assay-core/signer/voucher.js";
 import { guardVoucher } from "../src/paid.js";
 import { resolveSigner, Signers } from "../src/signers.js";
@@ -84,7 +86,7 @@ describe("guards.json through the SDK's guard step", () => {
     const result = sdkGuards(apply(base, c.changes));
     if (c.expect.ok) return void expect(result).toEqual({ ok: true });
     expect({ ok: result.ok, guard: result.guard, code: result.code }).toEqual({ ok: false, guard: c.expect.guard, code: c.expect.code });
-    if (c.expect.reason !== undefined) expect(result.reason).toBe(c.expect.reason);
+    if (c.expect.reason !== undefined) expect(result.reason).toBe(c.expect.reason.replace("{run}", RUN));
   });
 });
 
@@ -153,6 +155,14 @@ describe("binding.json through the shared binding flow and the SDK signer", () =
     const challenge = apply(bindingVectors.valid[0]!.challenge, [{ op: c.op, path: c.path as Path, value: (c as { value?: unknown }).value }]);
     const { run, signTypedData, api } = await bindWith(challenge);
     await expect(run).rejects.toBeInstanceOf(BindError);
+    // 4.2 m3: the refusal names the field the vector says, through the shared check itself.
+    try {
+      checkBindingChallenge(challenge, { ...ctx, environment: ctx.environment as Environment });
+      expect.unreachable("the challenge was accepted");
+    } catch (err) {
+      expect(err).toBeInstanceOf(SignerRefusal);
+      expect((err as SignerRefusal).field).toBe(c.field);
+    }
     expect(signTypedData).not.toHaveBeenCalled();
     expect(api.mock.calls.every(([, path]) => path.endsWith("/challenge"))).toBe(true);
   });

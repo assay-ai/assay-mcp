@@ -72,21 +72,6 @@ export interface ProfileState {
   signed: SpendEntry[];
   /** Unix seconds, or `null`. */
   lastBrowserOpen: number | null;
-  /**
-   * A key binding in progress (Task 2.9): written before the binding's network phase, checked and
-   * cleared after it (compare-and-set), so the binding is recorded only for the key it was made for.
-   * Absent when none is in progress.
-   */
-  pendingBinding?: PendingBinding;
-}
-
-export interface PendingBinding {
-  /** The delegate key's address being bound. */
-  address: string;
-  /** Random, per binding attempt: only the process that wrote it clears it. */
-  token: string;
-  /** Unix seconds. */
-  at: number;
 }
 
 function assertLock(profile: ProfileRef, lock: LockHandle): void {
@@ -202,15 +187,7 @@ export function validateState(v: unknown): ProfileState {
     signed.push({ at: e.at, amount: e.amount });
   }
   if (v.lastBrowserOpen !== null && !isSeconds(v.lastBrowserOpen)) throw bad("lastBrowserOpen");
-  const state: ProfileState = { version: PROFILE_VERSION, signed, lastBrowserOpen: v.lastBrowserOpen };
-  const p = v.pendingBinding;
-  if (p !== undefined) {
-    if (!isObject(p) || typeof p.address !== "string" || !ADDRESS_RE.test(p.address) || typeof p.token !== "string" || !/^[A-Za-z0-9_-]{16,64}$/.test(p.token) || !isSeconds(p.at)) {
-      throw bad("pendingBinding");
-    }
-    state.pendingBinding = { address: p.address, token: p.token, at: p.at };
-  }
-  return state;
+  return { version: PROFILE_VERSION, signed, lastBrowserOpen: v.lastBrowserOpen };
 }
 
 // ---- profile.json --------------------------------------------------------------------

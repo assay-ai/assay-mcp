@@ -1,3 +1,4 @@
+import { RUN } from "./version.js";
 import { builtInDeployments, validateDeployments } from "./deployments.js";
 import { EXIT_FATAL, EXIT_OK, EXIT_USAGE } from "./exit-codes.js";
 import { VERSION } from "./version.js";
@@ -37,19 +38,19 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
 };
 
 export const USAGE = `Usage:
-  assay-mcp [serve] [--url <url|/path>] [--name <name>] [--profile <name>] [--no-paid] [--log-level <level>] [--log-file <path>]
-  assay-mcp add <url|/path> [--client <id>] [--name <name>] [--scope user|project] [--profile <name>] [--force]
-  assay-mcp list
-  assay-mcp remove <name> [--client <id>] [--scope user|project]
-  assay-mcp login [--profile <name>] [--url <url|/path>]
-  assay-mcp logout | status [--profile <name>]
-  assay-mcp enable-paid [--profile <name>]
-  assay-mcp limits [set --per-call <usd> --per-day <usd> [--confirm-above <usd>|off] [--providers <0x...,...>|off]] [--profile <name>]
-  assay-mcp allow-paid <url> | disallow-paid <url> [--profile <name>]
-  assay-mcp dev allow <origin>
-  assay-mcp settings [set --allow-env-proxy on|off] [--profile <name>]
-  assay-mcp doctor [--profile <name>]
-  assay-mcp --version
+  ${RUN} [serve] [--url <url|/path>] [--name <name>] [--profile <name>] [--no-paid] [--log-level <level>] [--log-file <path>]
+  ${RUN} add <url|/path> [--client <id>] [--name <name>] [--scope user|project] [--profile <name>] [--force]
+  ${RUN} list
+  ${RUN} remove <name> [--client <id>] [--scope user|project]
+  ${RUN} login [--profile <name>] [--url <url|/path>]
+  ${RUN} logout | status [--profile <name>]
+  ${RUN} enable-paid [--profile <name>]
+  ${RUN} limits [set --per-call <usd> --per-day <usd> [--confirm-above <usd>|off] [--providers <0x...,...>|off]] [--profile <name>]
+  ${RUN} allow-paid <url> | disallow-paid <url> [--profile <name>]
+  ${RUN} dev allow <origin>
+  ${RUN} settings [set --allow-env-proxy on|off] [--profile <name>]
+  ${RUN} doctor [--profile <name>]
+  ${RUN} --version
 `;
 
 export type Resolved =

@@ -1,6 +1,6 @@
 import { inspect } from "node:util";
 import { describe, expect, it } from "vitest";
-import { hashTypedData, recoverTypedDataAddress, type Hex } from "viem";
+import { hashDomain, hashStruct, hashTypedData, recoverTypedDataAddress, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import bindingVectors from "../../vectors/binding.json" with { type: "json" };
 import voucherVectors from "../../vectors/vouchers.json" with { type: "json" };
@@ -192,6 +192,21 @@ describe("buildVoucher", () => {
     expect(decimals(typedData)).toEqual(c.typedData);
     expect(typedData.types).toBe(VOUCHER_TYPES);
     expect(hashTypedData(typedData)).toBe(c.digest);
+    // F4 M2: the two parts of the digest are pinned too, so a stale vector field cannot hide.
+    expect(
+      hashDomain({
+        domain: { ...typedData.domain, chainId: BigInt(typedData.domain.chainId) },
+        types: {
+          EIP712Domain: [
+            { name: "name", type: "string" },
+            { name: "version", type: "string" },
+            { name: "chainId", type: "uint256" },
+            { name: "verifyingContract", type: "address" },
+          ],
+        },
+      }),
+    ).toBe(c.domainSeparator);
+    expect(hashStruct({ data: typedData.message, primaryType: "Voucher", types: typedData.types })).toBe(c.structHash);
     expect(await testAccount.signTypedData(typedData)).toBe(c.signature);
   });
 

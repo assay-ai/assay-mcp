@@ -25,11 +25,13 @@ await assay.close();
 ## Signers
 
 - `Signers.fromAccount(account)`: a viem `Account` whose key is in a KMS or HSM. Only its `signTypedData` is called. Use this in production.
-- `Signers.fromKeychain({ profile })`: the payment key of an `assay-mcp` profile in the OS keychain, created on first use. Use a profile of its own (for example `"ci"`): a key is bound to one API key at a time. Needs `@napi-rs/keyring` installed next to the SDK.
-- `Signers.fromPrivateKey(hex)`: for tests and local development only.
+- `Signers.fromKeychain({ profile })`: the payment key of an `assay-mcp` profile in the OS keychain, created on first use. Use a profile of its own (for example `"ci"`): a key is bound to one API key at a time. Needs `@napi-rs/keyring` installed next to the SDK; it is tested with 2.1.0.
+- `Signers.fromPrivateKey(hex)`: for tests and CI only.
 - `Signers.keygen()`: `{ address, privateKey }`, a fresh dedicated key. Never reuse a wallet key.
 
 Generate a dedicated key with `Signers.keygen()` or in a KMS, never print the environment in CI, and rotate by binding a new key and approving it on the enable-paid page.
+
+The published type declarations import types from `viem` (for example `Account`). Install `viem` in your project, or your editor will show those types as `any`.
 
 ## What is checked before a payment is signed
 
@@ -54,5 +56,5 @@ npm run example -- openai-responses     # needs OPENAI_API_KEY and OPENAI_MODEL
 - Model ids come only from `ANTHROPIC_MODEL` and `OPENAI_MODEL`. The examples pin none: without one they exit with a message.
 - `ASSAY_API_KEY` is the Assay API key (required). `ASSAY_URL` defaults to `https://mcp.assay.ai/`.
 - To run against a local stack, set `ASSAY_DEV_ORIGIN` to its origin (it goes to `dev.origins` in code).
-- `ASSAY_EXAMPLE_TEST_KEY` (a throwaway key, test stacks only) switches paid calls on through `Signers.fromPrivateKey`. Real code uses `Signers.fromAccount`.
+- `ASSAY_EXAMPLE_TEST_KEY` (a throwaway key, test stacks only) switches paid calls on through `Signers.fromPrivateKey`; the examples call `bindDelegate()` for it first, and it still needs the approval at `enablePaidCallsUrl()` once. Real code uses `Signers.fromAccount`.
 - Nothing prints a key. Do not print the environment in CI.

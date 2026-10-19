@@ -1,3 +1,4 @@
+import { RUN } from "../version.js";
 import { builtInDeployments, devModeWarning, isPlaceholder, type Deployment, type Environment } from "../deployments.js";
 import { devOriginsFromEnv, normaliseOrigin } from "./dev-origins.js";
 import { canonicalUrl, parseMcpAbsoluteUrl } from "./mcp-url.js";
@@ -80,7 +81,7 @@ export function resolveDeployment({ url, env, devOrigins, warn }: ResolveInputs)
     if (!fromEnv.includes(origin) || !fromFile.includes(origin)) {
       throw new OriginError(
         `refusing ${origin}: assay-mcp talks only to ${productionOrigin}. ` +
-          "A dev origin needs both ASSAY_MCP_DEV_ORIGINS and `assay-mcp dev allow <origin>`.",
+          `A dev origin needs both ASSAY_MCP_DEV_ORIGINS and \`${RUN} dev allow <origin>\`.`,
       );
     }
     const match = DEV_SELECTABLE.find((e) => originOf(table[e].mcp) === origin);

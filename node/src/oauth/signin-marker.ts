@@ -105,17 +105,20 @@ export function releaseMarker(profile: ProfileRef, token: string): void {
 }
 
 /**
- * Logout's cleanup (F7, review R1-N3), under the profile lock: removes the marker when it is
- * this process's or its pid no longer runs. A marker of another live process is left alone:
- * that sign-in is pending in a browser, its owner releases the marker, and if the user approves
- * it the profile is signed in again, which is what the user asked for there. An unreadable
- * marker is never live, so it is left to expire. Returns whether a marker was removed.
+ * Logout's cleanup (F7, review R1-N3), under the profile lock: removes the marker when its pid
+ * no longer runs, or when it carries `ownToken` (the caller's own pending sign-in). Ownership is
+ * by token, never by pid: a live marker is kept even when its pid is this process's, so an
+ * in-process sign-out cannot delete a sign-in that is pending in the same process. A marker of
+ * another live process is left alone: that sign-in is pending in a browser, its owner releases
+ * the marker, and if the user approves it the profile is signed in again, which is what the
+ * user asked for there. An unreadable marker is never live, so it is left to expire. Returns
+ * whether a marker was removed.
  */
-export function clearDeadMarker(profile: ProfileRef, lock: LockHandle, alive: (pid: number) => boolean = pidAlive): boolean {
+export function clearDeadMarker(profile: ProfileRef, lock: LockHandle, alive: (pid: number) => boolean = pidAlive, ownToken?: string): boolean {
   lock.assertHeld();
   const current = readMarker(profile);
   if (current === null) return false;
-  if (current.pid !== process.pid && alive(current.pid)) return false;
+  if (current.token !== ownToken && alive(current.pid)) return false;
   lock.assertHeld();
   return deletePrivateFile(profile.dir, rel(profile));
 }

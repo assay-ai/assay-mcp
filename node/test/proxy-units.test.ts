@@ -1,3 +1,4 @@
+import { RUN } from "../src/version.js";
 import { describe, expect, it } from "vitest";
 import { parseServeArgs } from "../src/commands/serve.js";
 import { AliasTable } from "../src/proxy/aliases.js";
@@ -100,7 +101,7 @@ describe("environment checks (2.4-N1)", () => {
     },
   );
   it("the env-proxy refusal points to the TTY command that writes the opt-in", () => {
-    expect(checkEnvironment({ HTTPS_PROXY: "x" }, [], none, "default").refusals[0]).toContain("run in a terminal: assay-mcp settings set --allow-env-proxy on");
+    expect(checkEnvironment({ HTTPS_PROXY: "x" }, [], none, "default").refusals[0]).toContain(`run in a terminal: ${RUN} settings set --allow-env-proxy on`);
     expect(checkEnvironment({ HTTPS_PROXY: "x" }, [], none, "work").refusals[0]).toMatch(/settings set --allow-env-proxy on --profile work$/);
   });
 
