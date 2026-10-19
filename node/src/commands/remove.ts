@@ -1,6 +1,7 @@
-import { notImplemented } from "./not-implemented.js";
+import { runRemove } from "./remove-impl.js";
+import { defaultDeps } from "./wiring.js";
 
-/** `assay-mcp remove`. Stub until its task lands. */
+/** `assay-mcp remove` (spec 8.3). */
 export function run(args: readonly string[]): Promise<number> {
-  return notImplemented("remove", args);
+  return runRemove(args, defaultDeps());
 }

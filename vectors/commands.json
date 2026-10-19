@@ -1,0 +1,1243 @@
+{
+  "note": "Spec 7.12 install commands with V = 1.2.3 (a stand-in: the README uses the package version in its place). Source of truth for node/src/clients/install-command.ts, the README (R-WEB-7) and the Connect UI (R-MU-9, Task 3.x). `command` is the paid-capable user-scope install (a POSIX shell line, or the config object for file clients); `entry` is what lands in the client config under the name; `link` is the one-click install link; `remote` is the free-only remote alternative (null where it is a settings screen). Shell words outside [A-Za-z0-9_./:@,=+%-] are POSIX single-quoted (spec 7.12 amendment: a URL with ? or & is quoted). Gemini passes --scope user, its mcp add defaults to project scope. The Cursor link percent-encodes its base64 config.",
+  "V": "1.2.3",
+  "install": [
+    {
+      "client": "claude-code",
+      "input": {
+        "V": "1.2.3",
+        "url": "https://mcp.assay.ai/",
+        "name": "assay"
+      },
+      "command": "claude mcp add --scope user assay -- npx -y @assay-ai/mcp@1.2.3 --name assay",
+      "entry": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "@assay-ai/mcp@1.2.3",
+          "--name",
+          "assay"
+        ]
+      },
+      "link": null,
+      "remote": "claude mcp add --transport http --scope user assay https://mcp.assay.ai/"
+    },
+    {
+      "client": "codex",
+      "input": {
+        "V": "1.2.3",
+        "url": "https://mcp.assay.ai/",
+        "name": "assay"
+      },
+      "command": "codex mcp add assay -- npx -y @assay-ai/mcp@1.2.3 --name assay",
+      "entry": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "@assay-ai/mcp@1.2.3",
+          "--name",
+          "assay"
+        ]
+      },
+      "link": null,
+      "remote": "codex mcp add assay --url https://mcp.assay.ai/"
+    },
+    {
+      "client": "cursor",
+      "input": {
+        "V": "1.2.3",
+        "url": "https://mcp.assay.ai/",
+        "name": "assay"
+      },
+      "command": {
+        "mcpServers": {
+          "assay": {
+            "command": "npx",
+            "args": [
+              "-y",
+              "@assay-ai/mcp@1.2.3",
+              "--name",
+              "assay"
+            ]
+          }
+        }
+      },
+      "entry": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "@assay-ai/mcp@1.2.3",
+          "--name",
+          "assay"
+        ]
+      },
+      "link": "cursor://anysphere.cursor-deeplink/mcp/install?name=assay&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkBhc3NheS1haS9tY3BAMS4yLjMiLCItLW5hbWUiLCJhc3NheSJdfQ%3D%3D",
+      "remote": {
+        "mcpServers": {
+          "assay": {
+            "url": "https://mcp.assay.ai/"
+          }
+        }
+      }
+    },
+    {
+      "client": "vscode",
+      "input": {
+        "V": "1.2.3",
+        "url": "https://mcp.assay.ai/",
+        "name": "assay"
+      },
+      "command": "code --add-mcp '{\"name\":\"assay\",\"type\":\"stdio\",\"command\":\"npx\",\"args\":[\"-y\",\"@assay-ai/mcp@1.2.3\",\"--name\",\"assay\"]}'",
+      "entry": {
+        "type": "stdio",
+        "command": "npx",
+        "args": [
+          "-y",
+          "@assay-ai/mcp@1.2.3",
+          "--name",
+          "assay"
+        ]
+      },
+      "link": "vscode:mcp/install?%7B%22name%22%3A%22assay%22%2C%22type%22%3A%22stdio%22%2C%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40assay-ai%2Fmcp%401.2.3%22%2C%22--name%22%2C%22assay%22%5D%7D",
+      "remote": {
+        "name": "assay",
+        "type": "http",
+        "url": "https://mcp.assay.ai/"
+      }
+    },
+    {
+      "client": "windsurf",
+      "input": {
+        "V": "1.2.3",
+        "url": "https://mcp.assay.ai/",
+        "name": "assay"
+      },
+      "command": {
+        "mcpServers": {
+          "assay": {
+            "command": "npx",
+            "args": [
+              "-y",
+              "@assay-ai/mcp@1.2.3",
+              "--name",
+              "assay"
+            ]
+          }
+        }
+      },
+      "entry": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "@assay-ai/mcp@1.2.3",
+          "--name",
+          "assay"
+        ]
+      },
+      "link": null,
+      "remote": {
+        "mcpServers": {
+          "assay": {
+            "serverUrl": "https://mcp.assay.ai/"
+          }
+        }
+      }
+    },
+    {
+      "client": "gemini",
+      "input": {
+        "V": "1.2.3",
+        "url": "https://mcp.assay.ai/",
+        "name": "assay"
+      },
+      "command": "gemini mcp add --scope user assay npx -y @assay-ai/mcp@1.2.3 --name assay",
+      "entry": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "@assay-ai/mcp@1.2.3",
+          "--name",
+          "assay"
+        ]
+      },
+      "link": null,
+      "remote": "gemini mcp add --transport http --scope user assay https://mcp.assay.ai/"
+    },
+    {
+      "client": "claude-desktop",
+      "input": {
+        "V": "1.2.3",
+        "url": "https://mcp.assay.ai/",
+        "name": "assay"
+      },
+      "command": {
+        "mcpServers": {
+          "assay": {
+            "command": "npx",
+            "args": [
+              "-y",
+              "@assay-ai/mcp@1.2.3",
+              "--name",
+              "assay"
+            ]
+          }
+        }
+      },
+      "entry": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "@assay-ai/mcp@1.2.3",
+          "--name",
+          "assay"
+        ]
+      },
+      "link": null,
+      "remote": null
+    },
+    {
+      "client": "claude-code",
+      "input": {
+        "V": "1.2.3",
+        "url": "https://mcp.assay.ai/my/weather",
+        "name": "assay-weather"
+      },
+      "command": "claude mcp add --scope user assay-weather -- npx -y @assay-ai/mcp@1.2.3 --url https://mcp.assay.ai/my/weather --name assay-weather",
+      "entry": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "@assay-ai/mcp@1.2.3",
+          "--url",
+          "https://mcp.assay.ai/my/weather",
+          "--name",
+          "assay-weather"
+        ]
+      },
+      "link": null,
+      "remote": "claude mcp add --transport http --scope user assay-weather https://mcp.assay.ai/my/weather"
+    },
+    {
+      "client": "codex",
+      "input": {
+        "V": "1.2.3",
+        "url": "https://mcp.assay.ai/my/weather",
+        "name": "assay-weather"
+      },
+      "command": "codex mcp add assay-weather -- npx -y @assay-ai/mcp@1.2.3 --url https://mcp.assay.ai/my/weather --name assay-weather",
+      "entry": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "@assay-ai/mcp@1.2.3",
+          "--url",
+          "https://mcp.assay.ai/my/weather",
+          "--name",
+          "assay-weather"
+        ]
+      },
+      "link": null,
+      "remote": "codex mcp add assay-weather --url https://mcp.assay.ai/my/weather"
+    },
+    {
+      "client": "cursor",
+      "input": {
+        "V": "1.2.3",
+        "url": "https://mcp.assay.ai/my/weather",
+        "name": "assay-weather"
+      },
+      "command": {
+        "mcpServers": {
+          "assay-weather": {
+            "command": "npx",
+            "args": [
+              "-y",
+              "@assay-ai/mcp@1.2.3",
+              "--url",
+              "https://mcp.assay.ai/my/weather",
+              "--name",
+              "assay-weather"
+            ]
+          }
+        }
+      },
+      "entry": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "@assay-ai/mcp@1.2.3",
+          "--url",
+          "https://mcp.assay.ai/my/weather",
+          "--name",
+          "assay-weather"
+        ]
+      },
+      "link": "cursor://anysphere.cursor-deeplink/mcp/install?name=assay-weather&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkBhc3NheS1haS9tY3BAMS4yLjMiLCItLXVybCIsImh0dHBzOi8vbWNwLmFzc2F5LmFpL215L3dlYXRoZXIiLCItLW5hbWUiLCJhc3NheS13ZWF0aGVyIl19",
+      "remote": {
+        "mcpServers": {
+          "assay-weather": {
+            "url": "https://mcp.assay.ai/my/weather"
+          }
+        }
+      }
+    },
+    {
+      "client": "vscode",
+      "input": {
+        "V": "1.2.3",
+        "url": "https://mcp.assay.ai/my/weather",
+        "name": "assay-weather"
+      },
+      "command": "code --add-mcp '{\"name\":\"assay-weather\",\"type\":\"stdio\",\"command\":\"npx\",\"args\":[\"-y\",\"@assay-ai/mcp@1.2.3\",\"--url\",\"https://mcp.assay.ai/my/weather\",\"--name\",\"assay-weather\"]}'",
+      "entry": {
+        "type": "stdio",
+        "command": "npx",
+        "args": [
+          "-y",
+          "@assay-ai/mcp@1.2.3",
+          "--url",
+          "https://mcp.assay.ai/my/weather",
+          "--name",
+          "assay-weather"
+        ]
+      },
+      "link": "vscode:mcp/install?%7B%22name%22%3A%22assay-weather%22%2C%22type%22%3A%22stdio%22%2C%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40assay-ai%2Fmcp%401.2.3%22%2C%22--url%22%2C%22https%3A%2F%2Fmcp.assay.ai%2Fmy%2Fweather%22%2C%22--name%22%2C%22assay-weather%22%5D%7D",
+      "remote": {
+        "name": "assay-weather",
+        "type": "http",
+        "url": "https://mcp.assay.ai/my/weather"
+      }
+    },
+    {
+      "client": "windsurf",
+      "input": {
+        "V": "1.2.3",
+        "url": "https://mcp.assay.ai/my/weather",
+        "name": "assay-weather"
+      },
+      "command": {
+        "mcpServers": {
+          "assay-weather": {
+            "command": "npx",
+            "args": [
+              "-y",
+              "@assay-ai/mcp@1.2.3",
+              "--url",
+              "https://mcp.assay.ai/my/weather",
+              "--name",
+              "assay-weather"
+            ]
+          }
+        }
+      },
+      "entry": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "@assay-ai/mcp@1.2.3",
+          "--url",
+          "https://mcp.assay.ai/my/weather",
+          "--name",
+          "assay-weather"
+        ]
+      },
+      "link": null,
+      "remote": {
+        "mcpServers": {
+          "assay-weather": {
+            "serverUrl": "https://mcp.assay.ai/my/weather"
+          }
+        }
+      }
+    },
+    {
+      "client": "gemini",
+      "input": {
+        "V": "1.2.3",
+        "url": "https://mcp.assay.ai/my/weather",
+        "name": "assay-weather"
+      },
+      "command": "gemini mcp add --scope user assay-weather npx -y @assay-ai/mcp@1.2.3 --url https://mcp.assay.ai/my/weather --name assay-weather",
+      "entry": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "@assay-ai/mcp@1.2.3",
+          "--url",
+          "https://mcp.assay.ai/my/weather",
+          "--name",
+          "assay-weather"
+        ]
+      },
+      "link": null,
+      "remote": "gemini mcp add --transport http --scope user assay-weather https://mcp.assay.ai/my/weather"
+    },
+    {
+      "client": "claude-desktop",
+      "input": {
+        "V": "1.2.3",
+        "url": "https://mcp.assay.ai/my/weather",
+        "name": "assay-weather"
+      },
+      "command": {
+        "mcpServers": {
+          "assay-weather": {
+            "command": "npx",
+            "args": [
+              "-y",
+              "@assay-ai/mcp@1.2.3",
+              "--url",
+              "https://mcp.assay.ai/my/weather",
+              "--name",
+              "assay-weather"
+            ]
+          }
+        }
+      },
+      "entry": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "@assay-ai/mcp@1.2.3",
+          "--url",
+          "https://mcp.assay.ai/my/weather",
+          "--name",
+          "assay-weather"
+        ]
+      },
+      "link": null,
+      "remote": null
+    },
+    {
+      "client": "claude-code",
+      "input": {
+        "V": "1.2.3",
+        "url": "https://mcp.assay.ai/@acme/weather-kit@3",
+        "name": "assay-weather-kit"
+      },
+      "command": "claude mcp add --scope user assay-weather-kit -- npx -y @assay-ai/mcp@1.2.3 --url https://mcp.assay.ai/@acme/weather-kit@3 --name assay-weather-kit",
+      "entry": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "@assay-ai/mcp@1.2.3",
+          "--url",
+          "https://mcp.assay.ai/@acme/weather-kit@3",
+          "--name",
+          "assay-weather-kit"
+        ]
+      },
+      "link": null,
+      "remote": "claude mcp add --transport http --scope user assay-weather-kit https://mcp.assay.ai/@acme/weather-kit@3"
+    },
+    {
+      "client": "codex",
+      "input": {
+        "V": "1.2.3",
+        "url": "https://mcp.assay.ai/@acme/weather-kit@3",
+        "name": "assay-weather-kit"
+      },
+      "command": "codex mcp add assay-weather-kit -- npx -y @assay-ai/mcp@1.2.3 --url https://mcp.assay.ai/@acme/weather-kit@3 --name assay-weather-kit",
+      "entry": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "@assay-ai/mcp@1.2.3",
+          "--url",
+          "https://mcp.assay.ai/@acme/weather-kit@3",
+          "--name",
+          "assay-weather-kit"
+        ]
+      },
+      "link": null,
+      "remote": "codex mcp add assay-weather-kit --url https://mcp.assay.ai/@acme/weather-kit@3"
+    },
+    {
+      "client": "cursor",
+      "input": {
+        "V": "1.2.3",
+        "url": "https://mcp.assay.ai/@acme/weather-kit@3",
+        "name": "assay-weather-kit"
+      },
+      "command": {
+        "mcpServers": {
+          "assay-weather-kit": {
+            "command": "npx",
+            "args": [
+              "-y",
+              "@assay-ai/mcp@1.2.3",
+              "--url",
+              "https://mcp.assay.ai/@acme/weather-kit@3",
+              "--name",
+              "assay-weather-kit"
+            ]
+          }
+        }
+      },
+      "entry": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "@assay-ai/mcp@1.2.3",
+          "--url",
+          "https://mcp.assay.ai/@acme/weather-kit@3",
+          "--name",
+          "assay-weather-kit"
+        ]
+      },
+      "link": "cursor://anysphere.cursor-deeplink/mcp/install?name=assay-weather-kit&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkBhc3NheS1haS9tY3BAMS4yLjMiLCItLXVybCIsImh0dHBzOi8vbWNwLmFzc2F5LmFpL0BhY21lL3dlYXRoZXIta2l0QDMiLCItLW5hbWUiLCJhc3NheS13ZWF0aGVyLWtpdCJdfQ%3D%3D",
+      "remote": {
+        "mcpServers": {
+          "assay-weather-kit": {
+            "url": "https://mcp.assay.ai/@acme/weather-kit@3"
+          }
+        }
+      }
+    },
+    {
+      "client": "vscode",
+      "input": {
+        "V": "1.2.3",
+        "url": "https://mcp.assay.ai/@acme/weather-kit@3",
+        "name": "assay-weather-kit"
+      },
+      "command": "code --add-mcp '{\"name\":\"assay-weather-kit\",\"type\":\"stdio\",\"command\":\"npx\",\"args\":[\"-y\",\"@assay-ai/mcp@1.2.3\",\"--url\",\"https://mcp.assay.ai/@acme/weather-kit@3\",\"--name\",\"assay-weather-kit\"]}'",
+      "entry": {
+        "type": "stdio",
+        "command": "npx",
+        "args": [
+          "-y",
+          "@assay-ai/mcp@1.2.3",
+          "--url",
+          "https://mcp.assay.ai/@acme/weather-kit@3",
+          "--name",
+          "assay-weather-kit"
+        ]
+      },
+      "link": "vscode:mcp/install?%7B%22name%22%3A%22assay-weather-kit%22%2C%22type%22%3A%22stdio%22%2C%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40assay-ai%2Fmcp%401.2.3%22%2C%22--url%22%2C%22https%3A%2F%2Fmcp.assay.ai%2F%40acme%2Fweather-kit%403%22%2C%22--name%22%2C%22assay-weather-kit%22%5D%7D",
+      "remote": {
+        "name": "assay-weather-kit",
+        "type": "http",
+        "url": "https://mcp.assay.ai/@acme/weather-kit@3"
+      }
+    },
+    {
+      "client": "windsurf",
+      "input": {
+        "V": "1.2.3",
+        "url": "https://mcp.assay.ai/@acme/weather-kit@3",
+        "name": "assay-weather-kit"
+      },
+      "command": {
+        "mcpServers": {
+          "assay-weather-kit": {
+            "command": "npx",
+            "args": [
+              "-y",
+              "@assay-ai/mcp@1.2.3",
+              "--url",
+              "https://mcp.assay.ai/@acme/weather-kit@3",
+              "--name",
+              "assay-weather-kit"
+            ]
+          }
+        }
+      },
+      "entry": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "@assay-ai/mcp@1.2.3",
+          "--url",
+          "https://mcp.assay.ai/@acme/weather-kit@3",
+          "--name",
+          "assay-weather-kit"
+        ]
+      },
+      "link": null,
+      "remote": {
+        "mcpServers": {
+          "assay-weather-kit": {
+            "serverUrl": "https://mcp.assay.ai/@acme/weather-kit@3"
+          }
+        }
+      }
+    },
+    {
+      "client": "gemini",
+      "input": {
+        "V": "1.2.3",
+        "url": "https://mcp.assay.ai/@acme/weather-kit@3",
+        "name": "assay-weather-kit"
+      },
+      "command": "gemini mcp add --scope user assay-weather-kit npx -y @assay-ai/mcp@1.2.3 --url https://mcp.assay.ai/@acme/weather-kit@3 --name assay-weather-kit",
+      "entry": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "@assay-ai/mcp@1.2.3",
+          "--url",
+          "https://mcp.assay.ai/@acme/weather-kit@3",
+          "--name",
+          "assay-weather-kit"
+        ]
+      },
+      "link": null,
+      "remote": "gemini mcp add --transport http --scope user assay-weather-kit https://mcp.assay.ai/@acme/weather-kit@3"
+    },
+    {
+      "client": "claude-desktop",
+      "input": {
+        "V": "1.2.3",
+        "url": "https://mcp.assay.ai/@acme/weather-kit@3",
+        "name": "assay-weather-kit"
+      },
+      "command": {
+        "mcpServers": {
+          "assay-weather-kit": {
+            "command": "npx",
+            "args": [
+              "-y",
+              "@assay-ai/mcp@1.2.3",
+              "--url",
+              "https://mcp.assay.ai/@acme/weather-kit@3",
+              "--name",
+              "assay-weather-kit"
+            ]
+          }
+        }
+      },
+      "entry": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "@assay-ai/mcp@1.2.3",
+          "--url",
+          "https://mcp.assay.ai/@acme/weather-kit@3",
+          "--name",
+          "assay-weather-kit"
+        ]
+      },
+      "link": null,
+      "remote": null
+    },
+    {
+      "client": "claude-code",
+      "input": {
+        "V": "1.2.3",
+        "url": "https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1",
+        "name": "assay-get"
+      },
+      "command": "claude mcp add --scope user assay-get -- npx -y @assay-ai/mcp@1.2.3 --url 'https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1' --name assay-get",
+      "entry": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "@assay-ai/mcp@1.2.3",
+          "--url",
+          "https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1",
+          "--name",
+          "assay-get"
+        ]
+      },
+      "link": null,
+      "remote": "claude mcp add --transport http --scope user assay-get 'https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1'"
+    },
+    {
+      "client": "codex",
+      "input": {
+        "V": "1.2.3",
+        "url": "https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1",
+        "name": "assay-get"
+      },
+      "command": "codex mcp add assay-get -- npx -y @assay-ai/mcp@1.2.3 --url 'https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1' --name assay-get",
+      "entry": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "@assay-ai/mcp@1.2.3",
+          "--url",
+          "https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1",
+          "--name",
+          "assay-get"
+        ]
+      },
+      "link": null,
+      "remote": "codex mcp add assay-get --url 'https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1'"
+    },
+    {
+      "client": "cursor",
+      "input": {
+        "V": "1.2.3",
+        "url": "https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1",
+        "name": "assay-get"
+      },
+      "command": {
+        "mcpServers": {
+          "assay-get": {
+            "command": "npx",
+            "args": [
+              "-y",
+              "@assay-ai/mcp@1.2.3",
+              "--url",
+              "https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1",
+              "--name",
+              "assay-get"
+            ]
+          }
+        }
+      },
+      "entry": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "@assay-ai/mcp@1.2.3",
+          "--url",
+          "https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1",
+          "--name",
+          "assay-get"
+        ]
+      },
+      "link": "cursor://anysphere.cursor-deeplink/mcp/install?name=assay-get&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkBhc3NheS1haS9tY3BAMS4yLjMiLCItLXVybCIsImh0dHBzOi8vbWNwLmFzc2F5LmFpLz90b29scz1nZXRfd2VhdGhlcixnZXRfZm9yZWNhc3QmZnJlZT0xIiwiLS1uYW1lIiwiYXNzYXktZ2V0Il19",
+      "remote": {
+        "mcpServers": {
+          "assay-get": {
+            "url": "https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1"
+          }
+        }
+      }
+    },
+    {
+      "client": "vscode",
+      "input": {
+        "V": "1.2.3",
+        "url": "https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1",
+        "name": "assay-get"
+      },
+      "command": "code --add-mcp '{\"name\":\"assay-get\",\"type\":\"stdio\",\"command\":\"npx\",\"args\":[\"-y\",\"@assay-ai/mcp@1.2.3\",\"--url\",\"https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1\",\"--name\",\"assay-get\"]}'",
+      "entry": {
+        "type": "stdio",
+        "command": "npx",
+        "args": [
+          "-y",
+          "@assay-ai/mcp@1.2.3",
+          "--url",
+          "https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1",
+          "--name",
+          "assay-get"
+        ]
+      },
+      "link": "vscode:mcp/install?%7B%22name%22%3A%22assay-get%22%2C%22type%22%3A%22stdio%22%2C%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40assay-ai%2Fmcp%401.2.3%22%2C%22--url%22%2C%22https%3A%2F%2Fmcp.assay.ai%2F%3Ftools%3Dget_weather%2Cget_forecast%26free%3D1%22%2C%22--name%22%2C%22assay-get%22%5D%7D",
+      "remote": {
+        "name": "assay-get",
+        "type": "http",
+        "url": "https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1"
+      }
+    },
+    {
+      "client": "windsurf",
+      "input": {
+        "V": "1.2.3",
+        "url": "https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1",
+        "name": "assay-get"
+      },
+      "command": {
+        "mcpServers": {
+          "assay-get": {
+            "command": "npx",
+            "args": [
+              "-y",
+              "@assay-ai/mcp@1.2.3",
+              "--url",
+              "https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1",
+              "--name",
+              "assay-get"
+            ]
+          }
+        }
+      },
+      "entry": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "@assay-ai/mcp@1.2.3",
+          "--url",
+          "https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1",
+          "--name",
+          "assay-get"
+        ]
+      },
+      "link": null,
+      "remote": {
+        "mcpServers": {
+          "assay-get": {
+            "serverUrl": "https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1"
+          }
+        }
+      }
+    },
+    {
+      "client": "gemini",
+      "input": {
+        "V": "1.2.3",
+        "url": "https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1",
+        "name": "assay-get"
+      },
+      "command": "gemini mcp add --scope user assay-get npx -y @assay-ai/mcp@1.2.3 --url 'https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1' --name assay-get",
+      "entry": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "@assay-ai/mcp@1.2.3",
+          "--url",
+          "https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1",
+          "--name",
+          "assay-get"
+        ]
+      },
+      "link": null,
+      "remote": "gemini mcp add --transport http --scope user assay-get 'https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1'"
+    },
+    {
+      "client": "claude-desktop",
+      "input": {
+        "V": "1.2.3",
+        "url": "https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1",
+        "name": "assay-get"
+      },
+      "command": {
+        "mcpServers": {
+          "assay-get": {
+            "command": "npx",
+            "args": [
+              "-y",
+              "@assay-ai/mcp@1.2.3",
+              "--url",
+              "https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1",
+              "--name",
+              "assay-get"
+            ]
+          }
+        }
+      },
+      "entry": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "@assay-ai/mcp@1.2.3",
+          "--url",
+          "https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1",
+          "--name",
+          "assay-get"
+        ]
+      },
+      "link": null,
+      "remote": null
+    }
+  ],
+  "project": {
+    "note": "`add --scope project` (R-MU-4): only the command, the pinned package, --url and --profile (here the default profile, so no --profile). No --name, no --log-file, no env.",
+    "cases": [
+      {
+        "input": {
+          "V": "1.2.3",
+          "url": "https://mcp.assay.ai/",
+          "name": "assay"
+        },
+        "args": [
+          "-y",
+          "@assay-ai/mcp@1.2.3",
+          "--url",
+          "https://mcp.assay.ai/"
+        ]
+      },
+      {
+        "input": {
+          "V": "1.2.3",
+          "url": "https://mcp.assay.ai/my/weather",
+          "name": "assay-weather"
+        },
+        "args": [
+          "-y",
+          "@assay-ai/mcp@1.2.3",
+          "--url",
+          "https://mcp.assay.ai/my/weather"
+        ]
+      },
+      {
+        "input": {
+          "V": "1.2.3",
+          "url": "https://mcp.assay.ai/@acme/weather-kit@3",
+          "name": "assay-weather-kit"
+        },
+        "args": [
+          "-y",
+          "@assay-ai/mcp@1.2.3",
+          "--url",
+          "https://mcp.assay.ai/@acme/weather-kit@3"
+        ]
+      },
+      {
+        "input": {
+          "V": "1.2.3",
+          "url": "https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1",
+          "name": "assay-get"
+        },
+        "args": [
+          "-y",
+          "@assay-ai/mcp@1.2.3",
+          "--url",
+          "https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1"
+        ]
+      }
+    ]
+  },
+  "add": {
+    "note": "`npx -y @assay-ai/mcp@V add {url} --client {id}` (spec 7.12, 8.3); {url} may be a path.",
+    "cases": [
+      {
+        "client": "claude-code",
+        "V": "1.2.3",
+        "url": "/c/weather",
+        "command": "npx -y @assay-ai/mcp@1.2.3 add /c/weather --client claude-code"
+      },
+      {
+        "client": "cursor",
+        "V": "1.2.3",
+        "url": "https://mcp.assay.ai/@acme/weather-kit@3",
+        "command": "npx -y @assay-ai/mcp@1.2.3 add https://mcp.assay.ai/@acme/weather-kit@3 --client cursor"
+      },
+      {
+        "client": "codex",
+        "V": "1.2.3",
+        "url": "https://mcp.assay.ai/?tools=get_weather&free=1",
+        "command": "npx -y @assay-ai/mcp@1.2.3 add 'https://mcp.assay.ai/?tools=get_weather&free=1' --client codex"
+      }
+    ]
+  },
+  "ownership": {
+    "note": "`remove` touches only entries for which isAssayEntry is true.",
+    "cases": [
+      {
+        "name": "claude-code stored form",
+        "entry": {
+          "type": "stdio",
+          "command": "npx",
+          "args": [
+            "-y",
+            "@assay-ai/mcp@1.2.3",
+            "--name",
+            "assay"
+          ],
+          "env": {}
+        },
+        "ours": true
+      },
+      {
+        "name": "plain stdio",
+        "entry": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "@assay-ai/mcp@1.2.3",
+            "--url",
+            "https://mcp.assay.ai/c/weather",
+            "--name",
+            "assay-weather"
+          ]
+        },
+        "ours": true
+      },
+      {
+        "name": "project form",
+        "entry": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "@assay-ai/mcp@1.2.3",
+            "--url",
+            "https://mcp.assay.ai/",
+            "--profile",
+            "work"
+          ]
+        },
+        "ours": true
+      },
+      {
+        "name": "unpinned package",
+        "entry": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "@assay-ai/mcp",
+            "--name",
+            "assay"
+          ]
+        },
+        "ours": false
+      },
+      {
+        "name": "version range",
+        "entry": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "@assay-ai/mcp@^1.2.3",
+            "--name",
+            "assay"
+          ]
+        },
+        "ours": false
+      },
+      {
+        "name": "unscoped look-alike",
+        "entry": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "assay-mcp@1.2.3",
+            "--name",
+            "assay"
+          ]
+        },
+        "ours": false
+      },
+      {
+        "name": "env set",
+        "entry": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "@assay-ai/mcp@1.2.3",
+            "--name",
+            "assay"
+          ],
+          "env": {
+            "HOME": "/tmp/x"
+          }
+        },
+        "ours": false
+      },
+      {
+        "name": "unknown flag",
+        "entry": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "@assay-ai/mcp@1.2.3",
+            "--name",
+            "assay",
+            "--no-paid",
+            "x"
+          ]
+        },
+        "ours": false
+      },
+      {
+        "name": "other command",
+        "entry": {
+          "command": "node",
+          "args": [
+            "-y",
+            "@assay-ai/mcp@1.2.3",
+            "--name",
+            "assay"
+          ]
+        },
+        "ours": false
+      },
+      {
+        "name": "remote http entry",
+        "entry": {
+          "type": "http",
+          "url": "https://mcp.assay.ai/"
+        },
+        "ours": false
+      },
+      {
+        "name": "extra key",
+        "entry": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "@assay-ai/mcp@1.2.3",
+            "--name",
+            "assay"
+          ],
+          "cwd": "/tmp"
+        },
+        "ours": false
+      },
+      {
+        "name": "dangling flag",
+        "entry": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "@assay-ai/mcp@1.2.3",
+            "--name"
+          ]
+        },
+        "ours": false
+      }
+    ]
+  },
+  "quoting": {
+    "note": "shellQuote: a word outside [A-Za-z0-9_./:@,=+%-] is wrapped in single quotes; every printed command must give the URL back as one identical word in sh, bash and zsh.",
+    "cases": [
+      {
+        "word": "https://mcp.assay.ai/c/$(id)",
+        "quoted": "'https://mcp.assay.ai/c/$(id)'"
+      },
+      {
+        "word": "https://mcp.assay.ai/c/a;b",
+        "quoted": "'https://mcp.assay.ai/c/a;b'"
+      },
+      {
+        "word": "https://mcp.assay.ai/?a=1&b=2",
+        "quoted": "'https://mcp.assay.ai/?a=1&b=2'"
+      },
+      {
+        "word": "https://mcp.assay.ai/c/!x",
+        "quoted": "'https://mcp.assay.ai/c/!x'"
+      },
+      {
+        "word": "https://mcp.assay.ai/c/*",
+        "quoted": "'https://mcp.assay.ai/c/*'"
+      },
+      {
+        "word": "https://mcp.assay.ai/c/(x)",
+        "quoted": "'https://mcp.assay.ai/c/(x)'"
+      },
+      {
+        "word": "https://mcp.assay.ai/c/a$b",
+        "quoted": "'https://mcp.assay.ai/c/a$b'"
+      },
+      {
+        "word": "https://mcp.assay.ai/c/plain-path_1.2@3",
+        "quoted": "https://mcp.assay.ai/c/plain-path_1.2@3"
+      }
+    ]
+  },
+  "names": {
+    "note": "chooseName (Task 2.10 rule per scope). Project scope writes no --name, so the proxy budgets 16 characters: the rule runs with L' = max(L, 41). A typed name is refused, never shortened; the default drops slug words, then gets -2, -3, ...",
+    "cases": [
+      {
+        "scope": "user",
+        "L": 20,
+        "slugWords": [
+          "twitter",
+          "kit"
+        ],
+        "taken": [],
+        "expect": "assay-twitter-kit"
+      },
+      {
+        "scope": "project",
+        "L": 20,
+        "slugWords": [
+          "twitter",
+          "kit"
+        ],
+        "taken": [],
+        "expect": "assay-twitter"
+      },
+      {
+        "scope": "project",
+        "L": 20,
+        "slugWords": [
+          "weather"
+        ],
+        "taken": [],
+        "expect": "assay-weather"
+      },
+      {
+        "scope": "project",
+        "L": 20,
+        "slugWords": [
+          "weather"
+        ],
+        "taken": [
+          "assay-weather"
+        ],
+        "expect": "assay-weather-2"
+      },
+      {
+        "scope": "project",
+        "L": 20,
+        "slugWords": [
+          "weatherforecasts"
+        ],
+        "taken": [],
+        "expect": "assay"
+      },
+      {
+        "scope": "project",
+        "L": 20,
+        "slugWords": [],
+        "taken": [
+          "assay"
+        ],
+        "expect": "assay-2"
+      },
+      {
+        "scope": "project",
+        "L": 48,
+        "slugWords": [
+          "weather"
+        ],
+        "taken": [],
+        "expect": "assay"
+      },
+      {
+        "scope": "project",
+        "L": 50,
+        "slugWords": [
+          "weather"
+        ],
+        "taken": [],
+        "expect": "assay"
+      },
+      {
+        "scope": "user",
+        "L": 20,
+        "slugWords": [],
+        "taken": [],
+        "typed": "a-seventeen-chars",
+        "expect": "a-seventeen-chars"
+      },
+      {
+        "scope": "project",
+        "L": 20,
+        "slugWords": [],
+        "taken": [],
+        "typed": "a-seventeen-chars",
+        "refusal": "`a-seventeen-chars` is too long for a project config: it carries no --name, so assay-mcp budgets 16 characters for the name. Try `a-seventeen`."
+      },
+      {
+        "scope": "project",
+        "L": 20,
+        "slugWords": [],
+        "taken": [],
+        "typed": "sixteen-chars-ok",
+        "expect": "sixteen-chars-ok"
+      },
+      {
+        "scope": "project",
+        "L": 48,
+        "slugWords": [],
+        "taken": [],
+        "typed": "assay-research",
+        "refusal": "`assay-research` is too long for this server: its longest tool is 48 characters, so the name can be at most 9. Try `assay`."
+      },
+      {
+        "scope": "project",
+        "L": 50,
+        "slugWords": [],
+        "taken": [],
+        "typed": "assay-research",
+        "refusal": "`assay-research` is too long for this server: its longest tool is 50 characters, so the name can be at most 7. Try `assay`."
+      }
+    ]
+  }
+}
