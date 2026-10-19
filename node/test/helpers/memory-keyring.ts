@@ -8,15 +8,15 @@ export class MemoryKeyring implements KeyringBackend {
   private key(service: string, account: string): string {
     return `${service}\u0000${account}`;
   }
-  get(service: string, account: string): string | null {
+  async get(service: string, account: string): Promise<string | null> {
     if (this.failWith) throw this.failWith;
     return this.entries.get(this.key(service, account)) ?? null;
   }
-  set(service: string, account: string, value: string): void {
+  async set(service: string, account: string, value: string): Promise<void> {
     if (this.failWith) throw this.failWith;
     this.entries.set(this.key(service, account), value);
   }
-  delete(service: string, account: string): boolean {
+  async delete(service: string, account: string): Promise<boolean> {
     if (this.failWith) throw this.failWith;
     return this.entries.delete(this.key(service, account));
   }

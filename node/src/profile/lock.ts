@@ -6,14 +6,16 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
+  readdirSync,
   readFileSync,
   renameSync,
+  rmdirSync,
   rmSync,
   utimesSync,
   writeSync,
   type Stats,
 } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { ensurePrivateSubdir, profileFile, safeJoin } from "./paths.js";
 
 /**
@@ -23,21 +25,48 @@ import { ensurePrivateSubdir, profileFile, safeJoin } from "./paths.js";
  * - Acquire: `mkdir {dir}/profiles/{profile}.lock.d`. Only one `mkdir` can succeed.
  * - The holder writes `owner.json {pid, startedAt, token}` inside and touches it every 5 s.
  * - A lock whose `owner.json` mtime (or, before `owner.json` exists, the directory's mtime)
- *   is older than 30 s is stale. A waiter removes it by renaming the directory to a unique
- *   sibling name (atomic: only one waiter can move it) and deleting that.
+ *   is older than 30 s is stale.
+ * - Reclaiming a stale lock is serialised by a second directory, `{profile}.lock.d.reclaim`
+ *   (`mkdir` again; stale after 30 s, then removed with a plain `rmdir`). Under it the
+ *   reclaimer observes the lock again, renames it to a unique sibling, checks that the moved
+ *   directory is the one it observed (same directory, same owner, still stale) and deletes
+ *   it. If the rename caught another lock, it is put back when the path is free, and left in
+ *   place (never deleted) otherwise. Moved siblings older than 30 s are swept.
  * - Waiters retry every 100 ms; after `timeoutMs` (30 s) they give up with `LOCK_TIMEOUT`
  *   and never run `fn`.
- * - Release removes the lock only while `owner.json` still names this holder: a lock that
- *   was reclaimed and taken by another process is never removed.
+ * - Release removes the lock only while `owner.json` still names this holder.
+ *
+ * Self-fencing. A holder can stall (laptop sleep, a debugger, a blocked event loop) and
+ * not know that its lock went stale and was taken. So a holder counts its lock as held only
+ * while its last successful touch (wall clock) is less than half the stale threshold old
+ * (15 s) *and* `owner.json` still holds its token. `assertHeld()` checks both and throws
+ * `LOCK_LOST`; the heartbeat aborts `signal` on the same conditions.
+ *
+ * Rules for every operation under the lock (refresh, login, key generation, binding, the
+ * G7 record):
+ * - Re-read the keychain and the profile files after taking the lock.
+ * - Call `assertHeld()` (and check `signal`) immediately before each commit point: every
+ *   keychain or file write, and every network request that rotates state on the server (an
+ *   OAuth refresh).
+ * - When a refresh answer arrives after the lock was lost, drop it: do not store the rotated
+ *   tokens and do not use them. The next run reads the keychain fresh. This keeps a stall of
+ *   30 s or more from producing two stored token generations (the server's 30 s grace and
+ *   stale-reuse rules, spec §6.3.11, are the backstop).
+ * - Store a new token pair before using the new access token.
+ * - On `invalid_grant`, delete the tokens only if the keychain still holds the refresh token
+ *   that was sent (`Keychain.deleteTokensIfRefreshIs`).
  *
  * `token` identifies one acquisition; `pid` and `startedAt` (the acquisition time) tell a
  * person which process holds it. The lock holds no secrets.
  */
 
 export const LOCK_DIR_SUFFIX = ".lock.d";
+export const RECLAIM_SUFFIX = ".reclaim";
 export const OWNER_FILE = "owner.json";
 export const HEARTBEAT_MS = 5_000;
 export const STALE_MS = 30_000;
+/** A holder whose last touch is older than this no longer counts its lock as held. */
+export const FRESH_MS = STALE_MS / 2;
 export const RETRY_MS = 100;
 export const DEFAULT_TIMEOUT_MS = 30_000;
 
@@ -52,6 +81,8 @@ export class LockError extends Error {
     super(message);
   }
 }
+
+const LOST_MESSAGE = "The profile lock was lost (another process took it, or this one stalled); nothing was stored.";
 
 /** A machine profile: `{dir}` and the profile name. */
 export interface ProfileRef {
@@ -68,7 +99,7 @@ export interface LockOwner {
 export interface LockOptions {
   /** How long to wait for the lock. Default 30 s. */
   timeoutMs?: number;
-  /** Wall clock in ms, for staleness and touches. Tests pass a fake clock. */
+  /** Wall clock in ms, for staleness, touches and freshness. Tests pass a fake clock. */
   now?: () => number;
   /** Heartbeat interval; default 5 s. */
   heartbeatMs?: number;
@@ -78,9 +109,12 @@ export interface LockOptions {
 export interface LockHandle {
   readonly profile: ProfileRef;
   readonly owner: LockOwner;
-  /** Aborted when the heartbeat finds that the lock is no longer this holder's. */
+  /** Aborted when the heartbeat finds that the lock is no longer this holder's, or no longer fresh. */
   readonly signal: AbortSignal;
-  /** Throws `LOCK_LOST` unless `owner.json` on disk still names this holder. Call before committing a write. */
+  /**
+   * Throws `LOCK_LOST` unless the lock is still this holder's and fresh (last touch < 15 s
+   * ago). Call immediately before every commit point.
+   */
   assertHeld(): void;
 }
 
@@ -130,6 +164,11 @@ export function isStale(input: { nowMs: number; ownerMtimeMs: number | null; dir
   return input.nowMs - reference > STALE_MS;
 }
 
+/** Whether a holder still counts its lock as held, from its last successful touch (pure). */
+export function isFresh(input: { nowMs: number; lastTouchMs: number }): boolean {
+  return input.nowMs - input.lastTouchMs < FRESH_MS;
+}
+
 interface Observation {
   owner: LockOwner | null;
   ownerMtimeMs: number | null;
@@ -138,13 +177,17 @@ interface Observation {
   ino: number;
 }
 
+function ownDir(path: string, st: Stats): void {
+  if (!st.isDirectory()) throw new LockError("LOCK_INVALID", `${path} is not a directory; refusing to use it as a lock`);
+  if (process.platform !== "win32" && typeof process.getuid === "function" && st.uid !== process.getuid()) {
+    throw new LockError("LOCK_INVALID", `${path} belongs to another user; refusing to use it as a lock`);
+  }
+}
+
 function observe(dir: string, now: number): Observation | null {
   const dirStat = lstatOrNull(dir);
   if (dirStat === null) return null;
-  if (!dirStat.isDirectory()) throw new LockError("LOCK_INVALID", `${dir} is not a directory; refusing to use it as a lock`);
-  if (process.platform !== "win32" && typeof process.getuid === "function" && dirStat.uid !== process.getuid()) {
-    throw new LockError("LOCK_INVALID", `${dir} belongs to another user; refusing to use it as a lock`);
-  }
+  ownDir(dir, dirStat);
   const ownerStat = lstatOrNull(join(dir, OWNER_FILE));
   const ownerMtimeMs = ownerStat && ownerStat.isFile() ? ownerStat.mtimeMs : null;
   return {
@@ -160,37 +203,57 @@ function sameOwner(a: LockOwner | null, b: LockOwner | null): boolean {
   return a !== null && b !== null && a.token === b.token && a.pid === b.pid && a.startedAt === b.startedAt;
 }
 
-function uniqueSibling(dir: string, tag: string): string {
+const MOVED_TAGS = ["stale", "released", "failed"] as const;
+type MovedTag = (typeof MOVED_TAGS)[number];
+
+function uniqueSibling(dir: string, tag: MovedTag): string {
   return `${dir}.${tag}-${process.pid}-${randomBytes(6).toString("hex")}`;
 }
 
 /**
  * Moves the lock directory away and deletes it, but only if it still is the lock that was
- * observed (`expected`). If the rename caught a different lock (one taken between the
- * observation and the rename), it is put back when the lock path is still free.
+ * meant (`expected`). If the rename caught a different lock, it is put back when the lock
+ * path is still free; otherwise it is left where it is (never deleted) for the sweep.
  */
-function removeIfStill(dir: string, expected: (moved: string) => boolean, tag: string): boolean {
+function removeIfStill(dir: string, expected: (moved: string) => boolean, tag: MovedTag): boolean {
   const moved = uniqueSibling(dir, tag);
   try {
     renameSync(dir, moved);
   } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === "ENOENT") return false; // someone else moved it first
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return false; // already gone
     throw err;
   }
   if (expected(moved)) {
     rmSync(moved, { recursive: true, force: true });
     return true;
   }
-  // Not the lock we meant to remove: put it back if nobody took the path meanwhile.
-  try {
-    if (lstatOrNull(dir) !== null) throw new Error("taken");
-    renameSync(moved, dir);
-  } catch {
-    // The path was taken again; the displaced holder sees LOCK_LOST on its next check.
-    rmSync(moved, { recursive: true, force: true });
+  if (lstatOrNull(dir) === null) {
+    try {
+      renameSync(moved, dir);
+    } catch {
+      // Left in place: its holder sees LOCK_LOST on its next check; the sweep removes it later.
+    }
   }
   return false;
+}
+
+/** Deletes moved-away lock directories of this profile that are older than 30 s. */
+function sweepMoved(dir: string, nowMs: number): void {
+  const parent = dirname(dir);
+  const prefix = `${basename(dir)}.`;
+  const re = new RegExp(`^(${MOVED_TAGS.join("|")})-\\d+-[0-9a-f]{12}$`);
+  let names: string[];
+  try {
+    names = readdirSync(parent);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (!name.startsWith(prefix) || !re.test(name.slice(prefix.length))) continue;
+    const path = join(parent, name);
+    const st = lstatOrNull(path);
+    if (st && st.isDirectory() && nowMs - st.mtimeMs > STALE_MS) rmSync(path, { recursive: true, force: true });
+  }
 }
 
 function writeOwner(dir: string, owner: LockOwner, nowMs: number): void {
@@ -240,8 +303,7 @@ function tryAcquire(dir: string, now: number): LockOwner | null {
   try {
     writeOwner(dir, owner, now);
   } catch (err) {
-    // ENOENT: the directory was moved away under us (it can only be judged stale if the
-    // clock jumped); simply wait and try again.
+    // ENOENT: the directory was moved away under us; wait and try again.
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
     removeIfStill(dir, (moved) => readOwner(moved) === null || sameOwner(readOwner(moved), owner), "failed");
     throw err;
@@ -249,7 +311,85 @@ function tryAcquire(dir: string, now: number): LockOwner | null {
   return owner;
 }
 
+/**
+ * Removes the lock at `dir` if it is (still) stale, under the reclaim mutex. Returns true
+ * when it removed it, false otherwise (including when another process holds the mutex).
+ */
+function reclaimStale(dir: string, now: () => number): boolean {
+  const mutex = `${dir}${RECLAIM_SUFFIX}`;
+  try {
+    mkdirSync(mutex, { mode: 0o700 });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+    const st = lstatOrNull(mutex);
+    if (st === null) return false;
+    ownDir(mutex, st);
+    // A reclaimer that died holding the mutex: plain rmdir (it is always empty).
+    if (now() - st.mtimeMs > STALE_MS) {
+      try {
+        rmdirSync(mutex);
+      } catch {
+        // someone else removed or took it
+      }
+    }
+    return false;
+  }
+  let removed = false;
+  try {
+    const seen = observe(dir, now());
+    if (seen?.stale) {
+      removed = removeIfStill(
+        dir,
+        (moved) => {
+          const again = observe(moved, now());
+          if (again === null || again.dev !== seen.dev || again.ino !== seen.ino) return false;
+          if (seen.owner === null) return again.owner === null && again.ownerMtimeMs === seen.ownerMtimeMs;
+          return sameOwner(again.owner, seen.owner) && again.stale;
+        },
+        "stale",
+      );
+    }
+    sweepMoved(dir, now());
+  } finally {
+    try {
+      rmdirSync(mutex);
+    } catch {
+      // gone already; a leftover becomes stale after 30 s
+    }
+  }
+  return removed;
+}
+
+/** File-system errors that mean "busy right now" (Windows antivirus or indexer, a racing rename). */
+function isTransient(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException).code;
+  return code === "EPERM" || code === "EBUSY" || code === "EACCES" || code === "ENOTEMPTY" || code === "EEXIST";
+}
+
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/** Takes the lock, waiting up to `timeoutMs`; throws `LOCK_TIMEOUT` (or `LOCK_INVALID`). */
+async function acquire(dir: string, now: () => number, timeoutMs: number): Promise<LockOwner> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      const owner = tryAcquire(dir, now());
+      if (owner) return owner;
+      const seen = observe(dir, now());
+      if (seen === null) continue; // released between mkdir and stat
+      if (seen.stale && reclaimStale(dir, now)) continue; // try to take it at once
+    } catch (err) {
+      if (err instanceof LockError) throw err;
+      if (!isTransient(err)) throw new LockError("LOCK_INVALID", "The profile lock could not be used.");
+    }
+    const left = deadline - Date.now();
+    if (left <= 0) {
+      throw new LockError("LOCK_TIMEOUT", "Another assay-mcp process is holding the profile lock; try again in a moment.");
+    }
+    // The last attempt happens at the deadline itself.
+    await sleep(Math.min(RETRY_MS, left));
+  }
+}
 
 /**
  * Runs `fn` while holding the profile lock. Waits up to `timeoutMs`; on timeout throws
@@ -262,52 +402,27 @@ export async function withLock<T>(profile: ProfileRef, fn: (lock: LockHandle) =>
   ensurePrivateSubdir(profile.dir, "profiles");
   const dir = lockPath(profile);
 
-  const deadline = Date.now() + timeoutMs;
-  let owner: LockOwner | null;
-  for (;;) {
-    owner = tryAcquire(dir, now());
-    if (owner) break;
-    const seen = observe(dir, now());
-    if (seen?.stale) {
-      // Re-check after the rename: remove it only if it is still the stale lock we saw.
-      removeIfStill(
-        dir,
-        (moved) => {
-          const again = observe(moved, now());
-          if (again === null || again.dev !== seen.dev || again.ino !== seen.ino) return false;
-          // Same directory. With an owner, it must be the same owner and still untouched for 30 s.
-          if (seen.owner === null) return again.owner === null && again.ownerMtimeMs === seen.ownerMtimeMs;
-          return sameOwner(again.owner, seen.owner) && again.stale;
-        },
-        "stale",
-      );
-      continue;
-    }
-    if (seen === null) continue; // released between mkdir and stat
-    if (Date.now() + RETRY_MS > deadline) {
-      throw new LockError("LOCK_TIMEOUT", "Another assay-mcp process is holding the profile lock; try again in a moment.");
-    }
-    await sleep(RETRY_MS);
-  }
-
-  const acquired = owner;
+  const acquired = await acquire(dir, now, timeoutMs);
   const controller = new AbortController();
   const entry = { dir, owner: acquired };
   held.add(entry);
   installExitHook();
 
-  const isHeld = () => sameOwner(readOwner(dir), acquired);
+  let lastTouchMs = now();
+  const lost = () => new LockError("LOCK_LOST", LOST_MESSAGE);
+  const stillHeld = () => isFresh({ nowMs: now(), lastTouchMs }) && sameOwner(readOwner(dir), acquired);
   const timer = setInterval(() => {
     try {
-      if (!isHeld()) {
-        controller.abort(new LockError("LOCK_LOST", "The profile lock was taken over by another process."));
+      if (!stillHeld()) {
+        controller.abort(lost());
         clearInterval(timer);
         return;
       }
-      const t = now() / 1000;
-      utimesSync(join(dir, OWNER_FILE), t, t);
+      const t = now();
+      utimesSync(join(dir, OWNER_FILE), t / 1000, t / 1000);
+      lastTouchMs = t;
     } catch {
-      // A failed touch is retried on the next tick; staleness needs 30 s of failures.
+      // A failed touch is retried on the next tick; after 15 s without one the lock counts as lost.
     }
   }, heartbeatMs);
   timer.unref();
@@ -317,8 +432,10 @@ export async function withLock<T>(profile: ProfileRef, fn: (lock: LockHandle) =>
     owner: acquired,
     signal: controller.signal,
     assertHeld() {
-      if (controller.signal.aborted || !isHeld()) {
-        throw new LockError("LOCK_LOST", "The profile lock was taken over by another process.");
+      if (controller.signal.aborted) throw lost();
+      if (!stillHeld()) {
+        controller.abort(lost());
+        throw lost();
       }
     },
   };

@@ -248,4 +248,13 @@ export function writePrivateFile(dir: string, rel: string, data: string): void {
     rmSync(tmp, { force: true });
     throw err;
   }
+  // Make the rename itself durable (a lost directory entry would drop e.g. a spend record).
+  if (IS_POSIX) {
+    const dfd = openSync(dirname(path), constants.O_RDONLY);
+    try {
+      fsyncSync(dfd);
+    } finally {
+      closeSync(dfd);
+    }
+  }
 }

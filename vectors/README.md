@@ -46,4 +46,4 @@ The signing key in `binding.json` and `vouchers.json` is **test only**: the well
 
 ## lock-protocol.json
 
-The profile lock of spec 8.4: directory and owner-file names, the owner fields, the timings (heartbeat 5 s, stale after 30 s, retry every 100 ms, give up after 30 s with `LOCK_TIMEOUT`), the stale-removal and release rules, and staleness cases. Consumer: `node/test/lock.test.ts` (`node/src/profile/lock.ts`).
+The profile lock of spec 8.4: directory and owner-file names, the owner fields, the timings (heartbeat 5 s, stale after 30 s, retry every 100 ms, give up after 30 s with `LOCK_TIMEOUT`), self-fencing (a holder whose last touch is 15 s old or more counts its lock as lost), the reclaim mutex `{profile}.lock.d.reclaim`, the stale-removal and release rules, and freshness and staleness cases. Consumer: `node/test/lock.test.ts` (`node/src/profile/lock.ts`).

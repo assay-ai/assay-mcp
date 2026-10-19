@@ -1,17 +1,23 @@
 import { ENVIRONMENTS, type Environment } from "../deployments.js";
 import { EXIT_FATAL } from "../exit-codes.js";
+import type { LockHandle } from "./lock.js";
 import { isValidProfileName } from "./paths.js";
 
 /**
- * Profile secrets in the OS keychain (spec §7.4, §7.9; R-MCP-6, R-MU-3).
+ * Profile secrets in the OS keychain (spec §7.4, §7.9; R-MCP-6, R-MU-3, R-MU-6).
  *
  * The access token, the refresh token and the delegate private key live only here: never in
  * a file, a log, an environment variable or an error message. There is no file fallback in
- * v1: with no usable keychain, `assay-mcp` exits 1.
+ * v1: with no usable keychain, `assay-mcp` exits 1. On Linux only the Secret Service is used;
+ * the kernel keyutils store (the library's silent fallback) is never used.
  *
- * Entries are `@napi-rs/keyring` `Entry("ai.assay.mcp", "{profile}@{environment}/{kind}")`.
+ * Entries are `@napi-rs/keyring` `AsyncEntry("ai.assay.mcp", "{profile}@{environment}/{kind}")`.
+ * The service and the account are fixed in code; nothing comes from the environment.
+ * Calls are asynchronous so a keychain prompt does not freeze the lock heartbeat.
+ *
  * Every read goes to the keychain (nothing is cached), so a process that takes the profile
- * lock always sees what another process stored before it (R-MU-6).
+ * lock sees what another process stored before it. Every write takes the `LockHandle` and
+ * calls `assertHeld()` immediately before writing (see the rules in `lock.ts`).
  */
 
 export const KEYCHAIN_SERVICE = "ai.assay.mcp";
@@ -24,15 +30,18 @@ export const LOCKED_KEYCHAIN_MESSAGE = "Unlock your keychain, then try again.";
 /** The account name of the probe entry; it is read, never written. */
 const PROBE_ACCOUNT = "probe";
 
+/** Entry options for every operation: Secret Service only on Linux (ignored elsewhere). */
+export const ENTRY_OPTIONS = Object.freeze({ linux: Object.freeze({ store: "secret-service" as const }) });
+
 /**
  * The storage the keychain uses. Production uses the OS keychain through `@napi-rs/keyring`;
  * tests inject an in-memory backend so they never touch the real keychain.
  */
 export interface KeyringBackend {
-  get(service: string, account: string): string | null;
-  set(service: string, account: string, value: string): void;
+  get(service: string, account: string): Promise<string | null>;
+  set(service: string, account: string, value: string): Promise<void>;
   /** True if an entry was deleted, false if there was none. */
-  delete(service: string, account: string): boolean;
+  delete(service: string, account: string): Promise<boolean>;
 }
 
 export type KeychainFailure = "unavailable" | "locked";
@@ -70,9 +79,9 @@ export function accountFor({ profile, environment }: KeychainScope, kind: Secret
   return `${profile}@${environment}/${kind}`;
 }
 
-function guarded<T>(op: () => T): T {
+async function guarded<T>(op: () => Promise<T>): Promise<T> {
   try {
-    return op();
+    return await op();
   } catch (err) {
     if (err instanceof KeychainError) throw err;
     throw new KeychainError(classifyKeyringError(err));
@@ -83,14 +92,20 @@ function guarded<T>(op: () => T): T {
  * Checks at startup that the keychain can be read. Throws `KeychainError` (exit code 1)
  * with the exact §7.9 text, or the "unlock" text for a locked store.
  */
-export function probeKeychain(backend: KeyringBackend): void {
-  guarded(() => backend.get(KEYCHAIN_SERVICE, PROBE_ACCOUNT));
+export async function probeKeychain(backend: KeyringBackend): Promise<void> {
+  await guarded(() => backend.get(KEYCHAIN_SERVICE, PROBE_ACCOUNT));
 }
 
 /** Writes the failure text to stderr and returns exit code 1. For the command entry points. */
 export function reportKeychainError(err: KeychainError, stderr: (line: string) => void = (l) => process.stderr.write(l)): number {
   stderr(`${err.message}\n`);
   return err.exitCode;
+}
+
+/** The access token and when it expires (Unix seconds), stored together in one entry. */
+export interface AccessToken {
+  token: string;
+  expiresAt: number;
 }
 
 /** One profile's secrets. */
@@ -102,47 +117,99 @@ export class Keychain {
     accountFor(scope, "access_token"); // validates the scope early
   }
 
-  get(kind: SecretKind): string | null {
+  private checkLock(lock: LockHandle): void {
+    if (lock.profile.name !== this.scope.profile) throw new TypeError("the lock held is for another profile");
+    lock.assertHeld();
+  }
+
+  async get(kind: SecretKind): Promise<string | null> {
     const account = accountFor(this.scope, kind);
-    const value = guarded(() => this.backend.get(KEYCHAIN_SERVICE, account));
+    const value = await guarded(() => this.backend.get(KEYCHAIN_SERVICE, account));
     return value === null || value === undefined || value === "" ? null : value;
   }
 
-  set(kind: SecretKind, value: string): void {
+  /** Writes one secret. Refused with `LOCK_LOST` unless `lock` is held and fresh right now. */
+  async set(lock: LockHandle, kind: SecretKind, value: string): Promise<void> {
     const account = accountFor(this.scope, kind);
     if (typeof value !== "string" || value === "") throw new TypeError("refusing to store an empty secret");
-    guarded(() => this.backend.set(KEYCHAIN_SERVICE, account, value));
+    this.checkLock(lock);
+    await guarded(() => this.backend.set(KEYCHAIN_SERVICE, account, value));
   }
 
-  delete(kind: SecretKind): boolean {
+  async delete(lock: LockHandle, kind: SecretKind): Promise<boolean> {
     const account = accountFor(this.scope, kind);
+    this.checkLock(lock);
     return guarded(() => this.backend.delete(KEYCHAIN_SERVICE, account));
   }
 
   /** Removes every secret of the profile (logout). */
-  clear(): void {
-    for (const kind of SECRET_KINDS) this.delete(kind);
+  async clear(lock: LockHandle): Promise<void> {
+    for (const kind of SECRET_KINDS) await this.delete(lock, kind);
+  }
+
+  /** The access token and its expiry; `null` when missing or unreadable. */
+  async getAccessToken(): Promise<AccessToken | null> {
+    const raw = await this.get("access_token");
+    if (raw === null) return null;
+    try {
+      const v = JSON.parse(raw) as Record<string, unknown>;
+      if (typeof v.token === "string" && v.token !== "" && typeof v.expiresAt === "number" && Number.isSafeInteger(v.expiresAt)) {
+        return { token: v.token, expiresAt: v.expiresAt };
+      }
+    } catch {
+      // unreadable: treated as missing
+    }
+    return null;
+  }
+
+  /**
+   * Stores a new token pair (refresh token first, then the access token with its expiry).
+   * Each write checks the lock; an answer that arrives after the lock was lost is dropped.
+   */
+  async storeTokens(lock: LockHandle, tokens: { refreshToken: string; accessToken: AccessToken }): Promise<void> {
+    const { token, expiresAt } = tokens.accessToken;
+    if (token === "" || !Number.isSafeInteger(expiresAt)) throw new TypeError("invalid access token");
+    await this.set(lock, "refresh_token", tokens.refreshToken);
+    await this.set(lock, "access_token", JSON.stringify({ token, expiresAt }));
+  }
+
+  /**
+   * After `invalid_grant`: deletes both tokens only if the keychain still holds the refresh
+   * token that was sent. Returns false (and deletes nothing) when a newer one was stored.
+   */
+  async deleteTokensIfRefreshIs(lock: LockHandle, sentRefreshToken: string): Promise<boolean> {
+    this.checkLock(lock);
+    if ((await this.get("refresh_token")) !== sentRefreshToken) return false;
+    await this.delete(lock, "access_token");
+    await this.delete(lock, "refresh_token");
+    return true;
   }
 }
 
-interface NapiEntry {
-  getPassword(): string | null;
-  setPassword(password: string): void;
-  deletePassword(): boolean;
+interface NapiAsyncEntry {
+  getPassword(): Promise<string | undefined | null>;
+  setPassword(password: string): Promise<void>;
+  deletePassword(): Promise<boolean>;
 }
-type NapiEntryCtor = new (service: string, account: string) => NapiEntry;
+export type NapiAsyncEntryCtor = new (service: string, account: string, options?: typeof ENTRY_OPTIONS) => NapiAsyncEntry;
+
+/** A backend over `@napi-rs/keyring`'s `AsyncEntry`, always with `ENTRY_OPTIONS`. */
+export function keyringBackendFrom(AsyncEntry: NapiAsyncEntryCtor): KeyringBackend {
+  const entry = (service: string, account: string) => new AsyncEntry(service, account, ENTRY_OPTIONS);
+  return {
+    get: async (service, account) => (await entry(service, account).getPassword()) ?? null,
+    set: (service, account, value) => entry(service, account).setPassword(value),
+    delete: (service, account) => entry(service, account).deletePassword(),
+  };
+}
 
 /** The OS keychain through `@napi-rs/keyring`, loaded on first use (so `--version` never loads it). */
 export async function loadOsKeyring(): Promise<KeyringBackend> {
-  let Entry: NapiEntryCtor;
+  let AsyncEntry: NapiAsyncEntryCtor;
   try {
-    ({ Entry } = (await import("@napi-rs/keyring")) as unknown as { Entry: NapiEntryCtor });
+    ({ AsyncEntry } = (await import("@napi-rs/keyring")) as unknown as { AsyncEntry: NapiAsyncEntryCtor });
   } catch {
     throw new KeychainError("unavailable");
   }
-  return {
-    get: (service, account) => new Entry(service, account).getPassword() ?? null,
-    set: (service, account, value) => new Entry(service, account).setPassword(value),
-    delete: (service, account) => new Entry(service, account).deletePassword(),
-  };
+  return keyringBackendFrom(AsyncEntry);
 }

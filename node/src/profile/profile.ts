@@ -1,4 +1,6 @@
 import { ENVIRONMENTS, type Environment } from "../deployments.js";
+import { DEFAULT_LIMITS as GUARD_DEFAULT_LIMITS, type LocalLimits, type SignedVoucher } from "../guards/types.js";
+import type { ResolvedDeployment } from "./deployments.js";
 import type { LockHandle, ProfileRef } from "./lock.js";
 import { canonicalPath, canonicalQuery, parseMcpUrl } from "./mcp-url.js";
 import { profileFile, readPrivateFile, writePrivateFile } from "./paths.js";
@@ -20,9 +22,21 @@ export class ProfileStateError extends Error {
 
 const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 const CAIP2_RE = /^eip155:[1-9][0-9]{0,18}$/;
-/** Decimal USD amounts: up to 6 fractional digits (the asset's precision). */
-const USD_RE = /^(0|[1-9][0-9]{0,8})(\.[0-9]{1,6})?$/;
+/** Decimal USD amounts in `limits.json`: up to 6 fractional digits. */
+export const USD_RE = /^(0|[1-9][0-9]{0,8})(\.[0-9]{1,6})?$/;
 const UNITS_RE = /^(0|[1-9][0-9]{0,30})$/;
+
+/**
+ * A `limits.json` dollar amount (`USD_RE`) as base units of an asset with `decimals` places:
+ * exact integer arithmetic, no floating point, rounded down so a cap is never loosened.
+ */
+export function usdToUnits(usd: string, decimals: number): bigint {
+  if (typeof usd !== "string" || !USD_RE.test(usd)) throw new ProfileStateError("not a dollar amount");
+  if (!Number.isInteger(decimals) || decimals < 0 || decimals > 36) throw new RangeError("invalid decimals");
+  const [whole, fraction = ""] = usd.split(".") as [string, string?];
+  const kept = fraction.slice(0, decimals).padEnd(decimals, "0");
+  return BigInt(whole) * 10n ** BigInt(decimals) + (kept === "" ? 0n : BigInt(kept));
+}
 
 export interface ProfileRecord {
   version: number;
@@ -36,25 +50,13 @@ export interface ProfileRecord {
   createdAt: string;
 }
 
-export interface Limits {
+/** `limits.json`: the guards' `LocalLimits` (dollar strings) plus the file version. */
+export interface Limits extends LocalLimits {
   version: number;
-  /** USD, decimal string. */
-  perCall: string;
-  /** USD per rolling 24 h, decimal string. */
-  perDay: string;
-  /** USD, or `null` for off. */
-  confirmAbove: string | null;
-  /** Provider ids allowed, or `null` for any. */
-  providers: string[] | null;
 }
 
-export const DEFAULT_LIMITS: Readonly<Limits> = Object.freeze({
-  version: PROFILE_VERSION,
-  perCall: "0.50",
-  perDay: "5.00",
-  confirmAbove: null,
-  providers: null,
-});
+/** $0.50 / $5 / off / any (spec §7.4, G7), as the guards define them. */
+export const DEFAULT_LIMITS: Readonly<Limits> = Object.freeze({ version: PROFILE_VERSION, ...GUARD_DEFAULT_LIMITS });
 
 export interface PaidUrls {
   version: number;
@@ -62,17 +64,14 @@ export interface PaidUrls {
   urls: string[];
 }
 
-export interface SpendEntry {
-  /** ISO 8601 UTC. */
-  at: string;
-  /** Asset base units, decimal string. */
-  amount: string;
-}
+/** One signed voucher: `at` in Unix seconds, `amount` in asset base units (decimal string). */
+export type SpendEntry = SignedVoucher;
 
 export interface ProfileState {
   version: number;
   signed: SpendEntry[];
-  lastBrowserOpen: string | null;
+  /** Unix seconds, or `null`. */
+  lastBrowserOpen: number | null;
 }
 
 function assertLock(profile: ProfileRef, lock: LockHandle): void {
@@ -84,6 +83,10 @@ function assertLock(profile: ProfileRef, lock: LockHandle): void {
 
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+function isSeconds(v: unknown): v is number {
+  return typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
 }
 
 function isIsoTime(v: unknown): v is string {
@@ -180,10 +183,10 @@ export function validateState(v: unknown): ProfileState {
   if (!Array.isArray(v.signed)) throw bad("signed");
   const signed: SpendEntry[] = [];
   for (const e of v.signed) {
-    if (!isObject(e) || !isIsoTime(e.at) || typeof e.amount !== "string" || !UNITS_RE.test(e.amount)) throw bad("signed entry");
+    if (!isObject(e) || !isSeconds(e.at) || typeof e.amount !== "string" || !UNITS_RE.test(e.amount)) throw bad("signed entry");
     signed.push({ at: e.at, amount: e.amount });
   }
-  if (v.lastBrowserOpen !== null && !isIsoTime(v.lastBrowserOpen)) throw bad("lastBrowserOpen");
+  if (v.lastBrowserOpen !== null && !isSeconds(v.lastBrowserOpen)) throw bad("lastBrowserOpen");
   return { version: PROFILE_VERSION, signed, lastBrowserOpen: v.lastBrowserOpen };
 }
 
@@ -196,6 +199,18 @@ export type NewProfile = Omit<ProfileRecord, "version" | "payer" | "delegateAddr
 export function readProfile(profile: ProfileRef): ProfileRecord | null {
   const v = readJson(profile, profileFile(profile.name, "profile"));
   return v === undefined ? null : validateProfileRecord(v);
+}
+
+/**
+ * The profile for the environment this process resolved; refuses a profile created for
+ * another environment, so limits and paid URLs never carry over between environments.
+ */
+export function readProfileFor(profile: ProfileRef, environment: Environment): ProfileRecord | null {
+  const record = readProfile(profile);
+  if (record !== null && record.environment !== environment) {
+    throw new ProfileStateError(`profile "${profile.name}" belongs to the ${record.environment} environment; use another --profile`);
+  }
+  return record;
 }
 
 /**
@@ -215,6 +230,10 @@ export function createProfile(profile: ProfileRef, lock: LockHandle, input: NewP
     network: input.network ?? null,
     createdAt: input.createdAt,
   });
+  const existing = readProfile(profile);
+  if (existing !== null && existing.environment !== record.environment) {
+    throw new ProfileStateError(`profile "${profile.name}" belongs to the ${existing.environment} environment; use another --profile`);
+  }
   if (readJson(profile, profileFile(profile.name, "limits")) === undefined) {
     writeJson(profile, profileFile(profile.name, "limits"), DEFAULT_LIMITS);
   }
@@ -272,6 +291,18 @@ function changePaidUrls(profile: ProfileRef, lock: LockHandle, pathAndQuery: str
   lock.assertHeld();
   writeJson(profile, profileFile(profile.name, "paid-urls"), { version: PROFILE_VERSION, urls });
   return urls;
+}
+
+/**
+ * The `paid-urls.json` key for the URL this process serves: its canonical `path?query`
+ * (never the pathname alone), after checking it is on the resolved MCP origin.
+ */
+export function paidUrlKey(resolved: Pick<ResolvedDeployment, "url" | "mcp">): string {
+  const origin = new URL(resolved.mcp).origin;
+  if (!resolved.url.startsWith(`${origin}/`)) throw new ProfileStateError("the URL is not on the MCP origin");
+  const key = canonicalPaidUrl(resolved.url.slice(origin.length));
+  if (key === null) throw new ProfileStateError("not an Assay MCP URL");
+  return key;
 }
 
 /** For `add --scope user` and `allow-paid` (on a TTY). Takes the canonical path, never a host. */

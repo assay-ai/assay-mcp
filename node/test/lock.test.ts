@@ -7,7 +7,9 @@ import { build } from "esbuild";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_TIMEOUT_MS,
+  FRESH_MS,
   HEARTBEAT_MS,
+  isFresh,
   isStale,
   LockError,
   OWNER_FILE,
@@ -24,7 +26,10 @@ const vectors = JSON.parse(readFileSync(join(here, "../../vectors/lock-protocol.
   staleMs: number;
   retryMs: number;
   timeoutMs: number;
+  freshMs: number;
+  reclaimDir: string;
   timeoutError: string;
+  freshCases: { name: string; nowMs: number; lastTouchMs: number; fresh: boolean }[];
   staleCases: { name: string; nowMs: number; ownerMtimeMs: number | null; dirMtimeMs: number; stale: boolean }[];
 };
 
@@ -85,6 +90,11 @@ describe("lock protocol vectors", () => {
     expect(STALE_MS).toBe(vectors.staleMs);
     expect(RETRY_MS).toBe(vectors.retryMs);
     expect(DEFAULT_TIMEOUT_MS).toBe(vectors.timeoutMs);
+    expect(FRESH_MS).toBe(vectors.freshMs);
+    expect(vectors.reclaimDir).toBe("profiles/{profile}.lock.d.reclaim");
+  });
+  it.each(vectors.freshCases)("fresh: $name", (c) => {
+    expect(isFresh({ nowMs: c.nowMs, lastTouchMs: c.lastTouchMs })).toBe(c.fresh);
   });
   it.each(vectors.staleCases)("$name", (c) => {
     expect(isStale({ nowMs: c.nowMs, ownerMtimeMs: c.ownerMtimeMs, dirMtimeMs: c.dirMtimeMs })).toBe(c.stale);
@@ -139,11 +149,14 @@ describe("withLock in one process", () => {
     let t = Date.parse("2030-01-01T00:00:00Z");
     await withLock(
       profile,
-      async () => {
+      async (lock) => {
         const first = lstatSync(join(lockDir(), OWNER_FILE)).mtimeMs;
-        t += 60_000;
-        await new Promise((r) => setTimeout(r, 120));
-        expect(lstatSync(join(lockDir(), OWNER_FILE)).mtimeMs).toBeGreaterThanOrEqual(first + 59_000);
+        for (let i = 0; i < 10; i++) {
+          t += 4_000; // each step is less than the 15 s freshness bound
+          await new Promise((r) => setTimeout(r, 60));
+        }
+        expect(lstatSync(join(lockDir(), OWNER_FILE)).mtimeMs).toBeGreaterThanOrEqual(first + 35_000);
+        lock.assertHeld();
       },
       { now: () => t, heartbeatMs: 25 },
     );
@@ -159,6 +172,81 @@ describe("withLock in one process", () => {
       },
       { heartbeatMs: 20 },
     );
+  });
+
+  it("a holder that stalled for 15 s counts its lock as lost (self-fencing)", async () => {
+    let t = Date.now();
+    await withLock(
+      profile,
+      async (lock) => {
+        t += FRESH_MS - 1;
+        lock.assertHeld();
+        t += 1; // no heartbeat ran for 15 s (event loop stalled, laptop asleep)
+        expect(() => lock.assertHeld()).toThrowError(expect.objectContaining({ code: "LOCK_LOST" }));
+        expect(lock.signal.aborted).toBe(true);
+      },
+      { now: () => t },
+    );
+    // Its own (still matching) lock is released normally.
+    expect(existsSync(lockDir())).toBe(false);
+  });
+
+  it("the heartbeat aborts the signal after a stall, without touching", async () => {
+    let t = Date.now();
+    await withLock(
+      profile,
+      async (lock) => {
+        const before = lstatSync(join(lockDir(), OWNER_FILE)).mtimeMs;
+        t += 20_000;
+        await new Promise((r) => setTimeout(r, 80));
+        expect(lock.signal.aborted).toBe(true);
+        expect(lstatSync(join(lockDir(), OWNER_FILE)).mtimeMs).toBe(before);
+      },
+      { now: () => t, heartbeatMs: 20 },
+    );
+  });
+
+  it("waits while another process holds the reclaim mutex, and removes a stale one", async () => {
+    mkdirSync(lockDir(), { recursive: true, mode: 0o700 });
+    const old = (Date.now() - STALE_MS - 5_000) / 1000;
+    utimesSync(lockDir(), old, old);
+    const mutex = `${lockDir()}.reclaim`;
+    mkdirSync(mutex, { mode: 0o700 });
+    const fn = vi.fn(() => "ran");
+    // A live reclaimer holds the mutex: nobody else reclaims.
+    await expect(withLock(profile, fn, { timeoutMs: 250 })).rejects.toMatchObject({ code: "LOCK_TIMEOUT" });
+    expect(fn).not.toHaveBeenCalled();
+    expect(existsSync(lockDir())).toBe(true);
+    // The reclaimer died: its mutex goes stale after 30 s and is removed; then the lock is reclaimed.
+    utimesSync(mutex, old, old);
+    await expect(withLock(profile, fn, { timeoutMs: 1_000 })).resolves.toBe("ran");
+    expect(readdirSync(join(profile.dir, "profiles"))).toEqual([]);
+  });
+
+  it("sweeps moved-away lock directories older than 30 s", async () => {
+    const profiles = join(profile.dir, "profiles");
+    mkdirSync(lockDir(), { recursive: true, mode: 0o700 });
+    const old = (Date.now() - STALE_MS - 5_000) / 1000;
+    utimesSync(lockDir(), old, old);
+    const leftover = `${lockDir()}.stale-123-0123456789ab`;
+    const recent = `${lockDir()}.released-123-ba9876543210`;
+    const unrelated = join(profiles, "default.lock.d.keep");
+    for (const d of [leftover, recent, unrelated]) mkdirSync(d, { mode: 0o700 });
+    utimesSync(leftover, old, old);
+    await withLock(profile, () => undefined, { timeoutMs: 1_000 });
+    expect(readdirSync(profiles).sort()).toEqual(["default.lock.d.keep", "default.lock.d.released-123-ba9876543210"]);
+  });
+
+  it("makes a last attempt at the deadline", async () => {
+    mkdirSync(lockDir(), { recursive: true, mode: 0o700 });
+    const ownerPath = join(lockDir(), OWNER_FILE);
+    writeFileSync(ownerPath, JSON.stringify({ pid: 1, startedAt: "2026-01-01T00:00:00.000Z", token: "b".repeat(32) }));
+    const t0 = Date.now();
+    const mtime = lstatSync(ownerPath).mtimeMs;
+    // The lock turns stale 30 ms after the call starts; the deadline is 35 ms. Retries are 100 ms
+    // apart, so only the attempt at the deadline can see it stale.
+    const now = () => mtime + STALE_MS - 30 + (Date.now() - t0);
+    await expect(withLock(profile, () => "ok", { timeoutMs: 35, now })).resolves.toBe("ok");
   });
 
   it("refuses a lock path that is not a directory", async () => {
