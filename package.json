@@ -1,0 +1,26 @@
+{
+  "name": "assay-mcp-workspace",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "node",
+    "sdk/node"
+  ],
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm test --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present",
+    "check:bundle": "node scripts/check-bundle.mjs",
+    "check:unscoped": "node scripts/check-no-unscoped.mjs",
+    "check:pack": "node scripts/check-pack.mjs",
+    "check:release": "node scripts/check-deployments.mjs --release"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "eslint": "10.12.0",
+    "globals": "17.13.0",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.71.0"
+  }
+}

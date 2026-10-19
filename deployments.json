@@ -1,0 +1,58 @@
+{
+  "production": {
+    "mcp": "https://mcp.assay.ai",
+    "issuer": "https://mcp.assay.ai",
+    "api": "<API from ops config>",
+    "web": "<WEB from ops config>",
+    "networks": {
+      "eip155:46630": {
+        "escrow": "eip155:46630:0x1D2625efD87c2fc10b8563f3F0890072845Fcf41",
+        "asset": "eip155:46630/erc20:0xDbbC156dD414f43f2c952C1Be0f16A0B9a826Cd3",
+        "decimals": 6,
+        "rpc": ["<operator RPC>", "<public RPC>"]
+      }
+    }
+  },
+  "staging": {
+    "mcp": "<staging MCP>",
+    "issuer": "<staging issuer>",
+    "api": "<staging API>",
+    "web": "<staging WEB>",
+    "networks": {
+      "eip155:46630": {
+        "escrow": "eip155:46630:0x1D2625efD87c2fc10b8563f3F0890072845Fcf41",
+        "asset": "eip155:46630/erc20:0xDbbC156dD414f43f2c952C1Be0f16A0B9a826Cd3",
+        "decimals": 6,
+        "rpc": ["<staging operator RPC>", "<staging public RPC>"]
+      }
+    }
+  },
+  "e2e": {
+    "mcp": "http://localhost:3200",
+    "issuer": "http://localhost:3200",
+    "api": "http://localhost:3000/api/v1",
+    "web": "http://localhost:4000",
+    "networks": {
+      "eip155:46630": {
+        "escrow": "eip155:46630:0x1D2625efD87c2fc10b8563f3F0890072845Fcf41",
+        "asset": "eip155:46630/erc20:0xDbbC156dD414f43f2c952C1Be0f16A0B9a826Cd3",
+        "decimals": 6,
+        "rpc": ["https://rpc.testnet.chain.robinhood.com"]
+      }
+    }
+  },
+  "anvil": {
+    "mcp": "http://localhost:3200",
+    "issuer": "http://localhost:3200",
+    "api": "http://localhost:3000/api/v1",
+    "web": "http://localhost:4000",
+    "networks": {
+      "eip155:46630": {
+        "escrow": "eip155:46630:0x1D2625efD87c2fc10b8563f3F0890072845Fcf41",
+        "asset": "eip155:46630/erc20:0xDbbC156dD414f43f2c952C1Be0f16A0B9a826Cd3",
+        "decimals": 6,
+        "rpc": ["http://127.0.0.1:8547", "http://localhost:8547"]
+      }
+    }
+  }
+}
