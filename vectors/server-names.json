@@ -7,7 +7,9 @@
     "signInTool": "assay_sign_in",
     "noNameBudget": 16,
     "maxLength": 56,
-    "signedOutHint": "Sign in first (`assay-mcp login`) to allow a longer name."
+    "signedOutHint": "Sign in first (`assay-mcp login`) to allow a longer name.",
+    "pattern": "^[a-z][a-z0-9-]*$",
+    "note": "Anchors are whole-string: a trailing newline is invalid. L values in the cases below are arbitrary unless a case says root (L 13). Tool names are ASCII [A-Za-z0-9_-]; L is measured in UTF-8 bytes."
   },
   "searchMetaTools": [
     "search_tools",
@@ -80,6 +82,36 @@
     {
       "name": "assay-weather-forecast-climate-data-tool-box-for-all-teams",
       "ok": false
+    },
+    {
+      "name": "assay\n",
+      "ok": false
+    },
+    {
+      "name": "café",
+      "ok": false
+    },
+    {
+      "name": "ａssay",
+      "ok": false
+    },
+    {
+      "name": "assay-",
+      "ok": true,
+      "note": "valid by the pattern"
+    },
+    {
+      "name": "a--b",
+      "ok": true,
+      "note": "valid by the pattern"
+    },
+    {
+      "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ok": true
+    },
+    {
+      "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ok": false
     }
   ],
   "fits": [
@@ -121,6 +153,21 @@
     {
       "name": "assay",
       "L": 53,
+      "fits": false
+    },
+    {
+      "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "L": 1,
+      "fits": true
+    },
+    {
+      "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "L": 2,
+      "fits": false
+    },
+    {
+      "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "L": 1,
       "fits": false
     }
   ],
@@ -168,6 +215,20 @@
       "name": "signed out",
       "mode": "signedOut",
       "L": 48
+    },
+    {
+      "name": "full, non-ASCII counted in UTF-8 bytes",
+      "mode": "full",
+      "tools": [
+        "café_tool"
+      ],
+      "L": 10
+    },
+    {
+      "name": "full, no tools",
+      "mode": "full",
+      "tools": [],
+      "L": 13
     }
   ],
   "defaultName": [
@@ -175,7 +236,7 @@
       "name": "root",
       "urlKind": "ROOT",
       "slugWords": [],
-      "L": 45,
+      "L": 13,
       "expect": "assay"
     },
     {
@@ -184,7 +245,7 @@
       "slugWords": [
         "weather"
       ],
-      "L": 12,
+      "L": 13,
       "expect": "assay"
     },
     {
@@ -252,6 +313,25 @@
       "slugWords": [],
       "L": 20,
       "expect": "assay"
+    },
+    {
+      "name": "invalid word makes the slug invalid",
+      "urlKind": "CATEGORY",
+      "slugWords": [
+        "my_kit",
+        "b"
+      ],
+      "L": 20,
+      "expect": "assay"
+    },
+    {
+      "name": "non-ASCII word",
+      "urlKind": "CATEGORY",
+      "slugWords": [
+        "café"
+      ],
+      "L": 20,
+      "expect": "assay"
     }
   ],
   "unique": [
@@ -305,19 +385,50 @@
       "name": "typed 40-character name on L 20",
       "typed": "assay-weather-forecast-climate-data-tool",
       "L": 20,
-      "message": "`assay-weather-forecast-climate-data-tool` is too long for this server: its longest tool is 20 characters, so the name can be at most 37. Try `assay-weather-forecast-climate-data`."
+      "message": "`assay-weather-forecast-climate-data-tool` is too long for this server: its longest tool is 20 characters, so the name can be at most 37. Try `assay-weather-forecast-climate-data`.",
+      "kind": "tooLong"
     },
     {
       "name": "one long word falls back to assay",
       "typed": "weatherforecastingservice",
       "L": 45,
-      "message": "`weatherforecastingservice` is too long for this server: its longest tool is 45 characters, so the name can be at most 12. Try `assay`."
+      "message": "`weatherforecastingservice` is too long for this server: its longest tool is 45 characters, so the name can be at most 12. Try `assay`.",
+      "kind": "tooLong"
     },
     {
       "name": "signed out bound (hint is appended by the caller)",
       "typed": "assay-weather",
       "L": 48,
-      "message": "`assay-weather` is too long for this server: its longest tool is 48 characters, so the name can be at most 9. Try `assay`."
+      "message": "`assay-weather` is too long for this server: its longest tool is 48 characters, so the name can be at most 9. Try `assay`.",
+      "kind": "tooLong"
+    },
+    {
+      "name": "empty name is invalid",
+      "typed": "",
+      "L": 13,
+      "kind": "invalid",
+      "message": "`` is not a valid name: use lowercase letters, digits and `-`, starting with a letter."
+    },
+    {
+      "name": "underscore is invalid",
+      "typed": "_",
+      "L": 13,
+      "kind": "invalid",
+      "message": "`_` is not a valid name: use lowercase letters, digits and `-`, starting with a letter."
+    },
+    {
+      "name": "uppercase is invalid",
+      "typed": "Assay",
+      "L": 13,
+      "kind": "invalid",
+      "message": "`Assay` is not a valid name: use lowercase letters, digits and `-`, starting with a letter."
+    },
+    {
+      "name": "no name fits",
+      "typed": "abc",
+      "L": 60,
+      "kind": "tooLong",
+      "message": "`abc` is too long for this server: its longest tool is 60 characters, so no name fits."
     }
   ],
   "alias": [
@@ -344,6 +455,24 @@
       "server": "assay-weather-forecast-service",
       "tool": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "expect": "aaaaaaaaaaaaaaaaaaaa_hjkpyd"
+    },
+    {
+      "name": "56-character server leaves no room: no alias",
+      "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "tool": "get_weather",
+      "expect": null
+    },
+    {
+      "name": "server of 50 leaves 0 prefix characters",
+      "server": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "tool": "get_weather_forecast",
+      "expect": null
+    },
+    {
+      "name": "non-ASCII tool has no alias",
+      "server": "assay",
+      "tool": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+      "expect": null
     }
   ]
 }

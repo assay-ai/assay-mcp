@@ -20,10 +20,16 @@ export const MAX_NAME_LENGTH = 56;
 export const SIGN_IN_HINT = "Sign in first (`assay-mcp login`) to allow a longer name.";
 
 const NAME_PATTERN = /^[a-z][a-z0-9-]*$/;
+/** Clients accept tool names of ASCII letters, digits, `_` and `-` only. */
+const TOOL_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
 const ALIAS_HASH_LENGTH = 6;
 const BASE32 = "abcdefghijklmnopqrstuvwxyz234567";
 
 export type UrlKind = "ROOT" | "MY_TOOLSET" | "CATEGORY" | "HANDLE" | "PUBLIC_TOOLSET" | "UNLISTED_TOOLSET";
+
+export function isValidToolName(tool: string): boolean {
+  return TOOL_NAME_PATTERN.test(tool);
+}
 
 /** `_` is excluded so a name never blurs the `__` separator. */
 export function isValidName(name: string): boolean {
@@ -44,12 +50,15 @@ export type ToolView =
   | { mode: "full"; tools: readonly string[] }
   | { mode: "signedOut" };
 
-/** L(u): the longest tool name the URL's view can expose. `assay_sign_in` is always counted. */
+/**
+ * L(u): the longest tool name the URL's view can expose. `assay_sign_in` is always counted.
+ * Tool names are ASCII; any other character is measured in UTF-8 bytes, the safest count.
+ */
 export function longestTool(view: ToolView): number {
   if (view.mode === "signedOut") return SIGNED_OUT_L;
   const names =
     view.mode === "search" ? [...SEARCH_META_TOOLS, ...view.pinned] : [...view.tools];
-  return Math.max(SIGN_IN_TOOL.length, ...names.map((n) => n.length));
+  return Math.max(SIGN_IN_TOOL.length, ...names.map((n) => Buffer.byteLength(n, "utf8")));
 }
 
 /** Drop trailing dash-separated words of `name` until it fits; `assay` if nothing else does; null if nothing fits. */
@@ -71,7 +80,8 @@ export function defaultName(
   rule: NameRule = DEFAULT_RULE,
 ): string {
   if (urlKind === "ROOT") return "assay";
-  const words = slugWords.map((w) => w.toLowerCase()).filter((w) => /^[a-z0-9]+$/.test(w));
+  const words = slugWords.map((w) => w.toLowerCase());
+  if (words.some((w) => !/^[a-z0-9]+$/.test(w))) return "assay";
   while (words.length > 0) {
     const candidate = `assay-${words.join("-")}`;
     if (fits(candidate, L, rule)) return candidate;
@@ -100,12 +110,29 @@ export function unique(
   throw new Error(`no free server name for "${base}" within the budget`);
 }
 
-/** The refusal for a typed name that does not fit (spec 8.3.1). Never truncates silently. */
-export function refusal(name: string, L: number, rule: NameRule = DEFAULT_RULE): string {
-  const max = maxNameLength(L, rule);
-  const head = `\`${name}\` is too long for this server: its longest tool is ${L} characters, so the name can be at most ${max}.`;
+export interface Refusal {
+  kind: "invalid" | "tooLong";
+  message: string;
+}
+
+/** Why a typed name is refused: not a valid name at all, or valid but too long for this URL (spec 8.3.1). Never truncates silently. */
+export function refusalReason(name: string, L: number, rule: NameRule = DEFAULT_RULE): Refusal {
+  if (!NAME_PATTERN.test(name)) {
+    return {
+      kind: "invalid",
+      message: `\`${name}\` is not a valid name: use lowercase letters, digits and \`-\`, starting with a letter.`,
+    };
+  }
+  const max = Math.min(maxNameLength(L, rule), MAX_NAME_LENGTH);
+  const head = `\`${name}\` is too long for this server: its longest tool is ${L} characters,`;
+  if (max <= 0) return { kind: "tooLong", message: `${head} so no name fits.` };
   const suggestion = suggest(name, L, rule);
-  return suggestion === null ? head : `${head} Try \`${suggestion}\`.`;
+  const body = `${head} so the name can be at most ${max}.`;
+  return { kind: "tooLong", message: suggestion === null ? body : `${body} Try \`${suggestion}\`.` };
+}
+
+export function refusal(name: string, L: number, rule: NameRule = DEFAULT_RULE): string {
+  return refusalReason(name, L, rule).message;
 }
 
 function base32Lower(bytes: Uint8Array): string {
@@ -127,10 +154,14 @@ function base32Lower(bytes: Uint8Array): string {
 /**
  * The name a client shows for `tool` on `server`: unchanged when it fits, else the first
  * `budget - overhead - len(server) - 7` characters, `_`, and 6 base32 characters of sha256(tool).
+ * Returns null when no valid alias fits: the tool name is not ASCII `[A-Za-z0-9_-]`, or the server
+ * name leaves no room for at least one prefix character.
  */
-export function aliasTool(server: string, tool: string, rule: NameRule = DEFAULT_RULE): string {
-  if (rule.overhead + server.length + tool.length <= rule.budget) return tool;
-  const keep = Math.max(0, rule.budget - rule.overhead - server.length - (ALIAS_HASH_LENGTH + 1));
+export function aliasTool(server: string, tool: string, rule: NameRule = DEFAULT_RULE): string | null {
+  if (rule.overhead + server.length + tool.length <= rule.budget && isValidToolName(tool)) return tool;
+  if (!isValidToolName(tool)) return null;
+  const keep = rule.budget - rule.overhead - server.length - (ALIAS_HASH_LENGTH + 1);
+  if (keep < 1) return null;
   const digest = createHash("sha256").update(tool, "utf8").digest();
   return `${tool.slice(0, keep)}_${base32Lower(digest).slice(0, ALIAS_HASH_LENGTH)}`;
 }

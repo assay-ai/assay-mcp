@@ -14,13 +14,14 @@ import {
   longestTool,
   maxNameLength,
   refusal,
+  refusalReason,
   unique,
   type ToolView,
   type UrlKind,
 } from "../src/clients/server-name.js";
 
 interface Vectors {
-  rule: { budget: number; overhead: number; signedOutL: number; noNameBudget: number; maxLength: number; signedOutHint: string };
+  rule: { budget: number; overhead: number; signedOutL: number; noNameBudget: number; maxLength: number; signedOutHint: string; pattern: string };
   maxLength: { name: string; L: number; max: number }[];
   valid: { name: string; ok: boolean }[];
   fits: { name: string; L: number; fits: boolean }[];
@@ -31,8 +32,8 @@ interface Vectors {
   ))[];
   defaultName: { name: string; urlKind: UrlKind; slugWords: string[]; L: number; expect: string }[];
   unique: { name: string; base: string; taken: string[]; L: number; expect: string }[];
-  refusal: { name: string; typed: string; L: number; message: string }[];
-  alias: { name: string; server: string; tool: string; expect: string }[];
+  refusal: { name: string; typed: string; L: number; kind: "invalid" | "tooLong"; message: string }[];
+  alias: { name: string; server: string; tool: string; expect: string | null }[];
 }
 
 const vectors = JSON.parse(
@@ -45,6 +46,9 @@ describe("server-name vectors", () => {
     expect(SIGNED_OUT_L).toBe(vectors.rule.signedOutL);
     expect(NO_NAME_BUDGET).toBe(vectors.rule.noNameBudget);
     expect(MAX_NAME_LENGTH).toBe(vectors.rule.maxLength);
+    expect(new RegExp(vectors.rule.pattern).test("assay")).toBe(true);
+    expect(isValidName("a".repeat(vectors.rule.maxLength))).toBe(true);
+    expect(isValidName("a".repeat(vectors.rule.maxLength + 1))).toBe(false);
     expect(SIGN_IN_HINT).toBe(vectors.rule.signedOutHint);
   });
 
@@ -74,17 +78,36 @@ describe("server-name vectors", () => {
 
   it.each(vectors.refusal)("refusal: $name", (v) => {
     expect(refusal(v.typed, v.L)).toBe(v.message);
+    expect(refusalReason(v.typed, v.L).kind).toBe(v.kind);
+    const suggestion = /Try `([^`]+)`/.exec(v.message)?.[1];
+    if (suggestion !== undefined) expect(fits(suggestion, v.L)).toBe(true);
   });
 
   it.each(vectors.alias)("alias: $name", (v) => {
     const alias = aliasTool(v.server, v.tool);
     expect(alias).toBe(v.expect);
-    expect(DEFAULT_RULE.overhead + v.server.length + alias.length).toBeLessThanOrEqual(DEFAULT_RULE.budget);
+    if (alias !== null) {
+      expect(DEFAULT_RULE.overhead + v.server.length + alias.length).toBeLessThanOrEqual(DEFAULT_RULE.budget);
+      expect(alias).toMatch(/^[A-Za-z0-9_-]+$/);
+    }
     expect(aliasTool(v.server, v.tool)).toBe(alias);
   });
 });
 
 describe("server-name rule", () => {
+  it("max length is exact for every L from 1 to 56", () => {
+    for (let L = 1; L <= 56; L += 1) {
+      const max = Math.min(maxNameLength(L), MAX_NAME_LENGTH);
+      expect(fits("a".repeat(max), L)).toBe(true);
+      expect(fits("a".repeat(max + 1), L)).toBe(false);
+    }
+  });
+
+  it("unique: no room throws, null taken is ignored", () => {
+    expect(() => unique("abc", ["abc"], 60)).toThrow();
+    expect(unique("assay", [null, "assay"], 13)).toBe("assay-2");
+  });
+
   it('"/" search no pins: L 13 (assay_sign_in counts) gives max 44', () => {
     expect(longestTool({ mode: "search", pinned: [] })).toBe(13);
     expect(maxNameLength(13)).toBe(44);

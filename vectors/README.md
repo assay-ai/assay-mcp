@@ -22,3 +22,9 @@ The server-name rule of spec 8.3.1 (`budget 64`, `overhead 7`): maximum length, 
   - the backend `serverName` DTO and `agent_connect_urls.server_name` (Part 3) carry only the pattern and the 56-character length, not the per-URL rule.
 
 Correction to the Task 2.10 brief: the root URL in search mode has L 13, not 12, because `assay_sign_in` is always counted, so its maximum name length is 44, not 45.
+
+Notes for consumers (fix round 1):
+- `rule.pattern` and `rule.maxLength` are machine-readable: assert your own regex and length against them, do not copy them.
+- Whole-string anchors: `assay\n` is invalid. `assay-` and `a--b` are valid by the pattern, as the spec states.
+- Tool names are ASCII `[A-Za-z0-9_-]`; `L` is measured in UTF-8 bytes. A tool that is not ASCII, or a server name that leaves no room for a prefix character, has no alias (`null`).
+- Refusals have two kinds, `invalid` and `tooLong`; a suggestion, when present, always fits.
