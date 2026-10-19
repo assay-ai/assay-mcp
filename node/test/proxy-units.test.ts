@@ -3,7 +3,7 @@ import { parseServeArgs } from "../src/commands/serve.js";
 import { AliasTable } from "../src/proxy/aliases.js";
 import { CallRegistry, CONFIRMATION_TTL_MS, TOMBSTONE_MS } from "../src/proxy/calls.js";
 import { checkEnvironment } from "../src/proxy/environment.js";
-import { reasonOf } from "../src/proxy/forwarder.js";
+import { Forwarder, reasonOf } from "../src/proxy/forwarder.js";
 import { appName, SignInController } from "../src/proxy/presignin.js";
 import { classify, negotiateVersion, SUPPORTED_PROTOCOL_VERSIONS } from "../src/proxy/protocol.js";
 import { LineSplitter } from "../src/proxy/stdio.js";
@@ -225,5 +225,66 @@ describe("serve flags", () => {
     expect(reasonOf(new TypeError("fetch failed", { cause: Object.assign(new Error("x"), { code: "ECONNREFUSED" }) }))).toBe("ECONNREFUSED");
     expect(reasonOf(new PinnedFetchError("x"))).toBe("blocked: not an Assay address");
     expect(reasonOf(new Error("assay_at_secret"))).toBe("network error");
+  });
+});
+
+describe("forwarder concurrency (re-review R1-M2, R1-M3)", () => {
+  function held() {
+    let open = 0;
+    let peak = 0;
+    const pending: (() => void)[] = [];
+    const fetch = async (_url: string, init: { body?: unknown }) => {
+      open++;
+      peak = Math.max(peak, open);
+      const id = (JSON.parse(String(init.body)) as { id: number }).id;
+      await new Promise<void>((r) => pending.push(r));
+      open--;
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id, result: {} }), { headers: { "content-type": "application/json" } });
+    };
+    return { fetch, pending, peak: () => peak, open: () => open };
+  }
+  const send = (f: Forwarder, id: number) => f.send({ id, body: JSON.stringify({ jsonrpc: "2.0", id, method: "ping" }), bearer: "t", version: "2025-06-18" });
+  const tick = () => new Promise((r) => setTimeout(r, 10));
+
+  it("at most 4 requests in flight; a fifth waits, then gets -32002 after the queue wait", async () => {
+    const h = held();
+    const f = new Forwarder({ url: "http://localhost:3200/", fetch: h.fetch, queueWaitMs: 100 });
+    const first = [1, 2, 3, 4].map((i) => send(f, i));
+    const fifth = send(f, 5);
+    await tick();
+    expect(h.open()).toBe(4);
+    expect(await fifth).toEqual({ kind: "error", code: -32002, message: "Assay is busy with other calls from this app. Try again." });
+    for (const r of h.pending.splice(0)) r();
+    expect((await Promise.all(first)).every((o) => o.kind === "response")).toBe(true);
+    expect(h.peak()).toBe(4);
+  });
+
+  it("a queued request runs when a slot frees", async () => {
+    const h = held();
+    const f = new Forwarder({ url: "http://localhost:3200/", fetch: h.fetch, queueWaitMs: 5_000 });
+    const all = [1, 2, 3, 4, 5, 6].map((i) => send(f, i));
+    await tick();
+    expect(h.open()).toBe(4);
+    while (h.pending.length > 0 || h.open() > 0) {
+      for (const r of h.pending.splice(0)) r();
+      await tick();
+    }
+    expect((await Promise.all(all)).every((o) => o.kind === "response")).toBe(true);
+    expect(h.peak()).toBe(4);
+  });
+
+  it("beyond 32 waiting, a request gets -32002 at once", async () => {
+    const h = held();
+    const f = new Forwarder({ url: "http://localhost:3200/", fetch: h.fetch, queueWaitMs: 60_000 });
+    const running = Array.from({ length: 4 + 32 }, (_, i) => send(f, i + 1));
+    await tick();
+    const started = Date.now();
+    expect(await send(f, 99)).toMatchObject({ kind: "error", code: -32002 });
+    expect(Date.now() - started).toBeLessThan(50);
+    while (h.pending.length > 0 || h.open() > 0) {
+      for (const r of h.pending.splice(0)) r();
+      await tick();
+    }
+    expect((await Promise.all(running)).every((o) => o.kind === "response")).toBe(true);
   });
 });

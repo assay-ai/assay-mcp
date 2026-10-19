@@ -34,6 +34,8 @@ export const REQUEST_TIMEOUT_MS = 120_000;
 export const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 /** Forwarded requests in flight at once; more wait in a queue (fix round 1, I2). */
 export const MAX_CONCURRENT = 4;
+/** Requests that may wait for a slot; one more gets `-32002` at once (re-review R1-M3). */
+export const MAX_QUEUE = 32;
 /** How long a request may wait in that queue before it gets `-32002`. */
 export const QUEUE_WAIT_MS = 30_000;
 /** Bytes of answer bodies held at once across every exchange. */
@@ -59,6 +61,7 @@ export interface ForwarderOptions {
   readonly maxResponseBytes?: number;
   readonly maxConcurrent?: number;
   readonly queueWaitMs?: number;
+  readonly maxQueue?: number;
   readonly maxInflightBytes?: number;
   readonly log?: Logger;
 }
@@ -96,12 +99,16 @@ class Charge {
 class Slots {
   private busy = 0;
   private readonly waiting: (() => void)[] = [];
-  constructor(private readonly max: number) {}
+  constructor(
+    private readonly max: number,
+    private readonly maxQueue: number,
+  ) {}
   async acquire(waitMs: number): Promise<boolean> {
     if (this.busy < this.max) {
       this.busy++;
       return true;
     }
+    if (this.waiting.length >= this.maxQueue) return false;
     return new Promise<boolean>((resolve) => {
       const grant = () => {
         clearTimeout(timer);
@@ -133,7 +140,7 @@ export class Forwarder {
   constructor(private readonly options: ForwarderOptions) {
     this.timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
     this.maxBytes = options.maxResponseBytes ?? MAX_RESPONSE_BYTES;
-    this.slots = new Slots(options.maxConcurrent ?? MAX_CONCURRENT);
+    this.slots = new Slots(options.maxConcurrent ?? MAX_CONCURRENT, options.maxQueue ?? MAX_QUEUE);
     this.pool = { used: 0, max: options.maxInflightBytes ?? MAX_INFLIGHT_BYTES };
     this.log = (options.log ?? silentLogger).child("forward");
   }

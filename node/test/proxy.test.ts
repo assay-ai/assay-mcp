@@ -618,6 +618,19 @@ describe("sign-in across processes (fix round 1, I1)", () => {
     expect(mcp.opened).toHaveLength(1);
   });
 
+  it("a process whose passive sign-in is pending picks up a sibling's grant (re-review R1-M1)", async () => {
+    const a = await connect();
+    await until(() => /sign in to Assay: /.test(a.stderr())); // A holds a passive marker
+    const b = await connect();
+    expect(textOf(await b.client.callTool(SIGN_IN))).toMatch(/^Approve in your browser: /); // B takes it over
+    await until(() => b.changed.length > 0, 10_000);
+    // A's own flow is still waiting for a browser nobody opened; its keychain poll finds B's grant.
+    await until(() => a.changed.length > 0, 3_000);
+    expect((await a.client.listTools()).tools.map((t) => t.name)).toEqual(["echo"]);
+    expect(mcp.opened).toHaveLength(1);
+    expect(as.grants).toHaveLength(1);
+  });
+
   it("a stale marker from a dead pid is ignored", async () => {
     const dead = spawnSync(process.execPath, ["-e", ""]).pid!;
     mkdirSync(join(dir, "profiles"), { recursive: true, mode: 0o700 });

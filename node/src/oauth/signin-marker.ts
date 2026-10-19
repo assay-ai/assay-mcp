@@ -65,6 +65,7 @@ export type Claim = { kind: "claimed"; marker: SignInMarker } | { kind: "busy"; 
  * unless it is passive and this sign-in is active.
  */
 export function claimMarker(profile: ProfileRef, lock: LockHandle, passive: boolean, nowMs: number, alive?: (pid: number) => boolean): Claim {
+  lock.assertHeld(); // the read and the write below are atomic only under the profile lock
   const current = readMarker(profile);
   if (current !== null && isLive(current, nowMs, alive) && (passive || !current.passive)) return { kind: "busy", marker: current };
   const marker: SignInMarker = { pid: process.pid, startedAt: nowMs, token: randomBytes(16).toString("base64url"), passive };
