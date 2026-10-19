@@ -193,6 +193,8 @@ export class FakeAssay {
   beforeChallenge: (() => Promise<void>) | null = null;
   /** Delay before every MCP answer, ms. */
   delayMs = 0;
+  /** The bearers this server accepts: the API key, and an OAuth access token a test adds. */
+  readonly bearers = new Set<string>([API_KEY]);
   readonly calls: SeenCall[] = [];
   readonly accepted: { seq: string; signature: string; amount: string; idempotencyKey: unknown }[] = [];
   readonly rejected: string[] = [];
@@ -271,7 +273,7 @@ export class FakeAssay {
     if (path === "/__rpc") return this.rpc(json, res);
     this.paths.push(`${req.method} ${path}`);
     const bearer = /^Bearer (\S+)$/.exec(req.headers.authorization ?? "")?.[1] ?? "";
-    if (bearer !== API_KEY) return this.send(res, 401, { statusCode: 401, message: "MCP_CREDENTIAL_INVALID" });
+    if (!this.bearers.has(bearer)) return this.send(res, 401, { statusCode: 401, message: "MCP_CREDENTIAL_INVALID" });
     if (path.startsWith("/api/v1/")) return this.api(req.method ?? "GET", path.slice("/api/v1".length), json, res);
     if (typeof json.method !== "string" || json.id === undefined) {
       res.writeHead(202).end();
