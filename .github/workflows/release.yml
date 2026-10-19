@@ -4,11 +4,13 @@ name: Release
 # npm publish credential can be minted:
 #   build:   no id-token, no environment. Checks the tag, runs the full gate, packs the tarball
 #            and uploads it with its sha256.
-#   publish: environment "release" (protected, required reviewer) and id-token: write. No
+#   publish: environment "release" (v* tags only) and id-token: write. No
 #            checkout of dev dependencies, no npm ci: it verifies the sha256 and publishes the
 #            tarball with npm trusted publishing and provenance. No npm token is used.
-# Needed outside this file: the "release" environment with a required reviewer and a deployment
-# policy limited to v* tags; a tag ruleset (v*, signed, maintainers only); the repository
+# There is no manual approval step (owner decision 2026-10-19): a signed, verified tag from a
+# listed maintainer is the release decision.
+# Needed outside this file: the "release" environment with a deployment policy limited to v*
+# tags; a tag ruleset (v*, signed, maintainers only); the repository
 # variable RELEASE_TAGGERS (comma list of maintainer tagger emails); npm trusted publishing for
 # @goassay-ai/mcp bound to this workflow and environment "release"; the npm setting
 # "Require 2FA and disallow tokens".
