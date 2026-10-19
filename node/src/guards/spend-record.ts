@@ -1,5 +1,5 @@
 import { withLock, type LockOptions, type ProfileRef } from "../profile/lock.js";
-import { updateState, usdToUnits, type SpendEntry } from "../profile/profile.js";
+import { readLimitsIfPresent, updateState, usdToUnits, type SpendEntry } from "../profile/profile.js";
 import { SPEND_WINDOW_SECONDS } from "./guards.js";
 import type { LocalLimits } from "./types.js";
 
@@ -25,7 +25,7 @@ export class SpendLimitError extends Error {
 }
 
 export interface RecordOptions extends LockOptions {
-  /** The profile's limits (`limits.json`); `perDay` is converted exactly, rounded down. Required. */
+  /** The caller's limits; `perDay` is converted exactly, rounded down. Required. The stricter of this and `limits.json`, re-read under the lock, applies. */
   limits: Pick<LocalLimits, "perDay">;
   /** The asset's decimals from the built-in network entry. */
   decimals: number;
@@ -54,11 +54,17 @@ export function sumSpend(entries: readonly SpendEntry[]): bigint {
 export async function recordUnderLock(profile: ProfileRef, amount: bigint, options: RecordOptions): Promise<RecordResult> {
   if (typeof amount !== "bigint" || amount <= 0n) throw new RangeError("amount must be a positive bigint");
   if (!options || !options.limits) throw new TypeError("the limits are required");
-  const perDay = usdToUnits(options.limits.perDay, options.decimals);
+  const callerPerDay = usdToUnits(options.limits.perDay, options.decimals);
   const now = options.now ?? Date.now;
   return withLock(
     profile,
     (lock) => {
+      // N2: re-read limits.json under the lock and use the stricter perDay, so a `limits set`
+      // made while a call was in flight applies at once. An unreadable or invalid file (including
+      // failed 0600/owner checks) throws here: fail closed. A missing file adds no constraint.
+      const onDisk = readLimitsIfPresent(profile);
+      const diskPerDay = onDisk ? usdToUnits(onDisk.perDay, options.decimals) : callerPerDay;
+      const perDay = diskPerDay < callerPerDay ? diskPerDay : callerPerDay;
       let total = 0n;
       updateState(profile, lock, (state) => {
         const nowSeconds = Math.floor(now() / 1000);

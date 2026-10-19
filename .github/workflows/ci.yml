@@ -66,6 +66,7 @@ jobs:
     # touches the keychain; these runs opt in through the env vars below.
     name: keychain (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     continue-on-error: ${{ matrix.experimental }}
     strategy:
       fail-fast: false
@@ -100,6 +101,25 @@ jobs:
         with:
           node-version: "22"
       - run: npm ci --ignore-scripts
+      - name: Temporary keychain (macOS)
+        # Never the runner's login keychain: a throwaway keychain with a random password is
+        # created, unlocked (locked again below for the "locked" run) and put first in the search
+        # list and as the default. The "always()" step at the end deletes it.
+        if: startsWith(matrix.name, 'macos')
+        shell: bash
+        run: |
+          KC="$RUNNER_TEMP/assay-ci.keychain-db"
+          KC_PASS="$(openssl rand -hex 24)"
+          echo "::add-mask::$KC_PASS"
+          security list-keychains -d user | tr -d '"' | sed 's/^ *//' > "$RUNNER_TEMP/keychains.before"
+          security create-keychain -p "$KC_PASS" "$KC"
+          security set-keychain-settings -lut 900 "$KC"
+          security unlock-keychain -p "$KC_PASS" "$KC"
+          # shellcheck disable=SC2046
+          security list-keychains -d user -s "$KC" $(cat "$RUNNER_TEMP/keychains.before")
+          security default-keychain -d user -s "$KC"
+          if [ "${{ matrix.name }}" = "macos locked" ]; then security lock-keychain "$KC"; fi
+          echo "ASSAY_CI_KEYCHAIN=$KC" >> "$GITHUB_ENV"
       - name: Keychain tests
         if: matrix.name == 'macos' || matrix.name == 'windows'
         shell: bash
@@ -118,10 +138,16 @@ jobs:
         working-directory: node
       - name: Keychain tests (locked keychain)
         if: matrix.name == 'macos locked'
-        run: |
-          security create-keychain -p ci-only locked-test.keychain
-          security list-keychains -d user -s locked-test.keychain
-          security default-keychain -d user -s locked-test.keychain
-          security lock-keychain locked-test.keychain
-          env ${{ matrix.env }} npx vitest run test/keychain.test.ts
+        run: env ${{ matrix.env }} npx vitest run test/keychain.test.ts
         working-directory: node
+      - name: Delete the temporary keychain (macOS)
+        if: always() && startsWith(matrix.name, 'macos')
+        shell: bash
+        run: |
+          if [ -s "$RUNNER_TEMP/keychains.before" ]; then
+            # shellcheck disable=SC2046
+            security list-keychains -d user -s $(cat "$RUNNER_TEMP/keychains.before") || true
+          fi
+          if [ -n "${ASSAY_CI_KEYCHAIN:-}" ]; then
+            security delete-keychain "$ASSAY_CI_KEYCHAIN" || true
+          fi
