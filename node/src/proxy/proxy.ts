@@ -311,6 +311,7 @@ export class Proxy {
 
   private async handleNotification(n: JsonRpcNotification, raw: string): Promise<void> {
     if (n.method === "notifications/initialized") return; // the proxy sends its own upstream
+    if (n.method === "notifications/cancelled" && isValidId(n.params?.requestId)) this.calls.cancel(n.params.requestId);
     if (this.mode !== "signed-in") return;
     const bearer = await this.bearer();
     if (!("token" in bearer)) return;

@@ -29,8 +29,8 @@ export const GET_TOOL = "get_tool";
 export const SEARCH_TOOLS = "search_tools";
 export const CALL_TOOL = "call_tool";
 
-/** The idempotency key the server accepts: 1–256 printable ASCII characters. */
-const IDEMPOTENCY_RE = /^[\x20-\x7e]{1,256}$/;
+/** The idempotency key the server accepts: 1–128 printable ASCII characters (backend `parseIdempotencyKey`). */
+const IDEMPOTENCY_RE = /^[\x20-\x7e]{1,128}$/;
 const UINT_RE = /^(0|[1-9][0-9]*)$/;
 const TOOL_NAME_RE = /^[A-Za-z0-9_-]{1,128}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -49,14 +49,14 @@ export function prepareCallParams(params: Readonly<Record<string, unknown>>): Re
   const meta: Record<string, unknown> = isObject(params._meta) ? { ...params._meta } : {};
   delete meta[VOUCHER_META];
   delete meta[RAIL_META];
-  if (meta[IDEMPOTENCY_META] === undefined) meta[IDEMPOTENCY_META] = randomUUID();
+  // A host key the server would refuse is replaced (review M3), so the call is not refused for it.
+  if (idempotencyKeyOf(meta) === null) meta[IDEMPOTENCY_META] = randomUUID();
   return { ...params, _meta: meta };
 }
 
-/** The idempotency key of prepared params, when it is one the server accepts. */
-export function idempotencyKeyOf(params: Readonly<Record<string, unknown>>): string | null {
-  const meta = params._meta;
-  const key = isObject(meta) ? meta[IDEMPOTENCY_META] : undefined;
+/** A host's `assay/idempotency-key` when it is one the server accepts, else `null`. */
+function idempotencyKeyOf(meta: Readonly<Record<string, unknown>>): string | null {
+  const key = meta[IDEMPOTENCY_META];
   return typeof key === "string" && IDEMPOTENCY_RE.test(key) ? key : null;
 }
 

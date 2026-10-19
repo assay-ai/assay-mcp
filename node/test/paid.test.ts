@@ -1,3 +1,4 @@
+import { fork } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,7 +15,7 @@ import { addDevOrigin } from "../src/profile/dev-origins.js";
 import { resolveDeployment } from "../src/profile/deployments.js";
 import { Keychain } from "../src/profile/keychain.js";
 import { withLock } from "../src/profile/lock.js";
-import { addPaidUrl, createProfile, readState, removePaidUrl, writeLimits } from "../src/profile/profile.js";
+import { addPaidUrl, createProfile, readProfile, readState, removePaidUrl, writeLimits } from "../src/profile/profile.js";
 import { openThroughGate } from "../src/proxy/browser-gate.js";
 import { CallRegistry } from "../src/proxy/calls.js";
 import {
@@ -30,6 +31,10 @@ import {
   quotesFromSearch,
 } from "../src/proxy/meta.js";
 import { PaidPath, usdText, type PaidHost } from "../src/proxy/paid.js";
+import { currentAccess } from "../src/oauth/tokens.js";
+import { FakeAs, rerouteFetch } from "./helpers/fake-as.js";
+
+type JsonRpcResponseLike = { jsonrpc: "2.0"; id: number; result: Record<string, unknown> };
 import { declaresFormElicitation } from "../src/proxy/proxy.js";
 import { VERSION } from "../src/version.js";
 import { bundleFixture } from "./helpers/bundle.js";
@@ -51,6 +56,9 @@ const NETWORK: NetworkEntry = { id: NET_ID, escrow: BUILT_IN.escrow, asset: BUIL
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 let fixture: { dir: string; file: string };
+let lockFixture: { dir: string; file: string };
+/** Public anvil default account 4 (test only). */
+const OTHER_PAYER = "0x15d34AAf54267DB7D7c367839AAf71A00a2C6A65";
 let fake: FakeAssay;
 let dir: string;
 let keyringFile: string;
@@ -58,10 +66,12 @@ const clients: Client[] = [];
 
 beforeAll(async () => {
   fixture = await bundleFixture(join(__dirname, "fixtures/paid-child.ts"));
+  lockFixture = await bundleFixture(join(__dirname, "fixtures/lock-child.ts"));
 }, 60_000);
 
 afterAll(() => {
   rmSync(fixture.dir, { recursive: true, force: true });
+  rmSync(lockFixture.dir, { recursive: true, force: true });
 });
 
 beforeEach(async () => {
@@ -230,7 +240,7 @@ describe("paid path (SDK client → proxy → fake Assay)", () => {
 
   it('not-enabled text exactly §7.7 step 6, contains "#key=0x…" and the fingerprint (F4 binding)', async () => {
     await seedProfile(false);
-    const { client, stderr } = await connect({ args: ["--log-level", "info"], extraEnv: { TEST_POLL_MS: "100" } });
+    const { client, stderr } = await connect({ extraEnv: { TEST_POLL_MS: "100" } }) // default log level: the line must still show;
     const r = await client.callTool({ name: "weather", arguments: {} });
     expect(r.isError).toBe(true);
     // A key was generated and bound (challenge checked and signed by that key).
@@ -314,6 +324,78 @@ describe("paid path (SDK client → proxy → fake Assay)", () => {
     await withLock(profile(), (lock) => addPaidUrl(profile(), lock, "/"));
   });
 
+  it("the payer is recorded after the first paid call; a later different payer is refused (G4 payer changed)", async () => {
+    const address = await enabled();
+    const { client } = await connect();
+    expect((await client.callTool({ name: "weather", arguments: {} })).isError).toBeFalsy();
+    expect(readProfile(profile())!.payer).toBe(PAYER);
+    // The server now names another payer, whose on-chain grant also names our key.
+    fake.payer = OTHER_PAYER;
+    fake.grant(address);
+    const r = await client.callTool({ name: "weather", arguments: {} });
+    expect(r.isError).toBe(true);
+    expect(metaOf(r)["assay-mcp/refused"]).toEqual({ guard: "G4", reason: "payer changed; run assay-mcp enable-paid" });
+    expect(fake.accepted).toHaveLength(1);
+    expect(readProfile(profile())!.payer).toBe(PAYER);
+  });
+
+  it("a bind answer naming another key → an error, no link, no browser", async () => {
+    await seedProfile(false);
+    fake.bindAnswerDelegate = OTHER_PAYER;
+    const { client } = await connect();
+    const r = await client.callTool({ name: "weather", arguments: {} });
+    expect(r.isError).toBe(true);
+    expect(textOf(r)).toBe("Paid calls could not be set up: Assay did not accept the payment key. Try again.");
+    expect(textOf(r)).not.toContain("enable-paid");
+    expect(fake.opened).toEqual([]);
+    expect(readProfile(profile())!.delegateAddress).toBeNull();
+  });
+
+  for (const [what, payTo] of [
+    ["another escrow", `${NET_ID}:0x1111111111111111111111111111111111111111`],
+    ["the escrow on another chain", `eip155:1:${BUILT_IN.escrow.split(":")[2]}`],
+  ] as const) {
+    it(`payTo ${what} → refused by G2 through the proxy, nothing signed`, async () => {
+      await enabled();
+      fake.payToOverride = payTo;
+      const { client } = await connect();
+      await client.listTools();
+      const r = await client.callTool({ name: "weather", arguments: {} });
+      expect(r.isError).toBe(true);
+      expect(metaOf(r)["assay-mcp/refused"]).toEqual({ guard: "G2", reason: "the payment is not to the built-in escrow" });
+      expect(fake.accepted).toHaveLength(0);
+      expect(readState(profile()).signed).toHaveLength(0);
+    });
+  }
+
+  it("binding holds no lock in its network phase: another process takes the profile lock meanwhile", async () => {
+    await seedProfile(false);
+    let taken = false;
+    fake.beforeChallenge = async () => {
+      const child = fork(lockFixture.file, [dir, "default", "hold"], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error("the lock was not free")), 5_000);
+          child.on("message", (m) => {
+            if (m === "acquired") {
+              taken = true;
+              child.send("release");
+            } else if (m === "released") {
+              clearTimeout(timer);
+              resolve();
+            }
+          });
+        });
+      } finally {
+        child.kill("SIGKILL");
+      }
+    };
+    const { client } = await connect();
+    const r = await client.callTool({ name: "weather", arguments: {} });
+    expect(taken).toBe(true);
+    expect(textOf(r)).toContain("#key=0x");
+  });
+
   it("--no-paid → PAYMENT_REQUIRED passes through unchanged", async () => {
     await enabled();
     const { client } = await connect({ args: ["--no-paid"] });
@@ -356,6 +438,7 @@ describe("paid path (SDK client → proxy → fake Assay)", () => {
     const { client } = await connect({
       elicit: async (params) => {
         asked.push(params);
+        if (answer === "throw") throw new Error("the host failed");
         return { action: answer, content: {} };
       },
     });
@@ -364,12 +447,31 @@ describe("paid path (SDK client → proxy → fake Assay)", () => {
     expect(asked[0]!.message).toBe(`Pay $0.25 to ${getAddress(PROVIDER)} for weather?`);
     expect(fake.accepted).toHaveLength(1);
 
-    answer = "decline";
-    const r2 = await client.callTool({ name: "weather", arguments: {} });
-    expect(r2.isError).toBe(true);
-    expect(textOf(r2)).toBe("The payment was cancelled. Nothing was paid.");
+    for (const a of ["decline", "cancel", "throw"]) {
+      answer = a; // "throw": the host answers the elicitation with a JSON-RPC error
+      const r2 = await client.callTool({ name: "weather", arguments: {} });
+      expect(r2.isError).toBe(true);
+      expect(textOf(r2)).toBe("The payment was cancelled. Nothing was paid.");
+    }
     expect(fake.accepted).toHaveLength(1);
     expect(readState(profile()).signed).toHaveLength(1);
+  });
+
+  it("a host cancel (notifications/cancelled) while the user is asked: nothing is signed", async () => {
+    await enabled();
+    await setLimits({ confirmAbove: "0.10" });
+    const controller = new AbortController();
+    const { client } = await connect({
+      elicit: async () => {
+        controller.abort(); // the host gives up on the call: the SDK sends notifications/cancelled
+        await new Promise((r) => setTimeout(r, 300));
+        return { action: "accept", content: {} };
+      },
+    });
+    await expect(client.callTool({ name: "weather", arguments: {} }, undefined, { signal: controller.signal })).rejects.toThrow();
+    await new Promise((r) => setTimeout(r, 500));
+    expect(weatherCalls().filter((c) => c.meta["assay/voucher"] !== undefined)).toHaveLength(0);
+    expect(readState(profile()).signed).toHaveLength(0);
   });
 
   it("a server refusal for an inactive delegate drops the cached chain read", async () => {
@@ -457,6 +559,12 @@ describe("meta", () => {
     expect(p._meta).toEqual({ "assay/idempotency-key": "k1", progressToken: 3 });
     expect(host._meta["assay/voucher"]).toEqual({}); // input unchanged
     expect((prepareCallParams({ name: "t" })._meta as Record<string, string>)["assay/idempotency-key"]).toMatch(UUID_RE);
+    // A host key the server would refuse (over 128 characters, control characters, not a string) is replaced.
+    for (const bad of ["k".repeat(129), "a\nb", "", 7]) {
+      const key = (prepareCallParams({ name: "t", _meta: { "assay/idempotency-key": bad } })._meta as Record<string, unknown>)["assay/idempotency-key"];
+      expect(key).toMatch(UUID_RE);
+    }
+    expect((prepareCallParams({ name: "t", _meta: { "assay/idempotency-key": "k".repeat(128) } })._meta as Record<string, unknown>)["assay/idempotency-key"]).toBe("k".repeat(128));
   });
 
   it("fingerprint is the last 8 hex digits in two upper-case groups", () => {
@@ -532,74 +640,177 @@ describe("browser gate", () => {
   });
 });
 
-describe("G7 confirmation timing (PaidPath with a fake host and clock)", () => {
-  it("Pay later than 120 s after the call → a clear message, nothing signed", async () => {
-    const pk = generatePrivateKey();
-    const address = privateKeyToAccount(pk).address;
-    let now = Date.now();
-    const mem = new MemoryKeyring();
-    const kc = new Keychain(mem, { profile: "default", environment: "e2e" });
-    await withLock(profile(), async (lock) => {
-      createProfile(profile(), lock, { environment: "e2e", credentialId: CREDENTIAL_ID, agentLabel: "agent", createdAt: new Date().toISOString(), delegateAddress: address, network: NET_ID });
-      await kc.set(lock, "delegate_key", pk);
-    });
-    await setLimits({ confirmAbove: "0.10" });
-    const deployment = resolveDeployment({ url: `${E2E_MCP}/`, env: { ASSAY_MCP_DEV_ORIGINS: E2E_MCP }, devOrigins: [E2E_MCP], warn: () => {} });
-    const calls = new CallRegistry(() => now);
-    const sent: unknown[] = [];
-    const chainRead: DelegationResult = {
-      ok: true,
-      value: {
-        payer: PAYER,
-        delegate: address,
-        active: true,
-        validUntil: String(Math.floor(now / 1000) + 86400),
-        maxVoucherAmount: "1000000",
-        maxPerWindow: "10000000",
-        delegateMaxVoucherAmount: "500000",
-        delegateMaxPerWindow: "5000000",
-        readAt: Math.floor(now / 1000),
+// ---- PaidPath units (fake host, real profile files, the fake Assay over HTTP) ---------------
+
+interface UnitOptions {
+  confirmAbove?: string | null;
+  elicit?: (calls: CallRegistry) => Promise<unknown>;
+  bearer?: () => Promise<string | null>;
+  key?: boolean;
+  bound?: boolean;
+}
+
+async function unit(o: UnitOptions = {}) {
+  const pk = generatePrivateKey();
+  const address = privateKeyToAccount(pk).address;
+  const clock = { now: Date.now() };
+  const mem = new MemoryKeyring();
+  const kc = new Keychain(mem, { profile: "default", environment: "e2e" });
+  await withLock(profile(), async (lock) => {
+    createProfile(profile(), lock, { environment: "e2e", credentialId: CREDENTIAL_ID, agentLabel: "agent", createdAt: new Date().toISOString(), ...(o.key !== false ? { delegateAddress: address, network: NET_ID } : {}) });
+    if (o.key !== false) await kc.set(lock, "delegate_key", pk);
+  });
+  if (o.confirmAbove !== undefined) await setLimits({ confirmAbove: o.confirmAbove });
+  const deployment = resolveDeployment({ url: `${E2E_MCP}/`, env: { ASSAY_MCP_DEV_ORIGINS: E2E_MCP }, devOrigins: [E2E_MCP], warn: () => {} });
+  const calls = new CallRegistry(() => clock.now);
+  const sent: Record<string, unknown>[] = [];
+  const bearers: string[] = [];
+  const chainRead = (delegate: string): DelegationResult => ({
+    ok: true,
+    value: {
+      payer: PAYER,
+      delegate,
+      active: o.bound !== false,
+      validUntil: String(Math.floor(clock.now / 1000) + 86400),
+      maxVoucherAmount: "1000000",
+      maxPerWindow: "10000000",
+      delegateMaxVoucherAmount: "500000",
+      delegateMaxPerWindow: "5000000",
+      readAt: Math.floor(clock.now / 1000),
+    },
+  });
+  const host: PaidHost = {
+    calls,
+    resend: async (_c, params) => (sent.push(params), { jsonrpc: "2.0", id: 1, result: { content: [{ type: "text", text: "paid" }] } }),
+    getTool: async () => ({ jsonrpc: "2.0", id: "g", result: {} }),
+    canElicit: () => o.elicit !== undefined,
+    elicit: async () => (o.elicit ? o.elicit(calls) : null),
+    bearer: o.bearer ?? (async () => API_KEY),
+    dateOffset: () => 0,
+  };
+  const quotes = new QuoteCache(() => clock.now);
+  quotes.set("weather", { maxAmount: "250000", asset: NETWORK.asset });
+  const realFetch = globalThis.fetch;
+  const paid = new PaidPath(
+    {
+      deployment,
+      profile: profile(),
+      keychain: kc,
+      noPaid: false,
+      chain: { readDelegation: async (_n, _p, d) => chainRead(d), invalidate: () => {}, clear: () => {} },
+      quotes,
+      // The API, to the fake Assay; the bearer each request carried is recorded.
+      fetch: async (url, init) => {
+        bearers.push(String(init.bearer));
+        const rest: RequestInit & { bearer?: unknown; log?: unknown } = { ...init };
+        delete rest.bearer;
+        delete rest.log;
+        return realFetch(`http://127.0.0.1:${fake.port}${new URL(url).pathname}`, { ...rest, headers: { ...(rest.headers as Record<string, string>), authorization: `Bearer ${API_KEY}` } });
       },
-    };
-    const host: PaidHost = {
-      calls,
-      resend: async (_c, params) => (sent.push(params), { jsonrpc: "2.0", id: 1, result: {} }),
-      getTool: async () => ({ jsonrpc: "2.0", id: "g", result: {} }),
-      canElicit: () => true,
+      openBrowser: async () => true,
+      stderr: () => {},
+      now: () => clock.now,
+      lockOptions: { timeoutMs: 3_000 },
+    },
+    host,
+  );
+  if (o.key !== false && o.bound !== false) fake.delegate = address;
+  const required = () => (fake as unknown as { paymentRequired: (n: string, a: object) => Record<string, unknown> }).paymentRequired("weather", {});
+  return { paid, calls, sent, bearers, clock, address, kc, required };
+}
+
+describe("PaidPath units", () => {
+  it("Pay later than 120 s after the call → a clear message, nothing signed", async () => {
+    const u = await unit({
+      confirmAbove: "0.10",
       elicit: async () => {
-        now += 121_000; // the user clicks Pay 2 minutes and 1 second after the call
+        u.clock.now += 121_000; // the user clicks Pay 2 minutes and 1 second after the call
         return { action: "accept", content: {} };
       },
-      bearer: async () => API_KEY,
-      dateOffset: () => 0,
-    };
-    const quotes = new QuoteCache(() => now);
-    quotes.set("weather", { maxAmount: "250000", asset: NETWORK.asset });
-    const paid = new PaidPath(
-      {
-        deployment,
-        profile: profile(),
-        keychain: kc,
-        noPaid: false,
-        chain: { readDelegation: async () => chainRead, invalidate: () => {}, clear: () => {} },
-        quotes,
-        fetch: async () => {
-          throw new Error("no network");
-        },
-        openBrowser: async () => false,
-        stderr: () => {},
-        now: () => now,
-      },
-      host,
-    );
-    fake.delegate = address;
-    const pr = (fake as unknown as { paymentRequired: (n: string, a: object) => Record<string, unknown> }).paymentRequired("weather", {});
-    const call = calls.begin(1, "weather", prepareCallParams({ name: "weather", arguments: {} }))!;
-    const out = await paid.onToolResult(call, { jsonrpc: "2.0", id: 1, result: pr });
+    });
+    const call = u.calls.begin(1, "weather", prepareCallParams({ name: "weather", arguments: {} }))!;
+    const out = await u.paid.onToolResult(call, { jsonrpc: "2.0", id: 1, result: u.required() });
     const result = (out as { result: Record<string, unknown> }).result;
     expect(textOf(result)).toBe("The payment was not made: it was confirmed more than 2 minutes after the call. Ask again to pay.");
     expect((metaOf(result)["assay-mcp/refused"] as { guard: string }).guard).toBe("G7");
-    expect(sent).toEqual([]);
+    expect(u.sent).toEqual([]);
     expect(readState(profile()).signed).toEqual([]);
+  });
+
+  it("the one-voucher-per-call backstop: a second PAYMENT_REQUIRED for the same call goes back unsigned", async () => {
+    const u = await unit();
+    const call = u.calls.begin(1, "weather", prepareCallParams({ name: "weather", arguments: {} }))!;
+    const first = await u.paid.onToolResult(call, { jsonrpc: "2.0", id: 1, result: u.required() });
+    expect(textOf((first as { result: unknown }).result)).toBe("paid");
+    expect(u.sent).toHaveLength(1);
+    const second: JsonRpcResponseLike = { jsonrpc: "2.0", id: 1, result: u.required() };
+    const out = await u.paid.onToolResult(call, second);
+    expect(out).toBe(second);
+    expect(u.sent).toHaveLength(1);
+    expect(readState(profile()).signed).toHaveLength(1);
+  });
+
+  it("a host cancel (notifications/cancelled) during the confirmation: nothing is signed", async () => {
+    const u = await unit({
+      confirmAbove: "0.10",
+      elicit: async (calls) => {
+        calls.cancel(1);
+        return { action: "accept", content: {} };
+      },
+    });
+    const call = u.calls.begin(1, "weather", prepareCallParams({ name: "weather", arguments: {} }))!;
+    const out = await u.paid.onToolResult(call, { jsonrpc: "2.0", id: 1, result: u.required() });
+    expect(textOf((out as { result: unknown }).result)).toBe("The payment was cancelled. Nothing was paid.");
+    expect(u.sent).toEqual([]);
+    expect(call.claimVoucher()).toBe(false);
+  });
+
+  it("an expired access token during binding refreshes (taking the profile lock) and does not deadlock", async () => {
+    // The real refresh path: an expired access token in the keychain, a live refresh token, the
+    // fake AS; `currentAccess` refreshes under the profile lock, which the binder must not hold.
+    const as = new FakeAs();
+    as.clock = Math.floor(Date.now() / 1000);
+    await as.start();
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = rerouteFetch(realFetch, as.port);
+    try {
+      const pair = as.seedGrant();
+      const deployment = resolveDeployment({ url: `${E2E_MCP}/`, env: { ASSAY_MCP_DEV_ORIGINS: E2E_MCP }, devOrigins: [E2E_MCP], warn: () => {} });
+      const tokens = new Keychain(new MemoryKeyring(), { profile: "default", environment: "e2e" });
+      await withLock(profile(), (lock) => tokens.storeTokens(lock, { refreshToken: pair.refreshToken, accessToken: { token: pair.accessToken, expiresAt: Math.floor(Date.now() / 1000) - 10 } }));
+      const ctx = { profile: profile(), deployment, keychain: tokens, lockOptions: { timeoutMs: 3_000 } };
+      const u = await unit({ key: false, bound: false, bearer: () => currentAccess(ctx) });
+      const call = u.calls.begin(1, "weather", prepareCallParams({ name: "weather", arguments: {} }))!;
+      const started = Date.now();
+      const out = await u.paid.onToolResult(call, { jsonrpc: "2.0", id: 1, result: u.required() });
+      expect(Date.now() - started).toBeLessThan(2_500);
+      const text = textOf((out as { result: unknown }).result);
+      expect(text).toContain(`/agents/enable-paid?credential=${CREDENTIAL_ID}#key=`);
+      expect(as.tokenCalls("refresh_token")).toHaveLength(1);
+      // Every API request carried the refreshed token, never the expired one.
+      expect(u.bearers.length).toBeGreaterThanOrEqual(2);
+      for (const b of u.bearers) expect(b).not.toBe(pair.accessToken);
+      expect(readState(profile()).pendingBinding).toBeUndefined();
+    } finally {
+      globalThis.fetch = realFetch;
+      await as.stop();
+    }
+  });
+
+  it("hold 2 compare-and-set: a key replaced during the network phase is not recorded; the binding is redone for the new key", async () => {
+    const u = await unit({ key: false, bound: false });
+    let swapped = false;
+    fake.beforeChallenge = async () => {
+      if (swapped) return;
+      swapped = true;
+      const other = generatePrivateKey();
+      await withLock(profile(), (lock) => u.kc.set(lock, "delegate_key", other));
+    };
+    const call = u.calls.begin(1, "weather", prepareCallParams({ name: "weather", arguments: {} }))!;
+    const out = await u.paid.onToolResult(call, { jsonrpc: "2.0", id: 1, result: u.required() });
+    const now = privateKeyToAccount((await u.kc.get("delegate_key")) as `0x${string}`).address;
+    expect(fake.challenges).toHaveLength(2);
+    expect(fake.delegate).toBe(now);
+    expect(textOf((out as { result: unknown }).result)).toContain(`#key=${now}`);
   });
 });

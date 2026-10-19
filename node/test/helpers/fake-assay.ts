@@ -183,6 +183,14 @@ export class FakeAssay {
   delegateInactive = false;
   /** Server clock skew in seconds (the `Date` header and challenge expiry follow it). */
   skewSeconds = 0;
+  /** The payer the session names (a test can switch it). */
+  payer = PAYER;
+  /** The bind answer names this delegate instead of the one bound (a misbehaving server). */
+  bindAnswerDelegate: string | null = null;
+  /** `payTo` sent in requirements instead of the network's escrow. */
+  payToOverride: string | null = null;
+  /** Runs before the challenge is answered (tests hold the binder in its network phase). */
+  beforeChallenge: (() => Promise<void>) | null = null;
   /** Delay before every MCP answer, ms. */
   delayMs = 0;
   readonly calls: SeenCall[] = [];
@@ -281,6 +289,7 @@ export class FakeAssay {
     if (method === "POST" && path === "/agents/me/delegate/challenge") {
       const delegate = String(body.delegate ?? "");
       this.challenges.push(delegate);
+      if (this.beforeChallenge) await this.beforeChallenge();
       const expiresAt = this.nowSeconds() + 300;
       this.challenge = { id: randomUUID(), delegate: getAddress(delegate), nonce: randomUUID(), expiresAt };
       return this.send(res, 201, {
@@ -317,7 +326,7 @@ export class FakeAssay {
       }
       if (signer === null || getAddress(signer) !== c.delegate) return this.send(res, 400, { message: "ACCOUNT_DELEGATE_SIGNATURE_INVALID" });
       this.delegate = c.delegate;
-      return this.send(res, 201, { data: { credentialId: CREDENTIAL_ID, agentLabel: "agent", delegate: caip(c.delegate), boundAt: new Date().toISOString() } });
+      return this.send(res, 201, { data: { credentialId: CREDENTIAL_ID, agentLabel: "agent", delegate: caip(this.bindAnswerDelegate ?? c.delegate), boundAt: new Date().toISOString() } });
     }
     if (method === "GET" && path === "/agents/me/delegate") {
       const g = this.delegate ? this.grants.get(this.delegate.toLowerCase()) : undefined;
@@ -404,8 +413,8 @@ export class FakeAssay {
       rail: "B",
       scheme: "voucher",
       network: this.network.id,
-      payer: caip(PAYER),
-      payTo: this.network.escrow,
+      payer: caip(this.payer),
+      payTo: this.payToOverride ?? this.network.escrow,
       provider: caip(PROVIDER),
       providerId: PROVIDER_ID,
       amount: { amount: String(this.price), asset: this.network.asset, decimals: this.network.decimals },
@@ -487,7 +496,7 @@ export class FakeAssay {
       );
     }
     const [payer, delegate] = decoded.args as [string, string];
-    const g = getAddress(payer) === PAYER ? this.grants.get(delegate.toLowerCase()) : undefined;
+    const g = getAddress(payer) === getAddress(this.payer) ? this.grants.get(delegate.toLowerCase()) : undefined;
     if (decoded.functionName === "delegationOf") {
       return ok(
         encodeFunctionResult({

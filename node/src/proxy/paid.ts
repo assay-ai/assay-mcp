@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
 import { getAddress, type Hex } from "viem";
 import { toGuardChain, type ChainReader, type ChainState } from "../chain/reads.js";
@@ -13,7 +14,7 @@ import { readCapped, requestSignal } from "../oauth/endpoints.js";
 import type { ResolvedDeployment } from "../profile/deployments.js";
 import type { Keychain } from "../profile/keychain.js";
 import { withLock, type LockHandle, type LockOptions, type ProfileRef } from "../profile/lock.js";
-import { createProfile, paidUrlKey, readLimits, readPaidUrls, readProfileFor, readState, updateProfile } from "../profile/profile.js";
+import { createProfile, paidUrlKey, readLimits, readPaidUrls, readProfileFor, readState, updateProfile, updateState, type PendingBinding } from "../profile/profile.js";
 import { checkBindingChallenge } from "../signer/binding.js";
 import { dateHeaderOffset, issuedAt } from "../signer/clock.js";
 import { SignerRefusal } from "../signer/errors.js";
@@ -225,6 +226,9 @@ export class PaidPath {
     } catch {
       return this.refused(response, result, new Refusal("G1", "the payment request is not a requirement"));
     }
+    // G1 first (review M6): only a rail-B voucher request can lead to a key or a binding.
+    if (requirement.rail !== "B") return this.refused(response, result, new Refusal("G1", "the payment request is not on rail B"));
+    if (requirement.scheme !== "voucher") return this.refused(response, result, new Refusal("G1", "the payment request is not a voucher"));
     const network = typeof requirement.network === "string" ? builtInNetwork(builtInDeployments()[deployment.environment], requirement.network) : null;
     if (network === null) return this.refused(response, result, new Refusal("G2", "the network is not in the built-in table"));
     const chainId = Number(network.id.slice("eip155:".length));
@@ -308,6 +312,8 @@ export class PaidPath {
           if (typeof providerId !== "string" || providerId.length === 0 || providerId.length > MAX_PROVIDER_ID_LENGTH) {
             return { kind: "refused", guard: "G1", code: "G1_NOT_A_REQUIREMENT", reason: "the payment request names no provider" };
           }
+          // The host cancelled the call (review M2): nobody would receive the paid answer.
+          if (call.cancelled) return { kind: "refused", guard: "G1", code: "G1_NOT_FORWARDED", reason: "the call was cancelled" };
           if (!call.claimVoucher()) return { kind: "again" };
           try {
             recordHeld(profile, lock, built.typedData.message.amount, { limits, decimals: network.decimals, now: this.now });
@@ -384,7 +390,7 @@ export class PaidPath {
         "The payment was not made: it was confirmed more than 2 minutes after the call. Ask again to pay.",
       );
     }
-    if (!accepted) return new Refusal("G7", "you did not confirm the payment", "The payment was cancelled. Nothing was paid.");
+    if (!accepted || call.cancelled) return new Refusal("G7", "you did not confirm the payment", "The payment was cancelled. Nothing was paid.");
     if (consumed.kind !== "ok" || consumed.call !== call) return new Refusal("G7", "the confirmation was for another payment");
     return confirmation;
   }
@@ -416,7 +422,7 @@ export class PaidPath {
   ): Promise<JsonRpcResponse> {
     const credentialId = await this.credentialId();
     if (credentialId === null) throw new SetupError("Paid calls could not be set up yet: this app's Assay sign-in is not confirmed. Try again in a minute.");
-    const address = bind ? await this.bindUnderLock(network, credentialId) : (await this.localKey())?.address ?? null;
+    const address = bind ? await this.bind(network, credentialId) : (await this.localKey())?.address ?? null;
     if (address === null) throw new SetupError("Paid calls could not be set up: the payment key could not be read. Try again.");
 
     // F5 step 3: an existing key bound to a new credential keeps its on-chain grant, so the call
@@ -448,61 +454,103 @@ export class PaidPath {
   }
 
   /**
-   * F4 steps 2–3 under the profile lock: re-read the keychain, generate and store a key if there
-   * is none, then bind it (challenge, field-by-field check, signature). The clock is corrected
-   * from the challenge answer's `Date` header (clamped to ±120 s); a challenge refused on its
-   * expiry is retried once with a fresh one. Returns the bound address.
+   * F4 steps 2–3, in two short holds of the profile lock with the network outside them (review I1):
+   * - the bearer is taken first, outside any lock (a refresh takes the profile lock itself);
+   * - hold 1: re-read the keychain, generate and store a key if there is none, and write a
+   *   pending-binding record for it in `state.json`;
+   * - no lock: challenge, every field checked, signature, `POST /agents/me/delegate`, and the
+   *   answer must name this key;
+   * - hold 2 (compare-and-set): the keychain still holds that key and a pending record for it is
+   *   still there; only then is the binding recorded (our own pending record is cleared).
+   * If hold 2's check fails (another window changed the key meanwhile) the binding is redone once.
+   * The clock is corrected from the challenge answer's `Date` header (clamped to ±120 s); a
+   * challenge refused on its expiry is retried once with a fresh one. Returns the bound address.
    */
-  private async bindUnderLock(network: BuiltInNetwork, credentialId: string): Promise<string> {
-    const { profile, keychain, deployment } = this.o;
-    return withLock(
-      profile,
-      async (lock) => {
-        let account = await this.account();
-        if (account === null) {
-          const key = generate();
-          await keychain.set(lock, "delegate_key", key.privateKey);
-          account = await this.account();
-          if (account === null || account.address !== key.address) throw new SetupError("Paid calls could not be set up: the payment key could not be stored. Try again.");
-          this.log.info("payment key created");
-        }
-        for (let attempt = 0; attempt < 2; attempt++) {
-          lock.assertHeld();
-          const challenge = await this.api("POST", "/agents/me/delegate/challenge", { delegate: account.address });
-          if (challenge === null) throw new SetupError("Paid calls could not be set up: Assay did not answer. Try again.");
-          const local = this.now() / 1000;
-          const nowSeconds = issuedAt(local, dateHeaderOffset(challenge.date, local));
-          const data = isObject(challenge.body) ? challenge.body.data : undefined;
-          let typedData;
-          try {
-            typedData = checkBindingChallenge(data, { localAddress: account.address, credentialId, environment: deployment.environment, network: network.id, nowSeconds });
-          } catch (err) {
-            if (err instanceof SignerRefusal && err.field === "message.expiresAt") {
-              // Clock: retried once with a fresh challenge, then refused (no widening of the window).
-              if (attempt === 0) continue;
-              throw new SetupError("Paid calls could not be set up: this computer's clock is too far from Assay's. Check the clock, then try again.");
-            }
-            this.log.warn("binding challenge refused", { field: err instanceof SignerRefusal ? err.field : "unknown" });
-            throw new SetupError("Paid calls could not be set up: Assay's key check did not match. Nothing was signed.");
+  private async bind(network: BuiltInNetwork, credentialId: string): Promise<string> {
+    const { profile, keychain } = this.o;
+    for (let round = 0; round < 2; round++) {
+      const bearer = await this.host.bearer();
+      if (bearer === null) throw new SetupError("Paid calls could not be set up: this app is not signed in to Assay.");
+
+      const pending = await withLock(
+        profile,
+        async (lock) => {
+          let account = await this.account();
+          if (account === null) {
+            const key = generate();
+            await keychain.set(lock, "delegate_key", key.privateKey);
+            account = await this.account();
+            if (account === null || account.address !== key.address) throw new SetupError("Paid calls could not be set up: the payment key could not be stored. Try again.");
+            this.log.info("payment key created");
           }
-          const challengeId = isObject(data) ? data.challengeId : undefined;
-          if (typeof challengeId !== "string" || !UUID_RE.test(challengeId)) throw new SetupError("Paid calls could not be set up: Assay's key check did not match. Nothing was signed.");
-          const signature = await account.signTypedData(typedData);
-          lock.assertHeld();
-          const bound = await this.api("POST", "/agents/me/delegate", { challengeId, signature });
-          const boundData = bound !== null && isObject(bound.body) ? bound.body.data : undefined;
-          const chainId = Number(network.id.slice("eip155:".length));
-          if (!isObject(boundData) || accountOn(boundData.delegate, chainId) !== account.address) {
-            throw new SetupError("Paid calls could not be set up: Assay did not accept the payment key. Try again.");
+          const record: PendingBinding = { address: account.address, token: randomBytes(16).toString("base64url"), at: Math.floor(this.now() / 1000) };
+          updateState(profile, lock, (state) => ({ ...state, pendingBinding: record }));
+          return { account, record };
+        },
+        this.o.lockOptions,
+      );
+
+      await this.bindOnServer(pending.account, network, credentialId, bearer);
+
+      const recorded = await withLock(
+        profile,
+        async (lock) => {
+          const account = await this.account();
+          const state = readState(profile);
+          const same = account !== null && account.address === pending.account.address && state.pendingBinding?.address === pending.record.address;
+          if (state.pendingBinding?.token === pending.record.token) {
+            updateState(profile, lock, (current) => {
+              const rest = { ...current };
+              delete rest.pendingBinding;
+              return rest;
+            });
           }
-          this.recordBinding(lock, credentialId, account.address, network.id);
-          this.log.info("payment key bound", { credential: credentialId.slice(0, 8) });
-          return account.address;
+          if (!same) return false;
+          this.recordBinding(lock, credentialId, pending.account.address, network.id);
+          return true;
+        },
+        this.o.lockOptions,
+      );
+      if (recorded) {
+        this.log.info("payment key bound", { credential: credentialId.slice(0, 8) });
+        return pending.account.address;
+      }
+      this.log.warn("payment key changed during the binding; binding again");
+    }
+    throw new SetupError("Paid calls could not be set up: the payment key changed in another window while it was being bound. Try again.");
+  }
+
+  /** The challenge, its field-by-field check, the signature and the bind request (no lock held). */
+  private async bindOnServer(account: PrivateKeyAccount, network: BuiltInNetwork, credentialId: string, bearer: string): Promise<void> {
+    const chainId = Number(network.id.slice("eip155:".length));
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const challenge = await this.api("POST", "/agents/me/delegate/challenge", { delegate: account.address }, bearer);
+      if (challenge === null) throw new SetupError("Paid calls could not be set up: Assay did not answer. Try again.");
+      const local = this.now() / 1000;
+      const nowSeconds = issuedAt(local, dateHeaderOffset(challenge.date, local));
+      const data = isObject(challenge.body) ? challenge.body.data : undefined;
+      let typedData;
+      try {
+        typedData = checkBindingChallenge(data, { localAddress: account.address, credentialId, environment: this.o.deployment.environment, network: network.id, nowSeconds });
+      } catch (err) {
+        if (err instanceof SignerRefusal && err.field === "message.expiresAt") {
+          // Clock: retried once with a fresh challenge, then refused (no widening of the window).
+          if (attempt === 0) continue;
+          throw new SetupError("Paid calls could not be set up: this computer's clock is too far from Assay's. Check the clock, then try again.");
         }
-        throw new SetupError("Paid calls could not be set up: this computer's clock is too far from Assay's. Check the clock, then try again.");
-      },
-      this.o.lockOptions,
-    );
+        this.log.warn("binding challenge refused", { field: err instanceof SignerRefusal ? err.field : "unknown" });
+        throw new SetupError("Paid calls could not be set up: Assay's key check did not match. Nothing was signed.");
+      }
+      const challengeId = isObject(data) ? data.challengeId : undefined;
+      if (typeof challengeId !== "string" || !UUID_RE.test(challengeId)) throw new SetupError("Paid calls could not be set up: Assay's key check did not match. Nothing was signed.");
+      const signature = await account.signTypedData(typedData);
+      const bound = await this.api("POST", "/agents/me/delegate", { challengeId, signature }, bearer);
+      const boundData = bound !== null && isObject(bound.body) ? bound.body.data : undefined;
+      if (!isObject(boundData) || accountOn(boundData.delegate, chainId) !== account.address) {
+        throw new SetupError("Paid calls could not be set up: Assay did not accept the payment key. Try again.");
+      }
+      return;
+    }
   }
 
   private recordBinding(lock: LockHandle, credentialId: string, address: string, network: string): void {
@@ -538,8 +586,9 @@ export class PaidPath {
   }
 
   /** One API request with the bearer; the parsed body and the `Date` header, or `null` on any failure. */
-  private async api(method: "GET" | "POST", path: string, body?: unknown): Promise<{ body: unknown; date: string | null } | null> {
-    const bearer = await this.host.bearer();
+  private async api(method: "GET" | "POST", path: string, body?: unknown, given?: string): Promise<{ body: unknown; date: string | null } | null> {
+    // Never called with the profile lock held: `bearer()` may refresh, which takes that lock.
+    const bearer = given ?? (await this.host.bearer());
     if (bearer === null) return null;
     try {
       const res = await this.o.fetch(`${this.o.deployment.api.replace(/\/+$/, "")}${path}`, {
@@ -583,7 +632,8 @@ export class PaidPath {
       void this.pollOnce(network, payer, address)
         .then((on) => {
           if (on) {
-            this.log.info("Paid calls are on");
+            // Shown at the default level (review M4): the one line the user waits for.
+            this.log.warn("Paid calls are on");
             stop();
           }
         })
