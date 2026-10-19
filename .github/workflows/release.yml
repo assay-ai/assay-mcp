@@ -30,6 +30,7 @@ jobs:
       contents: read
     outputs:
       tarball: ${{ steps.pack.outputs.tarball }}
+      sha256: ${{ steps.pack.outputs.sha256 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -44,6 +45,7 @@ jobs:
           REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
           RELEASE_TAGGERS: ${{ vars.RELEASE_TAGGERS }}
+          COMMIT: ${{ github.sha }}
         run: |
           set -euo pipefail
           if [ -z "${RELEASE_TAGGERS:-}" ]; then echo "Repository variable RELEASE_TAGGERS is not set."; exit 1; fi
@@ -58,6 +60,7 @@ jobs:
             const allowed = process.env.RELEASE_TAGGERS.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
             if (t.verification?.verified !== true) { console.log("Tag is not signed by a verified key."); process.exit(1); }
             if (!allowed.includes(String(t.tagger?.email).toLowerCase())) { console.log("Tagger is not a release maintainer."); process.exit(1); }
+            if (t.object?.type !== "commit" || t.object?.sha !== process.env.COMMIT) { console.log("Tag does not point at the commit being built."); process.exit(1); }
           ' "$tag"
           version="$(node -p 'require("./node/package.json").version')"
           if [ "$TAG" != "v$version" ]; then echo "Tag $TAG does not match node/package.json $version."; exit 1; fi
@@ -83,6 +86,9 @@ jobs:
           tarball="$(npm pack -w node --ignore-scripts --pack-destination out --json | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s)[0].filename))')"
           (cd out && sha256sum "$tarball" > "$tarball.sha256")
           echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
+          # The digest also travels as a job output, outside the artifact, so a swapped artifact
+          # cannot carry a matching checksum file.
+          echo "sha256=$(cut -d' ' -f1 "out/$tarball.sha256")" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: package
@@ -116,10 +122,12 @@ jobs:
         working-directory: out
         env:
           TARBALL: ${{ needs.build.outputs.tarball }}
+          SHA256: ${{ needs.build.outputs.sha256 }}
         run: |
           set -euo pipefail
           [[ "$TARBALL" =~ ^assay-ai-mcp-[0-9]+\.[0-9]+\.[0-9]+\.tgz$ ]] || { echo "Unexpected tarball name."; exit 1; }
-          sha256sum --check --strict "$TARBALL.sha256"
+          [[ "$SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "Missing build digest."; exit 1; }
+          echo "$SHA256  $TARBALL" | sha256sum --check --strict
       - name: Publish with provenance (npm trusted publishing)
         working-directory: out
         env:
