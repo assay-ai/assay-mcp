@@ -1,3 +1,4 @@
+import { basename, dirname, resolve } from "node:path";
 import { closeSync, constants, fchmodSync, fstatSync, lstatSync, openSync, readSync, writeSync, type Stats } from "node:fs";
 
 /** The first line of every log file `assay-mcp` writes. A file without it is never appended to. */
@@ -33,12 +34,35 @@ function readHead(fd: number, length: number): string {
 }
 
 /**
- * Opens `path` for `--log-file` (spec §7.3):
- * - a new file is created 0600 (exclusively, never through a symlink) and starts with the header;
- * - an existing file is appended to only when it is a regular file, not a symlink, and its
- *   first line is the header; it is tightened to 0600.
+ * Checks the `--log-file` path before anything is opened:
+ * - the name ends in `.log`, so a project config cannot plant a shell startup file
+ *   (`~/.zlogin`, `~/.bashrc`) or any other file something executes;
+ * - the parent directory already exists (it is never created), is not a symbolic link and,
+ *   on POSIX, is owned by this user.
  */
-export function openLogFile(path: string): LogFile {
+function checkLogPath(path: string): void {
+  const name = basename(path);
+  if (!/^[^/\\]+\.log$/.test(name)) throw new LogFileError("the log file name must end in .log");
+  const parent = dirname(path);
+  const st = lstatOrNull(parent);
+  if (st === null) throw new LogFileError("the log file's directory does not exist");
+  if (st.isSymbolicLink()) throw new LogFileError("the log file's directory is a symbolic link");
+  if (!st.isDirectory()) throw new LogFileError("the log file's directory is not a directory");
+  if (IS_POSIX && typeof process.getuid === "function" && st.uid !== process.getuid()) {
+    throw new LogFileError("the log file's directory belongs to another user");
+  }
+}
+
+/**
+ * Opens `path` for `--log-file` (spec §7.3):
+ * - the path passes {@link checkLogPath};
+ * - a new file is created 0600 (exclusively, never through a symlink) and starts with the header;
+ * - an existing file is appended to only when it is a regular file, not a symlink, owned by
+ *   this user, and its first line is the header; it is tightened to 0600.
+ */
+export function openLogFile(input: string): LogFile {
+  const path = resolve(input);
+  checkLogPath(path);
   const before = lstatOrNull(path);
   let fd: number;
   if (before === null) {

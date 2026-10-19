@@ -7,7 +7,6 @@ import {
   fsyncSync,
   lstatSync,
   mkdirSync,
-  chmodSync,
   openSync,
   readFileSync,
   renameSync,
@@ -15,23 +14,34 @@ import {
   writeSync,
   type Stats,
 } from "node:fs";
-import { homedir } from "node:os";
-import { isAbsolute, join, normalize, posix, sep, win32 } from "node:path";
+import { userInfo } from "node:os";
+import { dirname, isAbsolute, join, normalize, posix, sep, win32 } from "node:path";
 
 /**
  * The profile directory `{dir}` (spec §7.4) and safe file access inside it.
  *
- * - macOS `~/Library/Application Support/assay-mcp/`, Linux `$XDG_CONFIG_HOME/assay-mcp/`
- *   (`~/.config` when unset), Windows `%APPDATA%\assay-mcp\`.
- * - On POSIX the directory and its subdirectories are 0700 and files 0600.
- * - No path inside `{dir}` is followed through a symbolic link: `{dir}` itself, each
- *   directory below it and each file are checked with `lstat`, and files are opened with
- *   `O_NOFOLLOW`.
+ * - `{dir}` is derived from the OS account's home directory (`os.userInfo().homedir`:
+ *   `getpwuid` on POSIX, the profile directory on Windows), never from `$HOME`,
+ *   `XDG_CONFIG_HOME` or `%APPDATA%`. A project `.mcp.json` can set any env var for the
+ *   server it starts; if env could move `{dir}`, a repository could supply its own
+ *   `dev-origins.json`, limits and paid-URL list.
+ *   macOS `~/Library/Application Support/assay-mcp/`, Linux `~/.config/assay-mcp/`,
+ *   Windows `<home>\AppData\Roaming\assay-mcp\`.
+ * - On POSIX the directory and its subdirectories are 0700 and files 0600. A file is read
+ *   only when it is a regular file, 0600 and owned by this user, and every directory from
+ *   `{dir}` down to it is 0700 and owned by this user (a git checkout yields 0644/0755, so
+ *   committed copies are refused). Reads never tighten modes.
+ * - Nothing inside `{dir}` is followed through a symbolic link: `{dir}`, each directory below
+ *   it and each file are checked with `lstat`, and opened with `O_NOFOLLOW`.
+ * - Windows: there are no POSIX modes or owners to check, so only the symlink and
+ *   regular-file checks apply (plus an ino/dev re-check after open, since `O_NOFOLLOW` does
+ *   not exist there). The per-user ACL on the profile directory is the remaining protection.
  */
 
 export const APP_DIR_NAME = "assay-mcp";
 const IS_POSIX = process.platform !== "win32";
 const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
+const DIRECTORY = constants.O_DIRECTORY ?? 0;
 
 export class ProfilePathError extends Error {
   override readonly name = "ProfilePathError";
@@ -39,25 +49,24 @@ export class ProfilePathError extends Error {
 
 export interface DirInputs {
   platform: NodeJS.Platform;
-  env: Readonly<Record<string, string | undefined>>;
+  /** The OS account's home directory (not `$HOME`). */
   home: string;
 }
 
-/** `{dir}` for the given platform. Pure; {@link configDir} fills in the running process. */
-export function configDirFor({ platform, env, home }: DirInputs): string {
-  if (platform === "win32") {
-    const appData = env.APPDATA && win32.isAbsolute(env.APPDATA) ? env.APPDATA : win32.join(home, "AppData", "Roaming");
-    return win32.join(appData, APP_DIR_NAME);
-  }
+/** `{dir}` for the given platform. Pure; {@link configDir} fills in the running process. No env var is read. */
+export function configDirFor({ platform, home }: DirInputs): string {
+  if (platform === "win32") return win32.join(home, "AppData", "Roaming", APP_DIR_NAME);
   if (platform === "darwin") return posix.join(home, "Library", "Application Support", APP_DIR_NAME);
-  // XDG: a relative value is invalid and must be ignored.
-  const xdg = env.XDG_CONFIG_HOME && posix.isAbsolute(env.XDG_CONFIG_HOME) ? env.XDG_CONFIG_HOME : posix.join(home, ".config");
-  return posix.join(xdg, APP_DIR_NAME);
+  return posix.join(home, ".config", APP_DIR_NAME);
 }
 
-/** `{dir}` for this process. `ASSAY_MCP_CONFIG_DIR` is deliberately not supported. */
+/** `{dir}` for this process, from the OS account's home directory only. */
 export function configDir(): string {
-  return configDirFor({ platform: process.platform, env: process.env, home: homedir() });
+  return configDirFor({ platform: process.platform, home: userInfo().homedir });
+}
+
+function currentUid(): number | null {
+  return IS_POSIX && typeof process.getuid === "function" ? process.getuid() : null;
 }
 
 /** Profile names: lowercase letters, digits and `-`, up to 32 characters. They become file names. */
@@ -95,20 +104,45 @@ function lstatOrNull(path: string): Stats | null {
 function checkOwnDir(path: string, st: Stats): void {
   if (st.isSymbolicLink()) throw new ProfilePathError(`${path} is a symbolic link; refusing to use it`);
   if (!st.isDirectory()) throw new ProfilePathError(`${path} is not a directory`);
-  if (IS_POSIX && typeof process.getuid === "function" && st.uid !== process.getuid()) {
-    throw new ProfilePathError(`${path} belongs to another user`);
+  const uid = currentUid();
+  if (uid !== null && st.uid !== uid) throw new ProfilePathError(`${path} belongs to another user`);
+}
+
+/**
+ * Creates `dir` (0700) if needed, or checks it: a real directory owned by this user. On POSIX
+ * it is opened with `O_NOFOLLOW|O_DIRECTORY` and tightened to 0700 through the descriptor, so
+ * a symlink swapped in after the check is never followed. Used on the write path only.
+ */
+export function ensurePrivateDir(dir: string): void {
+  const st = lstatOrNull(dir);
+  if (st === null) mkdirSync(dir, { recursive: true, mode: 0o700 });
+  else checkOwnDir(dir, st);
+  if (!IS_POSIX) {
+    checkOwnDir(dir, lstatSync(dir));
+    return;
+  }
+  let fd: number;
+  try {
+    fd = openSync(dir, constants.O_RDONLY | DIRECTORY | NOFOLLOW);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ELOOP" || code === "ENOTDIR") throw new ProfilePathError(`${dir} is a symbolic link or not a directory`);
+    throw err;
+  }
+  try {
+    const fst = fstatSync(fd);
+    checkOwnDir(dir, fst);
+    if ((fst.mode & 0o777) !== 0o700) fchmodSync(fd, 0o700);
+  } finally {
+    closeSync(fd);
   }
 }
 
-/** Creates `dir` (0700) if needed, or checks it: a real directory owned by this user, tightened to 0700. */
-export function ensurePrivateDir(dir: string): void {
-  let st = lstatOrNull(dir);
-  if (st === null) {
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
-    st = lstatSync(dir);
-  }
-  checkOwnDir(dir, st);
-  if (IS_POSIX && (st.mode & 0o777) !== 0o700) chmodSync(dir, 0o700);
+/** Checks, without changing anything, that `path` is a 0700 directory owned by this user (POSIX). */
+function checkPrivateDirForRead(path: string): void {
+  const st = lstatSync(path);
+  checkOwnDir(path, st);
+  if (IS_POSIX && (st.mode & 0o777) !== 0o700) throw new ProfilePathError(`${path} is not private (expected mode 0700)`);
 }
 
 /**
@@ -143,9 +177,19 @@ export function ensurePrivateSubdir(dir: string, rel: string): string {
   return safeJoin(dir, rel);
 }
 
-/** Reads a file inside `{dir}`; `null` when it does not exist. Refuses symlinks and non-files. */
+/**
+ * Reads a file inside `{dir}`; `null` when it (or a directory on the way) does not exist.
+ * Refuses symlinks and non-files and, on POSIX, a file that is not 0600 and owned by this
+ * user or a directory from `{dir}` down that is not 0700 and owned by this user.
+ */
 export function readPrivateFile(dir: string, rel: string): string | null {
   const path = safeJoin(dir, rel);
+  const dirs = [dir];
+  for (let d = dirname(path); d.length > dir.length; d = dirname(d)) dirs.splice(1, 0, d);
+  for (const d of dirs) {
+    if (lstatOrNull(d) === null) return null;
+    checkPrivateDirForRead(d);
+  }
   let fd: number;
   try {
     fd = openSync(path, constants.O_RDONLY | NOFOLLOW);
@@ -156,7 +200,18 @@ export function readPrivateFile(dir: string, rel: string): string | null {
     throw err;
   }
   try {
-    if (!fstatSync(fd).isFile()) throw new ProfilePathError(`${path} is not a regular file`);
+    const st = fstatSync(fd);
+    if (!st.isFile()) throw new ProfilePathError(`${path} is not a regular file`);
+    const uid = currentUid();
+    if (uid !== null && st.uid !== uid) throw new ProfilePathError(`${path} belongs to another user`);
+    if (IS_POSIX && (st.mode & 0o777) !== 0o600) throw new ProfilePathError(`${path} is not private (expected mode 0600)`);
+    if (!IS_POSIX) {
+      // No O_NOFOLLOW on Windows: the path must still name the file that was opened.
+      const again = lstatSync(path);
+      if (again.isSymbolicLink() || again.ino !== st.ino || again.dev !== st.dev) {
+        throw new ProfilePathError(`${path} changed while it was being read`);
+      }
+    }
     return readFileSync(fd, "utf8");
   } finally {
     closeSync(fd);

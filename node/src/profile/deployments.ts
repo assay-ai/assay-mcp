@@ -95,12 +95,34 @@ export function resolveDeployment({ url, env, devOrigins, warn }: ResolveInputs)
 
   if (dev) (warn ?? ((line: string) => void process.stderr.write(line)))(`assay-mcp: ${devModeWarning(environment)}\n`);
 
-  return deepFreeze({
+  const resolved: ResolvedDeployment = deepFreeze({
     ...structuredClone(deployment),
     environment,
     dev,
     url: canonicalUrl(new URL(deployment.mcp).origin, canonical),
   });
+  RESOLVED.add(resolved);
+  return resolved;
+}
+
+/**
+ * The brand: every object {@link resolveDeployment} returned, and nothing else. A look-alike
+ * object (`{environment: "e2e", dev: true, …}` built anywhere else) is not in it.
+ */
+const RESOLVED = new WeakSet<object>();
+
+/** True only for a {@link resolveDeployment} result. */
+export function isResolvedDeployment(value: unknown): value is ResolvedDeployment {
+  return typeof value === "object" && value !== null && RESOLVED.has(value);
+}
+
+/**
+ * The deployments `pinnedFetch` accepts: a {@link resolveDeployment} result, or the built-in
+ * production entry itself (by identity). A built-in dev entry is accepted only through
+ * `resolveDeployment`, i.e. only after the explicit dev-mode decision.
+ */
+export function isTrustedDeployment(value: unknown): value is Deployment {
+  return isResolvedDeployment(value) || value === builtInDeployments().production;
 }
 
 /**
@@ -109,7 +131,8 @@ export function resolveDeployment({ url, env, devOrigins, warn }: ResolveInputs)
  * environment is acceptable only when dev mode was chosen explicitly through both local
  * inputs; nothing a server returns can set `dev`.
  */
-export function assertSignerEnvironment(resolved: Pick<ResolvedDeployment, "environment" | "dev">): void {
+export function assertSignerEnvironment(resolved: ResolvedDeployment): void {
+  if (!isResolvedDeployment(resolved)) throw new OriginError("refusing to sign: the deployment was not resolved by assay-mcp");
   const ok = resolved.dev ? resolved.environment !== "production" : resolved.environment === "production";
   if (!ok) throw new OriginError(`refusing to sign for ${resolved.environment} outside dev mode`);
 }

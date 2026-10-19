@@ -3,8 +3,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { builtInDeployments, type Deployment } from "../src/deployments.js";
-import { isBuiltIn, pinnedFetch, PinnedFetchError, USER_AGENT } from "../src/net/fetch.js";
-import { apiKeyFromEnv, assertSignerEnvironment, OriginError, resolveDeployment } from "../src/profile/deployments.js";
+import { carriesBearer, pinnedFetch, PinnedFetchError, targetOf, USER_AGENT } from "../src/net/fetch.js";
+import {
+  apiKeyFromEnv,
+  assertSignerEnvironment,
+  isResolvedDeployment,
+  isTrustedDeployment,
+  OriginError,
+  resolveDeployment,
+  type ResolvedDeployment,
+} from "../src/profile/deployments.js";
 import { addDevOrigin, devOriginsFromEnv, normaliseOrigin, readDevOrigins } from "../src/profile/dev-origins.js";
 import { VERSION } from "../src/version.js";
 
@@ -174,12 +182,20 @@ describe("only production reaches the signer outside dev mode", () => {
     expect(Object.isFrozen(d)).toBe(true);
   });
 
-  it("the signer gate refuses a non-production environment without dev, and production flagged dev", () => {
-    for (const environment of ["e2e", "anvil", "staging"] as const) {
-      expect(() => assertSignerEnvironment({ environment, dev: false })).toThrow(OriginError);
+  it("the signer gate accepts only resolveDeployment results, never a look-alike object", () => {
+    const prod = resolveDeployment({ env: {}, devOrigins: [], warn });
+    expect(() => assertSignerEnvironment(prod)).not.toThrow();
+    const lookAlikes = [
+      { ...prod },
+      structuredClone(prod),
+      { ...table.e2e, environment: "e2e", dev: true, url: `${DEV}/` },
+      { ...table.production, environment: "production", dev: false, url: `${PROD_MCP}/` },
+      { environment: "anvil", dev: true },
+    ];
+    for (const fake of lookAlikes) {
+      expect(() => assertSignerEnvironment(fake as unknown as ResolvedDeployment)).toThrow(OriginError);
+      expect(isResolvedDeployment(fake)).toBe(false);
     }
-    expect(() => assertSignerEnvironment({ environment: "production", dev: true })).toThrow(OriginError);
-    expect(() => assertSignerEnvironment({ environment: "production", dev: false })).not.toThrow();
   });
 
   it("does not mutate the built-in table", () => {
@@ -211,15 +227,24 @@ describe("dev-origins.json", () => {
     symlinkSync(real, join(dir, "dev-origins.json"));
     expect(readDevOrigins(dir)).toEqual([]);
     rmSync(join(dir, "dev-origins.json"));
-    writeFileSync(join(dir, "dev-origins.json"), "{not json");
+    writeFileSync(join(dir, "dev-origins.json"), "{not json", { mode: 0o600 });
     expect(readDevOrigins(dir)).toEqual([]);
+  });
+
+  it.skipIf(process.platform === "win32")("a 0644 dev-origins.json (e.g. committed to a repo) reads as empty", () => {
+    writeFileSync(join(dir, "dev-origins.json"), JSON.stringify({ version: 1, origins: [DEV] }), { mode: 0o644 });
+    expect(readDevOrigins(dir)).toEqual([]);
+    expect(() =>
+      resolveDeployment({ url: `${DEV}/`, env: { ASSAY_MCP_DEV_ORIGINS: DEV }, devOrigins: readDevOrigins(dir), warn }),
+    ).toThrow(OriginError);
   });
 });
 
 describe("pinnedFetch", () => {
   const prod = table.production;
-  const e2e = table.e2e;
-  const rpcUrl = e2e.networks["eip155:46630"]!.rpc[0]!;
+  const e2eRaw = table.e2e;
+  const e2e = () => resolveDeployment({ url: `${DEV}/`, env: { ASSAY_MCP_DEV_ORIGINS: DEV }, devOrigins: [DEV], warn });
+  const rpcUrl = e2eRaw.networks["eip155:46630"]!.rpc[0]!;
 
   function spyFetch() {
     return vi.spyOn(globalThis, "fetch").mockImplementation(() => Promise.resolve(new Response("{}", { status: 200 })));
@@ -230,9 +255,11 @@ describe("pinnedFetch", () => {
 
   it("attaches Authorization only for mcp and api, and the User-Agent always", async () => {
     const spy = spyFetch();
-    await pinnedFetch(e2e, `${e2e.mcp}/`, { method: "POST", bearer: "tok" });
-    await pinnedFetch(e2e, `${e2e.api}/agents/me`, { bearer: "tok" });
-    await pinnedFetch(e2e, e2e.issuer, { bearer: "tok" });
+    const d = e2e();
+    await pinnedFetch(d, `${d.mcp}/`, { method: "POST", bearer: "tok" });
+    await pinnedFetch(d, `${d.api}/agents/me`, { bearer: "tok" });
+    // The e2e issuer is the MCP origin, so it is the MCP target.
+    await pinnedFetch(d, d.issuer, { bearer: "tok" });
     expect(spy).toHaveBeenCalledTimes(3);
     for (let i = 0; i < 3; i++) {
       const h = new Headers(sent(spy, i).headers);
@@ -242,77 +269,109 @@ describe("pinnedFetch", () => {
     expect(USER_AGENT).toBe(`assay-mcp/${VERSION}`);
   });
 
+  it("a distinct issuer origin is its own target and never gets the bearer", () => {
+    const forged = { ...e2eRaw, issuer: "https://issuer.example" } as Deployment;
+    expect(targetOf(forged, new URL("https://issuer.example/oauth/token"))).toBe("issuer");
+    expect(targetOf(forged, new URL(`${e2eRaw.mcp}/`))).toBe("mcp");
+    expect(carriesBearer("issuer")).toBe(false);
+    expect(carriesBearer("rpc")).toBe(false);
+    expect(carriesBearer("mcp")).toBe(true);
+    expect(carriesBearer("api")).toBe(true);
+  });
+
   it("pinnedFetch to rpc never carries Authorization", async () => {
     const spy = spyFetch();
-    await pinnedFetch(e2e, rpcUrl, { method: "POST", bearer: "tok", body: "{}" });
+    const d = e2e();
+    await pinnedFetch(d, rpcUrl, { method: "POST", bearer: "tok", body: "{}" });
     const h = new Headers(sent(spy, 0).headers);
     expect(h.has("authorization")).toBe(false);
     expect(h.get("user-agent")).toBe(USER_AGENT);
-    await expect(pinnedFetch(e2e, rpcUrl, { headers: { Authorization: "Bearer tok" } })).rejects.toThrow(PinnedFetchError);
-    await expect(pinnedFetch(e2e, rpcUrl, { headers: [["authorization", "x"]] })).rejects.toThrow(PinnedFetchError);
+    await expect(pinnedFetch(d, rpcUrl, { headers: { Authorization: "Bearer tok" } })).rejects.toThrow(PinnedFetchError);
+    await expect(pinnedFetch(d, rpcUrl, { headers: [["authorization", "x"]] })).rejects.toThrow(PinnedFetchError);
     expect(spy).toHaveBeenCalledTimes(1);
   });
 
   it("refuses every other origin before any request", async () => {
     const spy = spyFetch();
+    const d = e2e();
     for (const url of [
       "https://evil.example/",
       prod.web, // a placeholder in production: not a URL
-      e2e.web, // {WEB} is opened in a browser, never fetched
+      e2eRaw.web, // {WEB} is opened in a browser, never fetched
       "http://localhost:3201/",
       "http://u:p@localhost:3200/",
     ]) {
-      await expect(pinnedFetch(e2e, url, { bearer: "tok" }), url).rejects.toThrow(PinnedFetchError);
+      await expect(pinnedFetch(d, url, { bearer: "tok" }), url).rejects.toThrow(PinnedFetchError);
     }
     // Another environment's hosts are not this deployment's.
-    await expect(pinnedFetch(prod, `${e2e.mcp}/`)).rejects.toThrow(PinnedFetchError);
+    await expect(pinnedFetch(prod, `${e2eRaw.mcp}/`)).rejects.toThrow(PinnedFetchError);
     await expect(pinnedFetch(prod, rpcUrl)).rejects.toThrow(PinnedFetchError);
     expect(spy).not.toHaveBeenCalled();
   });
 
-  it("refuses a deployment that is not a built-in entry", async () => {
+  it("accepts only a resolveDeployment result or the built-in production entry", async () => {
     const spy = spyFetch();
-    const forged: Deployment = { ...e2e, api: "https://evil.example" };
-    expect(isBuiltIn(forged)).toBe(false);
-    expect(isBuiltIn(e2e)).toBe(true);
-    expect(isBuiltIn(resolveDeployment({ env: {}, devOrigins: [], warn }))).toBe(true);
-    await expect(pinnedFetch(forged, "https://evil.example/x", { bearer: "tok" })).rejects.toThrow(/not a built-in entry/);
-    const extraRpc: Deployment = { ...e2e, networks: { "eip155:46630": { ...e2e.networks["eip155:46630"]!, rpc: ["https://evil.example"] } } };
-    await expect(pinnedFetch(extraRpc, "https://evil.example/")).rejects.toThrow(PinnedFetchError);
+    const forged: Deployment = { ...e2eRaw, api: "https://evil.example" };
+    const fakes: Deployment[] = [forged, e2eRaw, structuredClone(prod), { ...prod }, { ...e2e() }];
+    for (const fake of fakes) {
+      expect(isTrustedDeployment(fake)).toBe(false);
+      await expect(pinnedFetch(fake, `${fake.mcp}/`, { bearer: "tok" })).rejects.toThrow(/not a built-in entry/);
+    }
+    expect(isTrustedDeployment(prod)).toBe(true);
+    expect(isTrustedDeployment(e2e())).toBe(true);
+    expect(isTrustedDeployment(resolveDeployment({ env: {}, devOrigins: [], warn }))).toBe(true);
     expect(spy).not.toHaveBeenCalled();
   });
 
   it("redirect: 'error' on every call", async () => {
     const spy = spyFetch();
+    const d = e2e();
     const calls: [string, Parameters<typeof pinnedFetch>[2]][] = [
-      [`${e2e.mcp}/`, { method: "POST", bearer: "tok" }],
-      [`${e2e.mcp}/`, { redirect: "follow" } as unknown as Parameters<typeof pinnedFetch>[2]],
-      [`${e2e.api}/x`, { redirect: "manual" } as unknown as Parameters<typeof pinnedFetch>[2]],
+      [`${d.mcp}/`, { method: "POST", bearer: "tok" }],
+      [`${d.mcp}/`, { redirect: "follow" } as unknown as Parameters<typeof pinnedFetch>[2]],
+      [`${d.api}/x`, { redirect: "manual" } as unknown as Parameters<typeof pinnedFetch>[2]],
       [rpcUrl, { method: "POST", body: "{}" }],
-      [`${e2e.issuer}/oauth/token`, {}],
-      [`${e2e.mcp}/`, undefined],
+      [`${d.issuer}/oauth/token`, {}],
+      [`${d.mcp}/`, undefined],
     ];
-    for (const [url, init] of calls) await pinnedFetch(e2e, url, init);
+    for (const [url, init] of calls) await pinnedFetch(d, url, init);
     expect(spy).toHaveBeenCalledTimes(calls.length);
     for (let i = 0; i < calls.length; i++) expect(sent(spy, i).redirect).toBe("error");
   });
 
-  it("a real redirect fails instead of being followed", async () => {
+  it("a real 302 to a live endpoint is refused, not followed", async () => {
     const { createServer } = await import("node:http");
     const hits: string[] = [];
     const server = createServer((req, res) => {
       hits.push(req.url ?? "");
-      res.writeHead(302, { location: "http://127.0.0.1:1/elsewhere" }).end();
+      if (req.url === "/elsewhere") res.writeHead(200, { "content-type": "application/json" }).end("{}");
+      else res.writeHead(302, { location: "/elsewhere" }).end();
     });
-    // The anvil entry lists http://127.0.0.1:8547; bind there only if free, else skip quietly.
-    const listening = await new Promise<boolean>((resolve) => {
-      server.once("error", () => resolve(false));
-      server.listen(8547, "127.0.0.1", () => resolve(true));
+    // An ephemeral port: never skipped because a fixed port is busy.
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as { port: number };
+    const realFetch = globalThis.fetch;
+    // Only the transport is rerouted to the local server; pinnedFetch's checks and the
+    // RequestInit it builds go to the real fetch unchanged.
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const u = new URL(String(input instanceof URL ? input.href : input));
+      return realFetch(`http://127.0.0.1:${port}${u.pathname}${u.search}`, init);
     });
-    if (!listening) return;
     try {
-      await expect(pinnedFetch(table.anvil, "http://127.0.0.1:8547/", { method: "POST", body: "{}" })).rejects.toThrow();
+      // Sanity: the target answers 200, so following the redirect would succeed.
+      const direct = await realFetch(`http://127.0.0.1:${port}/elsewhere`);
+      expect(direct.status).toBe(200);
+      hits.length = 0;
+
+      const d = e2e();
+      const err = await pinnedFetch(d, `${d.mcp}/`, { method: "POST", body: "{}", bearer: "tok" }).then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(TypeError);
+      expect(String((err as { cause?: unknown }).cause)).toMatch(/redirect/i);
       expect(hits).toEqual(["/"]);
+      expect(spy).toHaveBeenCalledTimes(1);
     } finally {
       await new Promise((r) => server.close(r));
     }

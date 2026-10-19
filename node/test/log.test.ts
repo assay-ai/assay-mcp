@@ -1,4 +1,4 @@
-import { lstatSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -56,8 +56,24 @@ describe("redact", () => {
     expect(redact(`payer=${address} id=3f2a1b9c`)).toBe(`payer=${address} id=3f2a1b9c`);
   });
 
-  it("redacts a bearer header value", () => {
-    expect(redact("Authorization: Bearer opaque.value-123")).toBe("Authorization: Bearer [redacted]");
+  it("redacts an Authorization header in any scheme, and a bare bearer value", () => {
+    expect(redact("Authorization: Bearer opaque.value-123")).toBe("Authorization: [redacted]");
+    expect(redact("authorization: Basic dXNlcjpwYXNz next")).toBe("authorization: [redacted] next");
+    expect(redact('{"Proxy-Authorization":"Basic dXNlcjpwYXNz"}')).not.toContain("dXNlcjpwYXNz");
+    expect(redact("sent Bearer opaque.value-123")).toBe("sent Bearer [redacted]");
+  });
+
+  it("closes the probed gaps: 0X prefix, hex glued to letters, query-string secrets", () => {
+    const hex = "4f3e2d1c0b0a0918".repeat(4);
+    expect(redact(`k=0X${hex}`)).toBe("k=[redacted]");
+    expect(redact(`k=0X${hex.toUpperCase()}`)).toBe("k=[redacted]");
+    expect(redact(`pk${hex}`)).toBe("pk[redacted]");
+    expect(redact(`${hex}zz`)).toBe("[redacted]zz");
+    for (const param of ["request", "code", "code_verifier", "state", "refresh_token", "access_token", "rid", "token"]) {
+      const out = redact(`https://mcp.example.test/continue?x=1&${param}=Zx9kQ2opaque-Value_1&y=2`);
+      expect(out, param).toBe(`https://mcp.example.test/continue?x=1&${param}=[redacted]&y=2`);
+    }
+    expect(redact("cb#state=Zx9kQ2&code=Pq7")).toBe("cb#state=[redacted]&code=[redacted]");
   });
 });
 
@@ -222,7 +238,7 @@ describe("--log-file", () => {
   });
 
   it("refuses a foreign file without the header and leaves it untouched", () => {
-    const path = join(dir, "notes.txt");
+    const path = join(dir, "notes.log");
     writeFileSync(path, "my notes\n");
     expect(() => openLogFile(path)).toThrow(/not written by assay-mcp/);
     expect(readFileSync(path, "utf8")).toBe("my notes\n");
@@ -231,7 +247,29 @@ describe("--log-file", () => {
   });
 
   it("refuses a directory", () => {
-    expect(() => openLogFile(dir)).toThrow(/not a regular file/);
+    mkdirSync(join(dir, "d.log"));
+    expect(() => openLogFile(join(dir, "d.log"))).toThrow(/not a regular file/);
+  });
+
+  it("refuses a name that does not end in .log (no shell startup file can be planted)", () => {
+    for (const name of [".zlogin", ".bashrc", "profile", "assay.log.sh", ".log", "x.LOG"]) {
+      expect(() => openLogFile(join(dir, name)), name).toThrow(/must end in \.log/);
+      expect(() => lstatSync(join(dir, name))).toThrow();
+    }
+  });
+
+  it("refuses a missing or symlinked parent directory and never creates one", () => {
+    expect(() => openLogFile(join(dir, "missing", "a.log"))).toThrow(/does not exist/);
+    expect(() => lstatSync(join(dir, "missing"))).toThrow();
+    mkdirSync(join(dir, "real"));
+    symlinkSync(join(dir, "real"), join(dir, "linked"));
+    expect(() => openLogFile(join(dir, "linked", "a.log"))).toThrow(/symbolic link/);
+    expect(() => lstatSync(join(dir, "real", "a.log"))).toThrow();
+  });
+
+  it.skipIf(!POSIX || process.getuid?.() === 0)("refuses a parent directory owned by another user", () => {
+    // `/` is owned by root on every POSIX runner; a non-root test user does not own it.
+    expect(() => openLogFile("/assay-mcp-test.log")).toThrow(/another user/);
   });
 
   it.skipIf(!POSIX)("tightens an existing log file to 0600", () => {
