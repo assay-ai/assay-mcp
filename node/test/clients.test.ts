@@ -756,7 +756,8 @@ describe("helpers", () => {
     expect(slugWordsFor({ kind: "UNLISTED_TOOLSET" }, { tools: null })).toEqual([]);
   });
 
-  it("onPath finds executables without running anything", () => {
+  // POSIX exec bits and /bin/sh: not meaningful on Windows.
+  it.skipIf(process.platform === "win32")("onPath finds executables without running anything", () => {
     const bin = join(base, "bin");
     mkdirSync(bin);
     writeFileSync(join(bin, "claude"), "#!/bin/sh\n", { mode: 0o755 });
@@ -827,7 +828,8 @@ describe("printed commands survive the shell (I3)", { timeout: 60_000 }, () => {
     expect(accepted).toBeGreaterThan(5);
   });
 
-  it("property: random hostile URLs and names never break out of their word", () => {
+  // POSIX exec bits and /bin/sh: not meaningful on Windows.
+  it.skipIf(process.platform === "win32")("property: random hostile URLs and names never break out of their word", () => {
     // mulberry32: a fixed seed, so a failure reproduces
     let seed = 0x2b11;
     const rand = (n: number): number => {
@@ -924,7 +926,8 @@ describe("other fixes", () => {
     expect(h.out.join("")).toContain("allow-paid");
   });
 
-  it("which skips empty and relative PATH entries (M7)", () => {
+  // POSIX exec bits and /bin/sh: not meaningful on Windows.
+  it.skipIf(process.platform === "win32")("which skips empty and relative PATH entries (M7)", () => {
     const bin = join(base, "bin");
     mkdirSync(bin);
     writeFileSync(join(bin, "claude"), "#!/bin/sh\n", { mode: 0o755 });
@@ -974,7 +977,7 @@ describe("wired to the URL parser, {dir} files and the profile store", () => {
     expect([...entriesOf("cursor").keys()]).toEqual(["assay", "assay-get"]);
     expect(readPaidUrls({ dir, name: "default" })).toEqual(["/", "/c/weather", "/?tools=get_weather"]);
     const installs = join(dir, "installs.json");
-    expect(lstatSync(installs).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") expect(lstatSync(installs).mode & 0o777).toBe(0o600);
     expect((JSON.parse(readFileSync(installs, "utf8")) as unknown[]).length).toBe(2);
     out.length = 0;
     expect(await runList([], deps)).toBe(0);

@@ -556,7 +556,8 @@ describe("serve start", () => {
     expect(raw.stderr()).toContain(word);
   });
 
-  it("allows an env proxy only through the 0600 profile setting", async () => {
+  // The 0600 rule is POSIX: on Windows the profile is private through its %APPDATA% ACL.
+  it.skipIf(process.platform === "win32")("allows an env proxy only through the 0600 profile setting", async () => {
     mkdirSync(join(dir, "profiles"), { recursive: true, mode: 0o700 });
     const settings = join(dir, "profiles", "default.settings.json");
     writeFileSync(settings, JSON.stringify({ version: 1, allowEnvProxy: true }), { mode: 0o644 });
@@ -680,12 +681,15 @@ describe("bounds and secrets (fix round 1, I2 and I3)", () => {
     raw.send(JSON.stringify({ jsonrpc: "2.0", id: 100, method: "ping" }));
     await until(() => raw.lineCount() >= base + 13, 10_000);
     expect(raw.child.exitCode).toBeNull();
-    const answered = raw
+    // Only each answer's head is read: parsing twelve 16 MiB results here would build ~67M
+    // objects in the test worker and exhaust its heap (the proxy's memory is what is measured).
+    const heads = raw
       .stdout()
       .split("\n")
       .filter((l) => l !== "")
-      .map((l) => JSON.parse(l) as { id?: number; result?: unknown; error?: { message: string } });
-    for (let i = 1; i <= 12; i++) expect(answered.some((m) => m.id === i && ("result" in m || "error" in m))).toBe(true);
+      .map((l) => l.slice(0, 200));
+    const answeredId = (i: number) => heads.some((h) => new RegExp(`"id":${i}[,}]`).test(h) && /"(result|error)":/.test(h));
+    for (let i = 1; i <= 12; i++) expect(answeredId(i)).toBe(true);
     expect(mcp.peakHeap).toBeGreaterThan(0);
     expect(mcp.peakHeap).toBeLessThan(1_536 * 1024 * 1024);
   }, 120_000);

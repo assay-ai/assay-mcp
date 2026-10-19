@@ -138,7 +138,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends gnome-keyring dbus
-          dbus-run-session -- sh -c 'printf "" | gnome-keyring-daemon --unlock --components=secrets >/dev/null && env ${{ matrix.env }} npx vitest run test/keychain.test.ts'
+          # A non-empty throwaway password: with an empty one the daemon cannot create the "login"
+          # collection without a GUI prompt, and every Secret Service call finds no collection.
+          dbus-run-session -- sh -c 'printf ci-keyring | gnome-keyring-daemon --unlock --components=secrets >/dev/null && env ${{ matrix.env }} npx vitest run test/keychain.test.ts'
         working-directory: node
       - name: Keychain tests (no Secret Service)
         if: matrix.name == 'linux no secret service'

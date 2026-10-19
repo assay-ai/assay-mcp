@@ -560,6 +560,8 @@ describe("login and logout (fake AS)", () => {
     expect(output()).toContain("Signed out on this computer only");
     expectCleared(limitsBefore, null);
 
+    // An unreadable (loose) profile file is a POSIX mode check; on Windows the file stays readable.
+    if (process.platform === "win32") return;
     printed = [];
     const limits2 = await seedFull();
     // An unreadable (loose) profile file: every environment's entries of the profile are cleared.
@@ -648,7 +650,7 @@ describe("limits", () => {
     expect(await runLimits(["set", "--per-call", "0.5", "--per-day", "5", "--confirm-above", "off", "--providers", "off"], t)).toBe(0);
     expect(readLimits(ref())).toMatchObject({ confirmAbove: null, providers: null });
     const st = lstatSync(join(dir, profileFile("default", "limits")));
-    expect(st.mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") expect(st.mode & 0o777).toBe(0o600);
   });
 
   it.each([
@@ -712,7 +714,7 @@ describe("dev allow", () => {
     expect(await runDevAllow([E2E_MCP], deps({ isTTY: true }))).toBe(0);
     expect(confirmAsked).toHaveLength(1);
     expect(readDevOrigins(dir)).toEqual([E2E_MCP]);
-    expect(lstatSync(join(dir, "dev-origins.json")).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") expect(lstatSync(join(dir, "dev-origins.json")).mode & 0o777).toBe(0o600);
   });
 
   it("writes nothing on a no (exit 0), and refuses origins of no built-in dev entry", async () => {
@@ -754,7 +756,7 @@ describe("settings (env-proxy opt-in)", () => {
     expect(await runSettings(["set", "--allow-env-proxy", "on"], deps({ isTTY: true }))).toBe(0);
     expect(confirmAsked).toHaveLength(1);
     const path = join(dir, profileFile("default", "settings"));
-    expect(lstatSync(path).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") expect(lstatSync(path).mode & 0o777).toBe(0o600);
     // The exact shape `serve` reads (Task 2.8 environment.ts): {"version":1,"allowEnvProxy":true}.
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ version: 1, allowEnvProxy: true });
     expect(readSettings(ref()).allowEnvProxy).toBe(true);

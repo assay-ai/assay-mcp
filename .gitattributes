@@ -1,0 +1,2 @@
+# Checked-in text is LF everywhere: tests compare README, vectors and configs byte for byte.
+* text=auto eol=lf
