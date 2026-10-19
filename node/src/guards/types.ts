@@ -77,7 +77,7 @@ export interface BuiltInNetwork {
 }
 
 /**
- * `x402/price` for the forwarded tool (`forwardedCall.tool`, never a name taken from the
+ * `assay/price` for the forwarded tool (`forwardedCall.tool`, never a name taken from the
  * requirement) in the same exchange (G3). `maxAmount` is in atomic units of `asset`.
  */
 export interface Quote {
