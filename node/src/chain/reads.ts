@@ -3,7 +3,7 @@
  * §7.15, M6).
  *
  * - Three views only, with the backend's ABI: `delegationOf(payer, delegate)`,
- *   `effectiveCapsOf(payer, delegate)` and `escrowOf(payer)` (`assay-evm/src/X402Escrow.sol`).
+ *   `effectiveCapsOf(payer, delegate)` and `escrowOf(payer)` (`assay-evm/src/AssayEscrow.sol`).
  *   Each cap is the lower of the effective envelope and the current value: strictest wins.
  * - The escrow and the RPCs come from the selected entry of `deployments.json`, never from the
  *   server or from code.
@@ -33,7 +33,7 @@ export const MAX_BLOCK_SPREAD = 5n;
 /** Cached entries per reader; the oldest is dropped beyond this. */
 const MAX_CACHE_ENTRIES = 64;
 
-/** The two escrow views, verbatim from the backend's `X402_ESCROW_ABI`. */
+/** The two escrow views, verbatim from the backend's `ASSAY_ESCROW_ABI`. */
 export const ESCROW_READ_ABI = parseAbi([
   "struct Delegation { uint64 maxVoucherAmount; uint64 maxPerWindow; uint64 spentInWindow; uint64 windowStartedAt; uint64 validUntil; uint32 listPosition; bool revoked; }",
   "struct Escrow { uint128 balance; uint64 seqHigh; uint64 authNonce; uint64 maxVoucherAmount; uint64 maxPerWindow; uint64 spentInWindow; uint64 windowStartedAt; uint64 withdrawRequested; uint64 withdrawAvailableAt; uint128 totalRedeemed; uint128 totalWithdrawn; uint128 totalFunded; }",

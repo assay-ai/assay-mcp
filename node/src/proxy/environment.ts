@@ -1,5 +1,5 @@
-import { profileFile, readPrivateFile } from "../profile/paths.js";
 import type { ProfileRef } from "../profile/lock.js";
+import { readSettings } from "../profile/settings.js";
 
 /**
  * Environment checks at `serve` start (ruling 2.4-N1, spec §11 T13).
@@ -28,16 +28,13 @@ export interface ProfileSettings {
 }
 
 /**
- * The profile's settings file. Missing, unreadable, loose (not 0600, wrong owner, symlink)
- * or malformed reads as "nothing allowed": the check fails closed.
+ * The profile's settings file, through the one parser `settings set` and `settings` use
+ * (`profile/settings.ts` `readSettings`, review R1-N2). Missing, unreadable, loose (not 0600,
+ * wrong owner, symlink) or malformed reads as "nothing allowed": the check fails closed.
  */
 export function readProfileSettings(profile: ProfileRef): ProfileSettings {
   try {
-    const text = readPrivateFile(profile.dir, profileFile(profile.name, "settings"));
-    if (text === null) return { allowEnvProxy: false };
-    const v = JSON.parse(text) as Record<string, unknown> | null;
-    if (typeof v !== "object" || v === null || v.version !== 1) return { allowEnvProxy: false };
-    return { allowEnvProxy: v.allowEnvProxy === true };
+    return { allowEnvProxy: readSettings(profile).allowEnvProxy };
   } catch {
     return { allowEnvProxy: false };
   }

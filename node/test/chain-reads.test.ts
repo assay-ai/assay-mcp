@@ -19,7 +19,7 @@ const PAYER = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
 const DELEGATE = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
 const NETWORK = "eip155:46630";
 const CHAIN_ID_HEX = "0xb626"; // 46630
-const ESCROW = "0x1D2625efD87c2fc10b8563f3F0890072845Fcf41";
+const ESCROW = "0x1eDb0E45747cfEf778bDB4f4418319efc0DD814f";
 
 const ABI = parseAbi([
   "struct Delegation { uint64 maxVoucherAmount; uint64 maxPerWindow; uint64 spentInWindow; uint64 windowStartedAt; uint64 validUntil; uint32 listPosition; bool revoked; }",

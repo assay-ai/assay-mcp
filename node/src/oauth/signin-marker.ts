@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { unlinkSync } from "node:fs";
 import type { LockHandle, ProfileRef } from "../profile/lock.js";
-import { profileFile, readPrivateFile, safeJoin, writePrivateFile } from "../profile/paths.js";
+import { deletePrivateFile, profileFile, readPrivateFile, safeJoin, writePrivateFile } from "../profile/paths.js";
 
 /**
  * The "sign-in in progress" marker, `profiles/{profile}.signin.json` (0600):
@@ -102,4 +102,20 @@ export function releaseMarker(profile: ProfileRef, token: string): void {
   } catch {
     // already gone; a leftover expires on its own
   }
+}
+
+/**
+ * Logout's cleanup (F7, review R1-N3), under the profile lock: removes the marker when it is
+ * this process's or its pid no longer runs. A marker of another live process is left alone:
+ * that sign-in is pending in a browser, its owner releases the marker, and if the user approves
+ * it the profile is signed in again, which is what the user asked for there. An unreadable
+ * marker is never live, so it is left to expire. Returns whether a marker was removed.
+ */
+export function clearDeadMarker(profile: ProfileRef, lock: LockHandle, alive: (pid: number) => boolean = pidAlive): boolean {
+  lock.assertHeld();
+  const current = readMarker(profile);
+  if (current === null) return false;
+  if (current.pid !== process.pid && alive(current.pid)) return false;
+  lock.assertHeld();
+  return deletePrivateFile(profile.dir, rel(profile));
 }
