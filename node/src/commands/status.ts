@@ -8,7 +8,7 @@
  */
 import { EXIT_OK } from "../exit-codes.js";
 import { SPEND_WINDOW_SECONDS } from "../guards/guards.js";
-import { readCapped, REQUEST_TIMEOUT_MS, requestSignal } from "../oauth/endpoints.js";
+import { MAX_BODY_BYTES, readCapped, REQUEST_TIMEOUT_MS, requestSignal } from "../oauth/endpoints.js";
 import { apiKey } from "../oauth/api-key.js";
 import { pinnedFetch } from "../net/fetch.js";
 import type { ResolvedDeployment } from "../profile/deployments.js";
@@ -43,16 +43,17 @@ export interface PaidCallsView {
 /** `GET {API}/agents/me/delegate` → `paidCalls.status` (UX only); null on any failure. */
 async function paidCallsFromApi(deployment: ResolvedDeployment, bearer: string, timeoutMs: number): Promise<PaidCallsView | null> {
   try {
+    const signal = requestSignal(timeoutMs);
     const res = await pinnedFetch(deployment, `${deployment.api.replace(/\/+$/, "")}/agents/me/delegate`, {
       headers: { accept: "application/json" },
       bearer,
-      signal: requestSignal(timeoutMs),
+      signal,
     });
     if (res.status !== 200) {
       await res.body?.cancel().catch(() => {});
       return null;
     }
-    const text = await readCapped(res);
+    const text = await readCapped(res, MAX_BODY_BYTES, signal);
     if (text === null) return null;
     const status = (JSON.parse(text) as { data?: { paidCalls?: { status?: unknown } | null } } | null)?.data?.paidCalls?.status;
     return status === "NONE" || status === "ACTIVE" || status === "EXPIRED" || status === "REVOKED" ? { status } : null;

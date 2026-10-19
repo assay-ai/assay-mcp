@@ -244,6 +244,21 @@ describe.runIf(realKeychain || expectFailure !== undefined)("real OS keychain (g
     expect(await runProbe()).toEqual({ code: 0, stderr: "" });
   });
 
+  // Task 2.17: each secret the proxy keeps, at its real shape and length (an access and a
+  // refresh token, a delegate private key), round-trips on every OS store, under the smoke-test
+  // service only. A store that truncated or re-encoded a value would fail here.
+  it.runIf(realKeychain)("every secret kind round-trips at its real shape (smoke-test service)", async () => {
+    const shaped: Record<(typeof SECRET_KINDS)[number], string> = {
+      access_token: `assay_at_${randomBytes(32).toString("base64url")}`,
+      refresh_token: `assay_rt_${randomBytes(32).toString("base64url")}`,
+      delegate_key: `0x${randomBytes(32).toString("hex")}`,
+    };
+    const run = randomBytes(4).toString("hex");
+    for (const kind of SECRET_KINDS) {
+      expect(await realKeychainSmokeTest(`smoke-${run}@e2e/${kind}`, shaped[kind]), kind).toBe(true);
+    }
+  });
+
   it.runIf(expectFailure === "unavailable")("no keychain → exit 1 with the exact text (real probe)", async () => {
     expect(await runProbe()).toEqual({ code: 1, stderr: `${NO_KEYCHAIN_MESSAGE}\n` });
   });

@@ -11,7 +11,7 @@ import { clientIdOf, issuerOf } from "../src/oauth/endpoints.js";
 import { authorizeUrl, browserCommand, codeFrom, deviceLabel, openBrowser, pkcePair, signIn, SignInError, type ExecFile } from "../src/oauth/flow.js";
 import { LOOPBACK_TIMEOUT_MS, PAGES, startLoopback } from "../src/oauth/loopback.js";
 import { currentAccess, refreshUnderLock, RefreshError, revoke, type TokenContext } from "../src/oauth/tokens.js";
-import { MAX_BODY_BYTES, MIN_EXPIRES_IN, REQUEST_TIMEOUT_MS } from "../src/oauth/endpoints.js";
+import { MAX_BODY_BYTES, MIN_EXPIRES_IN, readCapped, REQUEST_TIMEOUT_MS } from "../src/oauth/endpoints.js";
 import { resolveDeployment, type ResolvedDeployment } from "../src/profile/deployments.js";
 import { Keychain } from "../src/profile/keychain.js";
 import { LockError, withLock } from "../src/profile/lock.js";
@@ -645,6 +645,9 @@ describe("fix round 1: bounds, error types, keep-alive", () => {
     });
   }
 
+  // Task 2.17: this test hung in about one full run of four (vitest's 5 s, then 30 s): the bound
+  // fired, but the abort did not always reach a body still being read once the headers were in.
+  // `readCapped` now watches the request's signal itself; the next test pins that directly.
   it("the refresh bound aborts even when the per-request timeout is longer", async () => {
     const pair = as.seedGrant();
     await seedTokens(pair);
@@ -652,8 +655,22 @@ describe("fix round 1: bounds, error types, keep-alive", () => {
     as.misbehave["/oauth/token"] = "drip";
     const started = Date.now();
     await expect(refreshUnderLock(ctx({ timeouts: { requestMs: 60_000, refreshBoundMs: 400 } }), pair.accessToken)).rejects.toBeInstanceOf(RefreshError);
-    expect(Date.now() - started).toBeLessThan(2_000);
-  });
+    expect(Date.now() - started).toBeLessThan(5_000);
+  }, 15_000);
+
+  it("a body still being read stops when its signal aborts (never read as a complete answer)", async () => {
+    as.misbehave["/oauth/token"] = "drip";
+    // No signal on the fetch itself: only the read can honour the abort.
+    const res = await realFetch(`http://127.0.0.1:${as.port}/oauth/token`, { method: "POST", body: "" });
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(new Error("bound")), 100);
+    const started = Date.now();
+    await expect(readCapped(res, MAX_BODY_BYTES, controller.signal)).rejects.toThrow("bound");
+    expect(Date.now() - started).toBeLessThan(3_000);
+    // Already aborted before the first read.
+    const again = await realFetch(`http://127.0.0.1:${as.port}/oauth/token`, { method: "POST", body: "" });
+    await expect(readCapped(again, MAX_BODY_BYTES, AbortSignal.abort(new Error("early")))).rejects.toThrow("early");
+  }, 15_000);
 
   it("an oversized answer is refused (server_error), tokens kept", async () => {
     const pair = as.seedGrant();

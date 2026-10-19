@@ -1,7 +1,7 @@
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { McpError, ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
@@ -45,7 +45,7 @@ beforeEach(async () => {
   mcp = new FakeMcp(as);
   await mcp.start();
   dir = mkdtempSync(join(tmpdir(), "assay-mcp-proxy-"));
-  keyringFile = join(dir, "..", `${dir.split("/").pop()}-keyring.json`);
+  keyringFile = join(dir, "..", `${basename(dir)}-keyring.json`);
   addDevOrigin(dir, E2E_MCP);
 });
 

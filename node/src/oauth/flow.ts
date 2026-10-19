@@ -13,6 +13,7 @@ import {
   clientIdOf,
   endpoint,
   issuerOf,
+  MAX_BODY_BYTES,
   postForm,
   readCapped,
   readTokenAnswer,
@@ -276,17 +277,18 @@ export async function identifyCredential(
   options: { signal?: AbortSignal | undefined; timeoutMs?: number | undefined } = {},
 ): Promise<string | null> {
   try {
+    const signal = requestSignal(options.timeoutMs ?? REQUEST_TIMEOUT_MS, options.signal);
     const res = await pinnedFetch(deployment, `${deployment.api.replace(/\/+$/, "")}/agents/me/delegate`, {
       headers: { accept: "application/json" },
       bearer: accessToken,
       log,
-      signal: requestSignal(options.timeoutMs ?? REQUEST_TIMEOUT_MS, options.signal),
+      signal,
     });
     if (res.status !== 200) {
       await res.body?.cancel().catch(() => {});
       return null;
     }
-    const text = await readCapped(res);
+    const text = await readCapped(res, MAX_BODY_BYTES, signal);
     if (text === null) return null;
     const body = JSON.parse(text) as { data?: { credentialId?: unknown } } | null;
     const id = body?.data?.credentialId;
@@ -445,6 +447,7 @@ async function exchange(
 ): Promise<IssuedTokens> {
   let answer;
   try {
+    const exchangeSignal = requestSignal(timeoutMs ?? REQUEST_TIMEOUT_MS, lock.signal);
     const res = await postForm(
       deployment,
       "token",
@@ -456,9 +459,9 @@ async function exchange(
         code_verifier: input.verifier,
         resource: resourceOf(deployment),
       },
-      { signal: lock.signal, log, timeoutMs },
+      { signal: exchangeSignal, log, timeoutMs },
     );
-    answer = await readTokenAnswer(res, nowSeconds());
+    answer = await readTokenAnswer(res, nowSeconds(), exchangeSignal);
   } catch (err) {
     lock.assertHeld();
     log.warn("code exchange failed", { error: err instanceof Error ? err.name : "error" });

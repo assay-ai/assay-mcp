@@ -1,7 +1,7 @@
 import { getAddress, type Address, type LocalAccount } from "viem";
 import { parseCaip10, type Environment } from "../deployments.js";
 import { silentLogger, type Logger } from "../log/logger.js";
-import { readCapped, requestSignal } from "../oauth/endpoints.js";
+import { MAX_BODY_BYTES, readCapped, requestSignal } from "../oauth/endpoints.js";
 import { checkBindingChallenge, type DelegateBindingTypedData } from "../signer/binding.js";
 import { dateHeaderOffset, issuedAt } from "../signer/clock.js";
 import { SignerRefusal } from "../signer/errors.js";
@@ -63,13 +63,14 @@ export async function apiRequest(
   log: Logger = silentLogger,
 ): Promise<{ body: unknown; date: string | null } | null> {
   try {
+    const signal = requestSignal(API_TIMEOUT_MS);
     const res = await fetch(`${apiBase.replace(/\/+$/, "")}${path}`, {
       method,
       headers: { accept: "application/json", ...(body !== undefined ? { "content-type": "application/json" } : {}) },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
       bearer,
       log,
-      signal: requestSignal(API_TIMEOUT_MS),
+      signal,
     });
     const date = res.headers.get("date");
     if (res.status < 200 || res.status > 299) {
@@ -77,7 +78,7 @@ export async function apiRequest(
       log.info("API refused", { path: path.split("/").slice(0, 4).join("/"), status: res.status });
       return null;
     }
-    const text = await readCapped(res);
+    const text = await readCapped(res, MAX_BODY_BYTES, signal);
     if (text === null) return null;
     return { body: text === "" ? null : (JSON.parse(text) as unknown), date };
   } catch {

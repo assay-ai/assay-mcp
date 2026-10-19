@@ -16,7 +16,18 @@ export class FileKeyring implements KeyringBackend {
   private write(entries: Record<string, string>): void {
     const tmp = `${this.file}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
     writeFileSync(tmp, JSON.stringify(entries), { mode: 0o600 });
-    renameSync(tmp, this.file);
+    // Windows refuses a rename over a file another process has open for a moment (EPERM,
+    // EACCES, EBUSY); the readers only hold it briefly, so retry a few times.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        renameSync(tmp, this.file);
+        return;
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (attempt >= 50 || (code !== "EPERM" && code !== "EACCES" && code !== "EBUSY")) throw err;
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+      }
+    }
   }
   async get(service: string, account: string): Promise<string | null> {
     return this.read()[`${service}/${account}`] ?? null;

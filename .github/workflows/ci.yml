@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       backend_sha:
-        description: "examples job: the assay-backend commit to test against (full SHA)"
+        description: "integration and examples jobs: the assay-backend commit to test against (full SHA)"
         required: false
         type: string
 
@@ -253,4 +253,97 @@ jobs:
         run: docker compose logs backend | tail -300
       - name: Stop
         if: always() && env.HAS_SECRETS == 'true'
+        run: docker compose down -v
+
+  integration:
+    # Spec §12.1 through the proxy (Task 2.17): node/test/integration/equivalence.test.ts and the
+    # OAuth e2e test, against the Part 1+2 backend built from the commit below, with Postgres
+    # and Redis (node/test/integration/backend.compose.yml). The backend repository is private:
+    # the job needs a read-only token in the ASSAY_BACKEND_READ_TOKEN secret and is skipped
+    # without one (fork pull requests). The paid path needs an anvil fork with staked providers
+    # and skips here (see the test's header).
+    name: integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      # The backend under test: assay-backend feat/mcp-oauth, pinned by full commit SHA.
+      BACKEND_SHA: ${{ inputs.backend_sha || 'e91dc15e74aa617f42ddd78931b6c249470b6172' }}
+      BACKEND_DIR: ${{ github.workspace }}/backend
+      COMPOSE_FILE: node/test/integration/backend.compose.yml
+      # A person's session from the backend's own demo seed (scripts/mcp/seed/credentials.json),
+      # on the backend's default chain.
+      HUMAN_TOKEN: mcp_demo_token_broke
+      HAS_BACKEND_TOKEN: ${{ secrets.ASSAY_BACKEND_READ_TOKEN != '' }}
+    steps:
+      - name: Backend token present
+        if: env.HAS_BACKEND_TOKEN != 'true'
+        run: echo "::notice::ASSAY_BACKEND_READ_TOKEN is not set; the integration job is skipped."
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.HAS_BACKEND_TOKEN == 'true'
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.HAS_BACKEND_TOKEN == 'true'
+        with:
+          repository: assay-ai/assay-backend
+          ref: ${{ env.BACKEND_SHA }}
+          token: ${{ secrets.ASSAY_BACKEND_READ_TOKEN }}
+          path: backend
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: env.HAS_BACKEND_TOKEN == 'true'
+        with:
+          node-version: "22"
+      - run: npm ci --ignore-scripts
+        if: env.HAS_BACKEND_TOKEN == 'true'
+      - name: Start Postgres, Redis and the backend
+        if: env.HAS_BACKEND_TOKEN == 'true'
+        shell: bash
+        run: |
+          # Per-run test secrets, never stored. The later compose steps (seed, SQL, logs, stop)
+          # interpolate the same file, so the values go to GITHUB_ENV, masked.
+          OAUTH_REQUEST_COOKIE_SECRET="$(openssl rand -hex 32)"
+          KEK="$(openssl rand -hex 32)"
+          SIGNING="$(openssl rand -hex 32)"
+          echo "::add-mask::$OAUTH_REQUEST_COOKIE_SECRET"
+          echo "::add-mask::$KEK"
+          echo "::add-mask::$SIGNING"
+          CREDENTIAL_VAULT_KEKS="[{\"keyId\":\"ci-1\",\"key\":\"$KEK\"}]"
+          PROVIDER_REQUEST_SIGNING_KEYS="[{\"keyId\":\"ci-1\",\"secretKey\":\"$SIGNING\"}]"
+          {
+            echo "OAUTH_REQUEST_COOKIE_SECRET=$OAUTH_REQUEST_COOKIE_SECRET"
+            echo "CREDENTIAL_VAULT_KEKS=$CREDENTIAL_VAULT_KEKS"
+            echo "PROVIDER_REQUEST_SIGNING_KEYS=$PROVIDER_REQUEST_SIGNING_KEYS"
+          } >> "$GITHUB_ENV"
+          export OAUTH_REQUEST_COOKIE_SECRET CREDENTIAL_VAULT_KEKS PROVIDER_REQUEST_SIGNING_KEYS
+          docker compose up -d --wait postgres redis
+          docker compose up -d --build backend
+          for i in $(seq 1 120); do
+            if curl -sf -o /dev/null http://localhost:3000/api/v1/chains && curl -sf -o /dev/null http://localhost:3200/.well-known/oauth-protected-resource; then
+              echo "backend up"; break
+            fi
+            sleep 5
+          done
+          curl -sf -o /dev/null http://localhost:3200/.well-known/oauth-protected-resource || { docker compose logs backend | tail -100; exit 1; }
+      - name: Seed the demo identities, verification policies and catalogue bindings
+        if: env.HAS_BACKEND_TOKEN == 'true'
+        run: |
+          node node/test/integration/seed-sql.mjs "$BACKEND_DIR/scripts/mcp/seed/credentials.json" "$HUMAN_TOKEN" | docker compose exec -T postgres psql -q -U postgres -d assay_mcp_it -v ON_ERROR_STOP=1
+          docker compose exec -T backend yarn -s mcp:policies
+          docker compose exec -T backend yarn -s demo:seed
+      - name: Equivalence through the proxy, and OAuth e2e
+        if: env.HAS_BACKEND_TOKEN == 'true'
+        working-directory: node
+        env:
+          ASSAY_MCP_E2E: "1"
+          ASSAY_MCP_E2E_HUMAN_TOKEN: ${{ env.HUMAN_TOKEN }}
+          ASSAY_MCP_E2E_VERBOSE: "1"
+          # The Pause rows change the agent and organization rows directly, as an operator would.
+          ASSAY_MCP_E2E_SQL: docker compose -f ${{ github.workspace }}/node/test/integration/backend.compose.yml exec -T postgres psql -q -U postgres -d assay_mcp_it -v ON_ERROR_STOP=1
+        run: npx vitest run test/integration test/oauth-e2e.test.ts
+      - name: Backend logs
+        if: failure() && env.HAS_BACKEND_TOKEN == 'true'
+        run: docker compose logs backend | tail -300
+      - name: Stop
+        if: always() && env.HAS_BACKEND_TOKEN == 'true'
         run: docker compose down -v

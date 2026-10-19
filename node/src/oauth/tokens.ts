@@ -2,7 +2,7 @@ import { silentLogger, type Logger } from "../log/logger.js";
 import type { ResolvedDeployment } from "../profile/deployments.js";
 import type { Keychain } from "../profile/keychain.js";
 import { LockError, withLock, type LockHandle, type LockOptions, type ProfileRef } from "../profile/lock.js";
-import { clientIdOf, postForm, readTokenAnswer, REQUEST_TIMEOUT_MS } from "./endpoints.js";
+import { clientIdOf, postForm, readTokenAnswer, REQUEST_TIMEOUT_MS, requestSignal } from "./endpoints.js";
 
 /**
  * Access tokens, refresh and revoke (spec §6.6 F2, §7.6 "401", §7.15, §8.4; R-MU-1, R-MU-6, R-MU-8).
@@ -98,13 +98,10 @@ export async function refreshUnderLock(ctx: TokenContext, failedToken: string | 
       lock.assertHeld();
       let answer;
       try {
-        const res = await postForm(
-          deployment,
-          "token",
-          { grant_type: "refresh_token", refresh_token: refreshToken, client_id: clientIdOf(deployment) },
-          { signal: AbortSignal.any([lock.signal, bound]), log, timeoutMs: ctx.timeouts?.requestMs ?? REQUEST_TIMEOUT_MS },
-        );
-        answer = await readTokenAnswer(res, now(ctx));
+        const timeoutMs = ctx.timeouts?.requestMs ?? REQUEST_TIMEOUT_MS;
+        const signal = requestSignal(timeoutMs, lock.signal, bound);
+        const res = await postForm(deployment, "token", { grant_type: "refresh_token", refresh_token: refreshToken, client_id: clientIdOf(deployment) }, { signal, log, timeoutMs });
+        answer = await readTokenAnswer(res, now(ctx), signal);
       } catch (err) {
         lock.assertHeld(); // an abort because the lock was lost surfaces as LOCK_LOST
         log.warn("refresh failed", { error: err instanceof Error ? err.name : "error" });
