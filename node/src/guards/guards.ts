@@ -1,5 +1,6 @@
 import { getAddress, isAddress } from "viem";
 import { parseCaip10, type Deployment } from "../deployments.js";
+import { MAX_CLOCK_CORRECTION_SECONDS } from "../signer/clock.js";
 import type {
   BuiltInNetwork,
   Confirmation,
@@ -32,6 +33,8 @@ export const GUARD_ORDER: readonly GuardId[] = ["G1", "G2", "G3", "G4", "G5", "G
 export const FORWARDED_CALL_MAX_AGE_SECONDS = 120;
 /** G4: the chain is read before the first voucher and at most every 10 minutes (§7.8). */
 export const CHAIN_READ_MAX_AGE_SECONDS = 600;
+/** G4: how far in the future a read may be dated: the clock-skew clamp (§7.7, T20). */
+export const CHAIN_READ_MAX_FUTURE_SECONDS = MAX_CLOCK_CORRECTION_SECONDS;
 /** G7: the rolling window of `perDay`. */
 export const SPEND_WINDOW_SECONDS = 86_400;
 /** G9: a `seq` at or above this would let one voucher void every later one (T17). */
@@ -49,6 +52,7 @@ const MAX_UINT64 = 2n ** 64n - 1n;
 const CANONICAL_UINT = /^(0|[1-9][0-9]*)$/;
 const CAIP2_EIP155 = /^eip155:([1-9][0-9]*)$/;
 const CAIP19_ERC20_ANY_CASE = /^eip155:([1-9][0-9]*)\/erc20:(0x[0-9a-fA-F]{40})$/;
+const BARE_ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const LOCAL_ADDRESS = /^(?:eip155:([1-9][0-9]*):)?(0x[0-9a-fA-F]{40})$/;
 const REQUEST_HASH = /^sha256:[0-9a-fA-F]{64}$/;
 const TOOL_CALL_RESOURCE = /^\/mcp\/tools\/[A-Za-z0-9_-]+$/;
@@ -103,6 +107,12 @@ function localAccount(value: unknown, chainId: number): string | null {
   if (!m || !isAddress(m[2]!, { strict: false })) return null;
   if (m[1] !== undefined && Number(m[1]) !== chainId) return null;
   return getAddress(m[2]!);
+}
+
+/** A bare `0x` address that is already checksummed, as the chain module returns it. */
+function checksummedAddress(value: unknown): string | null {
+  if (typeof value !== "string" || !BARE_ADDRESS.test(value) || !isAddress(value, { strict: false })) return null;
+  return getAddress(value) === value ? value : null;
 }
 
 /** A CAIP-19 erc20 asset as `{chainId, lower-case address}`, or null. */
@@ -229,12 +239,12 @@ function g4(ctx: GuardContext, c: Omit<Checked, "payer">): Refusal | string {
   }
   const validUntil = uint(chain.validUntil, MAX_UINT64, true);
   const chainPayer = localAccount(chain.payer, c.chainId);
-  const chainDelegate = localAccount(chain.delegate, c.chainId);
+  const chainDelegate = checksummedAddress(chain.delegate);
   const readAt = seconds(chain.readAt);
   if (validUntil === null || chainPayer === null || chainDelegate === null || readAt === null || typeof chain.active !== "boolean") {
     return refuse("G4", "G4_NO_CHAIN_READ", "the payment key's grant could not be read from the chain");
   }
-  if (readAt > c.now || c.now - readAt > CHAIN_READ_MAX_AGE_SECONDS) {
+  if (readAt - c.now > CHAIN_READ_MAX_FUTURE_SECONDS || c.now - readAt > CHAIN_READ_MAX_AGE_SECONDS) {
     return refuse("G4", "G4_STALE_READ", "the chain read is too old");
   }
   // An unreadable local key is G5's refusal; here only a readable, different key refuses.

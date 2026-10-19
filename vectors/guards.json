@@ -935,7 +935,7 @@
     },
     {
       "guard": "G4",
-      "name": "chain read dated in the future",
+      "name": "chain read dated 120 s ahead (the clock-skew clamp)",
       "changes": [
         {
           "op": "set",
@@ -943,13 +943,68 @@
             "chain",
             "readAt"
           ],
-          "value": 1785999801
+          "value": 1785999920
+        }
+      ],
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "guard": "G4",
+      "name": "chain read dated 121 s ahead",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "chain",
+            "readAt"
+          ],
+          "value": 1785999921
         }
       ],
       "expect": {
         "ok": false,
         "guard": "G4",
         "code": "G4_STALE_READ"
+      }
+    },
+    {
+      "guard": "G4",
+      "name": "chain delegate not checksummed",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "chain",
+            "delegate"
+          ],
+          "value": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+        }
+      ],
+      "expect": {
+        "ok": false,
+        "guard": "G4",
+        "code": "G4_NO_CHAIN_READ"
+      }
+    },
+    {
+      "guard": "G4",
+      "name": "chain delegate as CAIP-10",
+      "changes": [
+        {
+          "op": "set",
+          "path": [
+            "chain",
+            "delegate"
+          ],
+          "value": "eip155:46630:0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+        }
+      ],
+      "expect": {
+        "ok": false,
+        "guard": "G4",
+        "code": "G4_NO_CHAIN_READ"
       }
     },
     {

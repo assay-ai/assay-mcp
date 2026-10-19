@@ -9,6 +9,8 @@
  * checksummed CAIP-10 accounts on the requirement's network.
  */
 
+import type { ChainState } from "../chain/reads.js";
+
 /** The guard that refused. */
 export type GuardId = "G1" | "G2" | "G3" | "G4" | "G5" | "G6" | "G7" | "G8" | "G9" | "G10" | "G11" | "G12";
 
@@ -85,25 +87,11 @@ export interface Quote {
 }
 
 /**
- * What the chain says (G4, G6), read through the built-in RPCs, which must agree. The read is
- * `delegationOf(payer, delegate)` and `effectiveCapsOf(payer, delegate)`.
+ * What the chain says (G4, G6): Task 2.6's agreed read (`chain/reads.ts` `toGuardChain`), for
+ * `delegationOf(payer, delegate)` and `effectiveCapsOf(payer, delegate)`. One type, owned by the
+ * chain module, so the proxy passes it to the guards without a cast.
  */
-export interface ChainState {
-  /** The payer the delegation was read for. */
-  payer: string;
-  /** The key the delegation was read for; must be the local key. */
-  delegate: string;
-  /** When the read was made, Unix seconds on the same clock as `nowSeconds`; at most 600 s old. */
-  readAt: number;
-  /** `effectiveCapsOf(...).delegateMaxVoucherAmount`, atomic units. */
-  delegateMaxVoucherAmount: string;
-  /** `effectiveCapsOf(...).maxVoucherAmount`, atomic units. */
-  maxVoucherAmount: string;
-  /** The grant exists and is not revoked. */
-  active: boolean;
-  /** `delegationOf(...).validUntil`, Unix seconds. */
-  validUntil: string | number;
-}
+export type { ChainState } from "../chain/reads.js";
 
 /** `profiles/{profile}.limits.json` (terminal only). Dollar values are decimal strings. */
 export interface LocalLimits {
