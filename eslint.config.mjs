@@ -19,6 +19,24 @@ export default tseslint.config(
     rules: { "no-console": "error" },
   },
   {
+    // `*.internal.*` signer modules (fixture doors, unbranded builders) stay inside the signer.
+    files: ["node/src/**/*.ts"],
+    ignores: ["node/src/signer/**"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              regex: "(^|/)[^/]*\\.internal(\\.[cm]?[jt]s)?$",
+              message: "Signer internals may be imported only from inside src/signer.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     files: ["scripts/**/*.mjs"],
     rules: { "no-console": "off" },
   },

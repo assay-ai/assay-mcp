@@ -151,7 +151,18 @@ export function devModeWarning(env: Environment): string {
   );
 }
 
-/** The built-in table bundled into `dist/cli.js`. It is the only source of hosts and RPCs. */
+function deepFreeze<T>(value: T): T {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const child of Object.values(value)) deepFreeze(child);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+/** Frozen once at load: nothing in the process can change what the signer signs for. */
+const BUILT_IN: Deployments = deepFreeze(builtIn as Deployments);
+
+/** The built-in table bundled into `dist/cli.js`. It is the only source of hosts and RPCs. Deep-frozen. */
 export function builtInDeployments(): Deployments {
-  return builtIn as Deployments;
+  return BUILT_IN;
 }
