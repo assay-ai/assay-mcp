@@ -21,17 +21,21 @@ export const REFUSAL_CODES = {
   G1_RAIL: "G1",
   G1_SCHEME: "G1",
   G1_NOT_FORWARDED: "G1",
+  G1_FORWARD_TOO_OLD: "G1",
   G2_NETWORK: "G2",
   G2_PAY_TO: "G2",
   G2_ASSET: "G2",
   G2_DECIMALS: "G2",
   G2_AMOUNT: "G2",
   G3_NO_QUOTE: "G3",
+  G3_QUOTE_ASSET: "G3",
   G3_ABOVE_QUOTE: "G3",
   G4_NO_CHAIN_READ: "G4",
   G4_PAYER_INVALID: "G4",
   G4_PAYER_CHANGED: "G4",
   G4_NOT_DELEGATED: "G4",
+  G4_OTHER_KEY: "G4",
+  G4_STALE_READ: "G4",
   G4_INACTIVE: "G4",
   G4_EXPIRED: "G4",
   G5_LOCAL_KEY_INVALID: "G5",
@@ -43,8 +47,10 @@ export const REFUSAL_CODES = {
   G6_ESCROW_CAP: "G6",
   G7_LIMITS_UNREADABLE: "G7",
   G7_PER_CALL: "G7",
+  G7_STATE_UNREADABLE: "G7",
   G7_PER_DAY: "G7",
   G7_CONFIRMATION_REQUIRED: "G7",
+  G7_CONFIRMATION_MISMATCH: "G7",
   G8_PROVIDER_INVALID: "G8",
   G8_PROVIDERS_UNREADABLE: "G8",
   G8_PROVIDER_NOT_ALLOWED: "G8",
@@ -55,6 +61,7 @@ export const REFUSAL_CODES = {
   G11_URL_NOT_PAID: "G11",
   G12_DEBT_OR_SEQ_ENDPOINT: "G12",
   G12_NOT_A_TOOL_CALL: "G12",
+  G12_OTHER_TOOL: "G12",
 } as const satisfies Record<string, GuardId>;
 
 export type RefusalCode = keyof typeof REFUSAL_CODES;
@@ -67,18 +74,27 @@ export interface BuiltInNetwork {
   decimals: number;
 }
 
-/** `x402/price` for this tool in the same exchange (G3); `maxAmount` in atomic units. */
+/**
+ * `x402/price` for the forwarded tool (`forwardedCall.tool`, never a name taken from the
+ * requirement) in the same exchange (G3). `maxAmount` is in atomic units of `asset`.
+ */
 export interface Quote {
   maxAmount: string;
+  /** CAIP-19; must be the requirement's asset. */
+  asset: string;
 }
 
 /**
- * What the chain says (G4, G6), read through the built-in RPCs, which must agree. The read is for
- * `delegationOf(payer, localKey)` and `effectiveCapsOf(payer, localKey)`.
+ * What the chain says (G4, G6), read through the built-in RPCs, which must agree. The read is
+ * `delegationOf(payer, delegate)` and `effectiveCapsOf(payer, delegate)`.
  */
 export interface ChainState {
   /** The payer the delegation was read for. */
   payer: string;
+  /** The key the delegation was read for; must be the local key. */
+  delegate: string;
+  /** When the read was made, Unix seconds on the same clock as `nowSeconds`; at most 600 s old. */
+  readAt: number;
   /** `effectiveCapsOf(...).delegateMaxVoucherAmount`, atomic units. */
   delegateMaxVoucherAmount: string;
   /** `effectiveCapsOf(...).maxVoucherAmount`, atomic units. */
@@ -109,11 +125,42 @@ export const DEFAULT_LIMITS: Readonly<LocalLimits> = Object.freeze({
   providers: null,
 });
 
+/**
+ * The `tools/call` this process forwarded, whose answer carried the requirement (G1, G12).
+ * `tool` is the original tool name the call reached (after alias mapping; on `call_tool`, the
+ * inner `name`).
+ */
+export interface ForwardedCall {
+  tool: string;
+  /** When the call was forwarded, Unix seconds on the same clock as `nowSeconds`. */
+  at: number;
+}
+
+/** One voucher in `profiles/{profile}.state.json`: when it was signed and its atomic amount. */
+export interface SignedVoucher {
+  at: number;
+  amount: string;
+}
+
+/**
+ * What the user was shown and approved through MCP elicitation (G7 `confirmAbove`). It approves
+ * only a requirement with exactly these values; build it with `confirmationFor`.
+ */
+export interface Confirmation {
+  tool: string;
+  provider: string;
+  amount: string;
+  asset: string;
+  network: string;
+  payTo: string;
+  seq: string;
+}
+
 export interface GuardContext {
   /** `_meta["x402/paymentRequired"]` as received; untrusted, so not typed. */
   requirement: unknown;
-  /** The requirement is the result of a `tools/call` this process forwarded just now (G1). */
-  forwardedJustNow: boolean;
+  /** The call this requirement answers, or `null` when there is none (G1). */
+  forwardedCall: ForwardedCall | null;
   /** The built-in entry for `requirement.network`, or `null` when the table has none (G2). */
   network: BuiltInNetwork | null;
   /** The quote for this tool (cached ≤ 60 s, or a fresh `get_tool`), or `null` (G3). */
@@ -125,15 +172,21 @@ export interface GuardContext {
   /** The payer recorded in the profile after a chain-confirmed first voucher, or `null` (G4). */
   recordedPayer: string | null;
   limits: LocalLimits;
-  /** The sum of vouchers signed in the last 24 h, atomic units, read under the profile lock (G7). */
-  spentLast24h: string;
-  /** The user confirmed this payment through MCP elicitation (G7, `confirmAbove`). */
-  confirmed: boolean;
+  /**
+   * Every voucher in `state.json`, read under the profile lock (G7). Each one signed after
+   * `nowSeconds - 86400` counts, including any dated in the future.
+   */
+  signed: SignedVoucher[];
+  /** The user's approval of this exact payment, or `null` (G7 `confirmAbove`). */
+  confirmation: Confirmation | null;
   /** The canonical URL this proxy serves (G11). */
   canonicalUrl: string;
   /** `profiles/{profile}.paid-urls.json` (G11). */
   paidUrls: string[];
-  /** Unix seconds (G4 `validUntil`). */
+  /**
+   * Unix seconds from the local clock, never the `Date`-corrected one, for G1, G4 and the G7
+   * window. (The `Date` correction applies only to the voucher's `issuedAt`.)
+   */
   nowSeconds: number;
 }
 

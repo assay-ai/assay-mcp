@@ -1,6 +1,13 @@
 import { getAddress, isAddress } from "viem";
 import { parseCaip10, type Deployment } from "../deployments.js";
-import type { BuiltInNetwork, GuardContext, GuardId, GuardResult, RefusalCode } from "./types.js";
+import type {
+  BuiltInNetwork,
+  Confirmation,
+  GuardContext,
+  GuardId,
+  GuardResult,
+  RefusalCode,
+} from "./types.js";
 
 /**
  * The local guards (spec §7.8): the checks that run before the proxy signs a voucher. A voucher
@@ -11,16 +18,29 @@ import type { BuiltInNetwork, GuardContext, GuardId, GuardResult, RefusalCode } 
  *   function never throws.
  * - The guards run in the order G1..G12 and the first refusal is returned, so every
  *   implementation reports the same guard and code for the same context (`vectors/guards.json`).
+ *   The G7 confirmation (`confirmAbove`) runs last of all: the user is asked only about a payment
+ *   every other guard has already accepted.
  * - A reason never carries an address, an amount or a URL from the server.
  */
 
 export const GUARD_ORDER: readonly GuardId[] = ["G1", "G2", "G3", "G4", "G5", "G6", "G7", "G8", "G9", "G10", "G11", "G12"];
 
+/**
+ * G1: the oldest forwarded call a requirement may answer. A call may take up to the 120 s request
+ * timeout (§7.6) before its `PAYMENT_REQUIRED` arrives.
+ */
+export const FORWARDED_CALL_MAX_AGE_SECONDS = 120;
+/** G4: the chain is read before the first voucher and at most every 10 minutes (§7.8). */
+export const CHAIN_READ_MAX_AGE_SECONDS = 600;
+/** G7: the rolling window of `perDay`. */
+export const SPEND_WINDOW_SECONDS = 86_400;
 /** G9: a `seq` at or above this would let one voucher void every later one (T17). */
 export const MAX_SEQ_EXCLUSIVE = 2n ** 53n;
 /** G10 bounds. */
 export const MAX_RESOURCE_LENGTH = 2048;
 export const MAX_TIMEOUT_SECONDS = 300;
+/** G12: the only resource a voucher may pay for is the forwarded tool's. */
+export const TOOL_RESOURCE_PREFIX = "/mcp/tools/";
 
 /** G4: the text the user sees when the server names a payer other than the recorded one. */
 export const PAYER_CHANGED_REASON = "payer changed; run assay-mcp enable-paid";
@@ -33,12 +53,15 @@ const LOCAL_ADDRESS = /^(?:eip155:([1-9][0-9]*):)?(0x[0-9a-fA-F]{40})$/;
 const REQUEST_HASH = /^sha256:[0-9a-fA-F]{64}$/;
 const TOOL_CALL_RESOURCE = /^\/mcp\/tools\/[A-Za-z0-9_-]+$/;
 const DEBT_OR_SEQ_ENDPOINT = /\/escrow\/(debts|next-seq)(\/|$)/;
+const CONFIRMATION_KEYS = ["tool", "provider", "amount", "asset", "network", "payTo", "seq"] as const;
 
 type Refusal = { ok: false; guard: GuardId; code: RefusalCode; reason: string };
 type Req = Record<string, unknown>;
 /** What earlier guards established, for the later ones. */
 interface Checked {
   req: Req;
+  tool: string;
+  now: number;
   chainId: number;
   decimals: number;
   amount: bigint;
@@ -62,6 +85,11 @@ function uint(value: unknown, max: bigint | null, allowNumber = false): bigint |
   return max !== null && n > max ? null : n;
 }
 
+/** Unix seconds: a non-negative safe integer. */
+function seconds(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
 /** A value from the server's requirement: a checksummed CAIP-10 account on `chainId`. */
 function requirementAccount(value: unknown, chainId: number): string | null {
   const parsed = typeof value === "string" ? parseCaip10(value) : null;
@@ -77,9 +105,22 @@ function localAccount(value: unknown, chainId: number): string | null {
   return getAddress(m[2]!);
 }
 
+/** A CAIP-19 erc20 asset as `{chainId, lower-case address}`, or null. */
+function erc20(value: unknown): { chain: string; address: string } | null {
+  const m = typeof value === "string" ? CAIP19_ERC20_ANY_CASE.exec(value) : null;
+  return m ? { chain: m[1]!, address: m[2]!.toLowerCase() } : null;
+}
+
+function sameAsset(a: unknown, b: unknown): boolean {
+  const x = erc20(a);
+  const y = erc20(b);
+  return x !== null && y !== null && x.chain === y.chain && x.address === y.address;
+}
+
 /**
  * Dollars (a plain decimal string such as "0.50", "5" or ".5") as atomic units of an asset with
- * `decimals` places. `null` for anything else, including more places than the asset has.
+ * `decimals` places, in exact integer arithmetic. `null` for anything else, including more places
+ * than the asset has.
  */
 export function usdToAtomic(value: string, decimals: number): bigint | null {
   if (typeof value !== "string" || !Number.isInteger(decimals) || decimals < 0) return null;
@@ -98,18 +139,45 @@ export function builtInNetwork(deployment: Deployment, id: string): BuiltInNetwo
   return { id, escrow: n.escrow, asset: n.asset, decimals: n.decimals };
 }
 
-function g1(ctx: GuardContext): Refusal | null {
+/**
+ * What the user must approve when `confirmAbove` applies: the values shown in the prompt. The
+ * proxy shows these, and passes the same object back as `confirmation` once the user approves.
+ * `null` when the context has no readable requirement or forwarded call.
+ */
+export function confirmationFor(ctx: Pick<GuardContext, "requirement" | "forwardedCall">): Confirmation | null {
+  const req = ctx.requirement;
+  const call = ctx.forwardedCall;
+  if (!isPlainObject(req) || !isPlainObject(call) || !isPlainObject(req.amount)) return null;
+  const values = {
+    tool: call.tool,
+    provider: req.provider,
+    amount: req.amount.amount,
+    asset: req.amount.asset,
+    network: req.network,
+    payTo: req.payTo,
+    seq: req.seq,
+  };
+  return Object.values(values).every((v) => typeof v === "string") ? (values as Confirmation) : null;
+}
+
+function g1(ctx: GuardContext): Refusal | { tool: string; now: number } {
   const req = ctx.requirement;
   if (!isPlainObject(req)) return refuse("G1", "G1_NOT_A_REQUIREMENT", "the payment request is not a requirement");
   if (req.rail !== "B") return refuse("G1", "G1_RAIL", "the payment request is not on rail B");
   if (req.scheme !== "voucher") return refuse("G1", "G1_SCHEME", "the payment request is not a voucher");
-  if (ctx.forwardedJustNow !== true) {
-    return refuse("G1", "G1_NOT_FORWARDED", "the payment request is not the answer to a tool call just forwarded");
+  const call = ctx.forwardedCall;
+  const at = isPlainObject(call) ? seconds(call.at) : null;
+  if (!isPlainObject(call) || typeof call.tool !== "string" || call.tool.length === 0 || at === null) {
+    return refuse("G1", "G1_NOT_FORWARDED", "the payment request is not the answer to a forwarded tool call");
   }
-  return null;
+  const now = seconds(ctx.nowSeconds);
+  if (now === null || at > now || now - at > FORWARDED_CALL_MAX_AGE_SECONDS) {
+    return refuse("G1", "G1_FORWARD_TOO_OLD", "the payment request does not answer a tool call forwarded just now");
+  }
+  return { tool: call.tool, now };
 }
 
-function g2(ctx: GuardContext, req: Req): Refusal | Omit<Checked, "payer"> {
+function g2(ctx: GuardContext, req: Req): Refusal | Pick<Checked, "chainId" | "decimals" | "amount"> {
   const net = ctx.network;
   const chain = isPlainObject(net) && typeof net.id === "string" ? CAIP2_EIP155.exec(net.id) : null;
   if (!isPlainObject(net) || !chain || req.network !== net.id) {
@@ -123,9 +191,7 @@ function g2(ctx: GuardContext, req: Req): Refusal | Omit<Checked, "payer"> {
   }
   const money = req.amount;
   if (!isPlainObject(money)) return refuse("G2", "G2_AMOUNT", "the amount is missing");
-  const want = typeof net.asset === "string" ? CAIP19_ERC20_ANY_CASE.exec(net.asset) : null;
-  const got = typeof money.asset === "string" ? CAIP19_ERC20_ANY_CASE.exec(money.asset) : null;
-  if (!want || !got || got[1] !== want[1] || got[2]!.toLowerCase() !== want[2]!.toLowerCase()) {
+  if (!sameAsset(money.asset, net.asset) || erc20(net.asset)!.chain !== chain[1]) {
     return refuse("G2", "G2_ASSET", "the asset is not the built-in asset");
   }
   if (!Number.isInteger(net.decimals) || money.decimals !== net.decimals) {
@@ -133,12 +199,16 @@ function g2(ctx: GuardContext, req: Req): Refusal | Omit<Checked, "payer"> {
   }
   const amount = uint(money.amount, MAX_UINT64);
   if (amount === null || amount === 0n) return refuse("G2", "G2_AMOUNT", "the amount is not a positive integer");
-  return { req, chainId, decimals: net.decimals, amount };
+  return { chainId, decimals: net.decimals, amount };
 }
 
 function g3(ctx: GuardContext, c: Omit<Checked, "payer">): Refusal | null {
-  const max = isPlainObject(ctx.quote) ? uint(ctx.quote.maxAmount, MAX_UINT64) : null;
-  if (max === null) return refuse("G3", "G3_NO_QUOTE", "there is no price quote for this tool");
+  const quote = ctx.quote;
+  const max = isPlainObject(quote) ? uint(quote.maxAmount, MAX_UINT64) : null;
+  if (!isPlainObject(quote) || max === null) return refuse("G3", "G3_NO_QUOTE", "there is no price quote for this tool");
+  if (!sameAsset(quote.asset, (c.req.amount as Req).asset)) {
+    return refuse("G3", "G3_QUOTE_ASSET", "the price quote is in another asset");
+  }
   if (c.amount > max) return refuse("G3", "G3_ABOVE_QUOTE", "the amount is above the quoted price");
   return null;
 }
@@ -150,16 +220,27 @@ function g4(ctx: GuardContext, c: Omit<Checked, "payer">): Refusal | string {
     return refuse("G4", "G4_PAYER_CHANGED", PAYER_CHANGED_REASON);
   }
   const chain = ctx.chain;
-  const validUntil = isPlainObject(chain) ? uint(chain.validUntil, MAX_UINT64, true) : null;
-  const chainPayer = isPlainObject(chain) ? localAccount(chain.payer, c.chainId) : null;
-  if (!isPlainObject(chain) || validUntil === null || chainPayer === null || typeof chain.active !== "boolean") {
+  if (!isPlainObject(chain)) {
     return refuse("G4", "G4_NO_CHAIN_READ", "the payment key's grant could not be read from the chain");
+  }
+  const validUntil = uint(chain.validUntil, MAX_UINT64, true);
+  const chainPayer = localAccount(chain.payer, c.chainId);
+  const chainDelegate = localAccount(chain.delegate, c.chainId);
+  const readAt = seconds(chain.readAt);
+  if (validUntil === null || chainPayer === null || chainDelegate === null || readAt === null || typeof chain.active !== "boolean") {
+    return refuse("G4", "G4_NO_CHAIN_READ", "the payment key's grant could not be read from the chain");
+  }
+  if (readAt > c.now || c.now - readAt > CHAIN_READ_MAX_AGE_SECONDS) {
+    return refuse("G4", "G4_STALE_READ", "the chain read is too old");
+  }
+  // An unreadable local key is G5's refusal; here only a readable, different key refuses.
+  const local = localAccount(ctx.localKey, c.chainId);
+  if (local !== null && chainDelegate !== local) {
+    return refuse("G4", "G4_OTHER_KEY", "the chain read is for another payment key");
   }
   if (chainPayer !== payer) return refuse("G4", "G4_NOT_DELEGATED", "the payer has not authorised this payment key");
   if (chain.active !== true) return refuse("G4", "G4_INACTIVE", "the payment key's grant is not active");
-  if (!Number.isSafeInteger(ctx.nowSeconds) || validUntil <= BigInt(ctx.nowSeconds)) {
-    return refuse("G4", "G4_EXPIRED", "the payment key's grant has expired");
-  }
+  if (validUntil <= BigInt(c.now)) return refuse("G4", "G4_EXPIRED", "the payment key's grant has expired");
   return payer;
 }
 
@@ -189,25 +270,30 @@ function g6(ctx: GuardContext, c: Checked): Refusal | null {
   return null;
 }
 
-function g7(ctx: GuardContext, c: Checked): Refusal | null {
+/** G7 caps. Returns the `confirmAbove` threshold (atomic) for the last step, or a refusal. */
+function g7(ctx: GuardContext, c: Checked): Refusal | { confirmAbove: bigint | null } {
   const limits = ctx.limits;
   if (!isPlainObject(limits)) return refuse("G7", "G7_LIMITS_UNREADABLE", "the local limits are not readable");
   const perCall = usdToAtomic(limits.perCall as string, c.decimals);
   const perDay = usdToAtomic(limits.perDay as string, c.decimals);
   const confirmAbove = limits.confirmAbove === null ? null : usdToAtomic(limits.confirmAbove as string, c.decimals);
-  const spent = uint(ctx.spentLast24h, null);
-  if (perCall === null || perDay === null || spent === null || (limits.confirmAbove !== null && confirmAbove === null)) {
+  if (perCall === null || perDay === null || (limits.confirmAbove !== null && confirmAbove === null)) {
     return refuse("G7", "G7_LIMITS_UNREADABLE", "the local limits are not readable");
   }
-  if (typeof ctx.confirmed !== "boolean") {
-    return refuse("G7", "G7_CONFIRMATION_REQUIRED", "the confirmation state is not readable");
-  }
   if (c.amount > perCall) return refuse("G7", "G7_PER_CALL", "the amount is above the local limit per call");
-  if (spent + c.amount > perDay) return refuse("G7", "G7_PER_DAY", "the amount would pass the local limit per 24 hours");
-  if (confirmAbove !== null && c.amount > confirmAbove && ctx.confirmed !== true) {
-    return refuse("G7", "G7_CONFIRMATION_REQUIRED", "the amount is above the confirmation limit and was not confirmed");
+  if (!Array.isArray(ctx.signed)) return refuse("G7", "G7_STATE_UNREADABLE", "the record of signed payments is not readable");
+  let spent = 0n;
+  for (const entry of ctx.signed as unknown[]) {
+    const at = isPlainObject(entry) ? seconds(entry.at) : null;
+    const amount = isPlainObject(entry) ? uint(entry.amount, MAX_UINT64) : null;
+    if (at === null || amount === null) {
+      return refuse("G7", "G7_STATE_UNREADABLE", "the record of signed payments is not readable");
+    }
+    // Inside the window, and anything dated in the future (a clock moved back) still counts.
+    if (at > c.now - SPEND_WINDOW_SECONDS) spent += amount;
   }
-  return null;
+  if (spent + c.amount > perDay) return refuse("G7", "G7_PER_DAY", "the amount would pass the local limit per 24 hours");
+  return { confirmAbove };
 }
 
 function g8(ctx: GuardContext, c: Checked): Refusal | null {
@@ -259,24 +345,52 @@ function g12(c: Checked): Refusal | null {
     return refuse("G12", "G12_DEBT_OR_SEQ_ENDPOINT", "the payment is for a debt or sequence endpoint");
   }
   if (!TOOL_CALL_RESOURCE.test(resource)) return refuse("G12", "G12_NOT_A_TOOL_CALL", "the payment is not for a tool call");
+  if (resource !== TOOL_RESOURCE_PREFIX + c.tool) {
+    return refuse("G12", "G12_OTHER_TOOL", "the payment is for another tool than the one called");
+  }
   return null;
+}
+
+/** The last step: above `confirmAbove`, only a confirmation of exactly this payment passes. */
+function confirm(ctx: GuardContext, c: Checked, confirmAbove: bigint | null): Refusal | null {
+  const given = ctx.confirmation;
+  if (given !== null && !isPlainObject(given)) {
+    return refuse("G7", "G7_CONFIRMATION_MISMATCH", "the confirmation is not readable");
+  }
+  if (confirmAbove === null || c.amount <= confirmAbove) return null;
+  if (given === null) {
+    return refuse("G7", "G7_CONFIRMATION_REQUIRED", "the amount is above the confirmation limit and was not confirmed");
+  }
+  const expected = confirmationFor(ctx);
+  const keys = Object.keys(given);
+  const same =
+    expected !== null &&
+    keys.length === CONFIRMATION_KEYS.length &&
+    CONFIRMATION_KEYS.every((k) => Object.hasOwn(given, k) && given[k] === expected[k]);
+  return same ? null : refuse("G7", "G7_CONFIRMATION_MISMATCH", "the confirmation was for another payment");
 }
 
 function run(ctx: GuardContext): GuardResult {
   if (!isPlainObject(ctx)) return refuse("G1", "G1_NOT_A_REQUIREMENT", "there is no payment request");
-  const notRequirement = g1(ctx);
-  if (notRequirement) return notRequirement;
-  const base = g2(ctx, ctx.requirement as Req);
-  if ("ok" in base) return base;
+  const call = g1(ctx);
+  if ("ok" in call) return call;
+  const req = ctx.requirement as Req;
+  const net = g2(ctx, req);
+  if ("ok" in net) return net;
+  const base = { req, ...call, ...net };
   const quote = g3(ctx, base);
   if (quote) return quote;
   const payer = g4(ctx, base);
   if (typeof payer !== "string") return payer;
   const c: Checked = { ...base, payer };
-  return g5(ctx, c) ?? g6(ctx, c) ?? g7(ctx, c) ?? g8(ctx, c) ?? g9(c) ?? g10(c) ?? g11(ctx) ?? g12(c) ?? { ok: true };
+  const early = g5(ctx, c) ?? g6(ctx, c);
+  if (early) return early;
+  const caps = g7(ctx, c);
+  if ("ok" in caps) return caps;
+  return g8(ctx, c) ?? g9(c) ?? g10(c) ?? g11(ctx) ?? g12(c) ?? confirm(ctx, c, caps.confirmAbove) ?? { ok: true };
 }
 
-/** Runs G1..G12 in order. `{ok: true}` only when every guard passes; never throws. */
+/** Runs G1..G12 in order, then the G7 confirmation. `{ok: true}` only when all pass; never throws. */
 export function checkAll(ctx: GuardContext): GuardResult {
   try {
     return run(ctx);

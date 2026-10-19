@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import guardVectors from "../../vectors/guards.json" with { type: "json" };
 import seqVectors from "../../vectors/seq.json" with { type: "json" };
 import { builtInDeployments } from "../src/deployments.js";
-import { builtInNetwork, checkAll, GUARD_ORDER, usdToAtomic } from "../src/guards/guards.js";
+import { getAddress } from "viem";
+import { builtInNetwork, checkAll, confirmationFor, GUARD_ORDER, usdToAtomic } from "../src/guards/guards.js";
+import { guardAndBuild } from "../src/guards/sign.js";
 import { DEFAULT_LIMITS, REFUSAL_CODES, type GuardContext, type GuardResult } from "../src/guards/types.js";
 
 type Path = (string | number)[];
@@ -145,8 +147,11 @@ describe("fail closed", () => {
       { chain: { ...base.chain, active: "yes" } },
       { nowSeconds: Number.NaN },
       { localKey: undefined },
-      { confirmed: "true" },
-      { forwardedJustNow: 1 },
+      { confirmation: "yes" },
+      { forwardedCall: true },
+      { forwardedCall: { tool: 1, at: base.nowSeconds } },
+      { signed: undefined },
+      { chain: { ...base.chain, delegate: undefined } },
     ];
     for (const patch of broken) {
       const r = checkAll({ ...base, ...patch } as GuardContext);
@@ -172,6 +177,64 @@ describe("fail closed", () => {
       if (r.ok) continue;
       expect(r.reason).not.toMatch(/0x[0-9a-fA-F]{6}|https?:|\/mcp\/|\/escrow/);
     }
+  });
+});
+
+describe("binding (I1, I2)", () => {
+  const confirmAbove = { ...base, limits: { ...base.limits, confirmAbove: "0.05" } };
+
+  it("asks for confirmation only after every other guard passed", () => {
+    expect(checkAll(confirmAbove)).toMatchObject({ ok: false, code: "G7_CONFIRMATION_REQUIRED" });
+    expect(checkAll({ ...confirmAbove, paidUrls: [] })).toMatchObject({ ok: false, guard: "G11" });
+  });
+
+  it("accepts the confirmation built for this payment and no other", () => {
+    const confirmation = confirmationFor(confirmAbove)!;
+    expect(confirmation).toMatchObject({ tool: "weather_forecast", amount: "100000", seq: "42" });
+    expect(checkAll({ ...confirmAbove, confirmation })).toEqual({ ok: true });
+    const later = structuredClone(confirmAbove) as GuardContext & { requirement: { seq: string } };
+    later.requirement.seq = "43";
+    expect(checkAll({ ...later, confirmation })).toMatchObject({ ok: false, code: "G7_CONFIRMATION_MISMATCH" });
+  });
+
+  it("refuses a requirement for a tool other than the one forwarded", () => {
+    const other = { ...base, forwardedCall: { tool: "cheap_tool", at: base.nowSeconds } };
+    expect(checkAll(other)).toMatchObject({ ok: false, guard: "G12", code: "G12_OTHER_TOOL" });
+  });
+});
+
+describe("guardAndBuild (M1)", () => {
+  const ctx: Omit<GuardContext, "network"> = Object.fromEntries(
+    Object.entries(base).filter(([k]) => k !== "network"),
+  ) as Omit<GuardContext, "network">;
+
+  it("signs exactly the guarded values with the built-in production network", () => {
+    const r = guardAndBuild(ctx, base.nowSeconds, "production");
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const req = base.requirement as { amount: { amount: string }; seq: string; payer: string; provider: string };
+    expect(r.typedData.message.amount).toBe(BigInt(req.amount.amount));
+    expect(r.typedData.message.seq).toBe(BigInt(req.seq));
+    expect(r.typedData.message.payer).toBe(getAddress(req.payer.split(":")[2]!));
+    expect(r.typedData.message.provider).toBe(getAddress(req.provider.split(":")[2]!));
+    expect(r.typedData.domain).toMatchObject({ chainId: 46630, verifyingContract: getAddress(base.network!.escrow.split(":")[2]!) });
+  });
+
+  it("returns the guard refusal and builds nothing", () => {
+    const r = guardAndBuild(apply(ctx, find("seq 2^53").changes), base.nowSeconds, "production");
+    expect(r).toMatchObject({ ok: false, guard: "G9" });
+  });
+
+  it("checks the requirement against the built-in entry of the environment it signs for", () => {
+    // The staging entry's escrow is still a placeholder, so nothing can be paid there.
+    expect(guardAndBuild(ctx, base.nowSeconds, "staging")).toMatchObject({ ok: false, guard: "G2", code: "G2_PAY_TO" });
+  });
+
+  it("works on a frozen copy and leaves the caller's requirement alone", () => {
+    const mine = structuredClone(ctx);
+    guardAndBuild(mine, base.nowSeconds, "production");
+    expect(Object.isFrozen(mine.requirement)).toBe(false);
+    expect(mine).toEqual(ctx);
   });
 });
 
