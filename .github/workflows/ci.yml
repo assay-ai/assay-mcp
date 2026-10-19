@@ -172,7 +172,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      BACKEND_SHA: ${{ inputs.backend_sha || 'e91dc15e74aa617f42ddd78931b6c249470b6172' }}
+      BACKEND_SHA: ${{ inputs.backend_sha || 'c1616f2d77b37ef97267d14ef78be748aa201e76' }}
       BACKEND_DIR: ${{ github.workspace }}/backend
       COMPOSE_FILE: sdk/node/examples/ci/backend.compose.yml
       HUMAN_TOKEN: mcp_demo_token_evm_buyer
@@ -264,8 +264,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      # The backend under test: assay-backend feat/mcp-oauth, pinned by full commit SHA.
-      BACKEND_SHA: ${{ inputs.backend_sha || 'e91dc15e74aa617f42ddd78931b6c249470b6172' }}
+      # The backend under test: assay-backend develop (with the MCP onboarding work), pinned by full commit SHA.
+      BACKEND_SHA: ${{ inputs.backend_sha || 'c1616f2d77b37ef97267d14ef78be748aa201e76' }}
       BACKEND_DIR: ${{ github.workspace }}/backend
       COMPOSE_FILE: node/test/integration/backend.compose.yml
       # A person's session from the backend's own demo seed (scripts/mcp/seed/credentials.json),
