@@ -63,8 +63,34 @@ export function checkLockRuntime(lock) {
   return errors;
 }
 
-function packFiles(root) {
-  const out = execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts", "-w", "node"], {
+export const SDK_PACKAGE_NAME = "@assay-ai/sdk";
+const SDK_FILE = /^(package\.json|README\.md|LICENSE|dist\/index\.js|dist\/types\/.+\.d\.ts)$/;
+
+/** The SDK ships a self-contained bundle: exact versions, no runtime dependencies, no install scripts. */
+export function checkSdkManifest(pkg) {
+  const errors = [];
+  if (pkg.name !== SDK_PACKAGE_NAME) errors.push(`name is ${pkg.name}, expected ${SDK_PACKAGE_NAME}`);
+  if (!EXACT.test(pkg.version ?? "")) errors.push(`version ${pkg.version} is not an exact x.y.z`);
+  for (const field of ["dependencies", "optionalDependencies", "peerDependencies", "bundleDependencies", "bundledDependencies"]) {
+    for (const name of Object.keys(pkg[field] ?? {})) errors.push(`${field}.${name} is not allowed: the SDK bundles everything`);
+  }
+  for (const s of INSTALL_SCRIPTS) {
+    if (pkg.scripts?.[s] !== undefined) errors.push(`install script "${s}" is not allowed`);
+  }
+  return errors;
+}
+
+/** Checks the file list from `npm pack --dry-run --json` of the SDK. */
+export function checkSdkPackFiles(files) {
+  const errors = [];
+  const paths = files.map((f) => f.path);
+  for (const p of paths) if (!SDK_FILE.test(p)) errors.push(`unexpected file in the SDK package: ${p}`);
+  if (!paths.includes("dist/index.js")) errors.push("sdk dist/index.js is missing; run the build first");
+  return errors;
+}
+
+function packFiles(root, workspace = "node") {
+  const out = execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts", "-w", workspace], {
     cwd: root,
     encoding: "utf8",
     shell: process.platform === "win32",
@@ -79,6 +105,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     ...checkManifest(JSON.parse(readFileSync(join(root, "node/package.json"), "utf8"))),
     ...checkLockRuntime(JSON.parse(readFileSync(join(root, "package-lock.json"), "utf8"))),
     ...checkPackFiles(packFiles(root)),
+    ...checkSdkManifest(JSON.parse(readFileSync(join(root, "sdk/node/package.json"), "utf8"))),
+    ...checkSdkPackFiles(packFiles(root, "sdk/node")),
   ];
   if (errors.length > 0) {
     console.error("check-pack failed:");

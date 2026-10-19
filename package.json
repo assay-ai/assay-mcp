@@ -14,6 +14,7 @@
     "check:bundle": "node scripts/check-bundle.mjs",
     "check:unscoped": "node scripts/check-no-unscoped.mjs",
     "check:pack": "node scripts/check-pack.mjs",
+    "check:no-fork": "node scripts/check-no-fork.mjs",
     "check:release": "node scripts/check-deployments.mjs --release"
   },
   "devDependencies": {
