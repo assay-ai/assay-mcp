@@ -254,7 +254,15 @@ describe("signed-in forwarding", () => {
     // The proxy's own lazy handshake first, then the host's bytes unchanged.
     expect(mcp.methods().slice(0, 2)).toEqual(["initialize", "notifications/initialized"]);
     expect(bodies[1]).toBe(`{"jsonrpc":"2.0","method":"notifications/initialized"}`);
-    for (const l of [...lines, ...notes]) expect(bodies).toContain(l);
+    // A tools/call is the one exception (Task 2.9, spec §7.7 step 1): the same values, plus the
+    // idempotency key the proxy adds; every other method goes out as the host's own bytes.
+    const call = lines.find((l) => l.includes('"tools/call"'))!;
+    for (const l of [...lines, ...notes]) if (l !== call) expect(bodies).toContain(l);
+    const sentCall = mcp.messages().find((m) => m.method === "tools/call") as { params: { _meta: Record<string, unknown> } };
+    const key = sentCall.params._meta["assay/idempotency-key"];
+    expect(key).toMatch(/^[0-9a-f-]{36}$/);
+    const hostCall = JSON.parse(call) as { params: Record<string, unknown> };
+    expect(sentCall).toEqual({ ...hostCall, params: { ...hostCall.params, _meta: { "assay/idempotency-key": key } } });
     expect(bodies.filter((b) => b.includes("initialized"))).toHaveLength(1);
     for (const r of mcp.requests) {
       expect(r.path).toBe("/");

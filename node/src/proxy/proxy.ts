@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { SIGN_IN_TOOL } from "../clients/server-name.js";
 import { silentLogger, type Logger } from "../log/logger.js";
 import { identifyCredential, SignInError, signInBusyError, type SignInResult } from "../oauth/flow.js";
@@ -8,6 +9,8 @@ import { LockError, withLock, type LockOptions, type ProfileRef } from "../profi
 import { createProfile, readProfileFor, updateProfile } from "../profile/profile.js";
 import { AliasTable } from "./aliases.js";
 import { CallRegistry, type ForwardedCall } from "./calls.js";
+import { prepareCallParams, quotesFromList } from "./meta.js";
+import type { PaidHost } from "./paid.js";
 import { Forwarder, type FetchLike, type Outcome } from "./forwarder.js";
 import { answerInitialize, answerSignedOut, appName, SignInController, signInBusyText, signInText, type SignInHooks } from "./presignin.js";
 import {
@@ -15,6 +18,7 @@ import {
   envelopeVersion,
   errorResponse,
   INTERNAL_ERROR,
+  idKey,
   INVALID_REQUEST,
   isModernVersion,
   isValidId,
@@ -51,8 +55,14 @@ import type { StdoutWriter } from "./stdio.js";
 
 export type Mode = "pre-sign-in" | "signed-in";
 
-/** The paid-path hook (Task 2.9): sees each `tools/call` answer with its call record. */
-export type ToolResultHook = (call: ForwardedCall, response: JsonRpcResponse) => Promise<JsonRpcResponse>;
+/** The paid path (Task 2.9, `paid.ts`), as the proxy drives it. */
+export interface PaidHooks {
+  /** Sees each `tools/call` answer with its call record; returns what goes to the host. */
+  onToolResult(call: ForwardedCall, response: JsonRpcResponse): Promise<JsonRpcResponse>;
+  /** Quotes (`assay/price`) from a remote `tools/list` page, by original tool name. */
+  observeList(pairs: ReturnType<typeof quotesFromList>): void;
+  stop(): void;
+}
 
 export interface ProxyOptions {
   readonly deployment: ResolvedDeployment;
@@ -76,7 +86,8 @@ export interface ProxyOptions {
   readonly requestTimeoutMs?: number;
   /** How often a signed-out process looks for a grant a sibling stored. Default 10 s. */
   readonly grantPollMs?: number;
-  readonly onToolResult?: ToolResultHook;
+  /** Builds the paid path on the proxy's services; none means every answer passes as is. */
+  readonly paid?: (host: PaidHost) => PaidHooks;
 }
 
 const CREDENTIAL_RETRY_MS = 60_000;
@@ -100,6 +111,11 @@ export class Proxy {
   private readonly aliases: AliasTable;
   private readonly signIns: SignInController;
   readonly calls = new CallRegistry();
+  /** Whether the host declared form elicitation in `initialize` (G7 confirmation). */
+  private hostElicits = false;
+  /** Requests the proxy sent to the host (elicitation), by id, waiting for the host's answer. */
+  private readonly hostRequests = new Map<string, (answer: unknown) => void>();
+  private readonly paid: PaidHooks | null;
 
   constructor(private readonly o: ProxyOptions) {
     this.log = (o.log ?? silentLogger).child("proxy");
@@ -111,6 +127,50 @@ export class Proxy {
     });
     this.aliases = new AliasTable(o.serverName, o.log ?? silentLogger);
     this.signIns = new SignInController((hooks) => this.runSignIn(hooks), (url) => o.openBrowser(url), signInBusyError);
+    this.paid = o.paid ? o.paid(this.paidHost()) : null;
+  }
+
+  /** What the paid path may use: resend a call, ask `get_tool`, elicit, the API bearer. */
+  private paidHost(): PaidHost {
+    return {
+      calls: this.calls,
+      resend: (call, params) => this.sendToolCall(call.id, params),
+      getTool: (name) => this.sendToolCall(`assay-mcp-get-tool-${randomUUID()}`, { name: "get_tool", arguments: { name } }),
+      canElicit: () => this.hostElicits,
+      elicit: (params, deadlineMs) => this.askHost("elicitation/create", params, deadlineMs),
+      bearer: async () => {
+        const b = await this.bearer();
+        return "token" in b ? b.token : null;
+      },
+      dateOffset: () => this.forwarder.dateOffset(),
+    };
+  }
+
+  /** One `tools/call` of the proxy's own (a paid retry or `get_tool`), through the same path. */
+  private async sendToolCall(id: JsonRpcId, params: Record<string, unknown>): Promise<JsonRpcResponse> {
+    const req: JsonRpcRequest = { jsonrpc: "2.0", id, method: "tools/call", params };
+    const answer = await this.exchange(req, JSON.stringify(req));
+    return answer === "signed-out" ? errorResponse(id, SERVER_ERROR, "Assay sign-in ended. Sign in again, then ask again.") : answer;
+  }
+
+  /**
+   * Sends a request to the host and waits for its answer until `deadlineMs`: the result, a
+   * `{action: "cancel"}` for an error answer, or `null` when none came in time.
+   */
+  private askHost(method: string, params: Record<string, unknown>, deadlineMs: number): Promise<unknown> {
+    const id = `assay-mcp-${randomUUID()}`;
+    const key = idKey(id);
+    return new Promise((resolve) => {
+      const done = (answer: unknown) => {
+        clearTimeout(timer);
+        this.hostRequests.delete(key);
+        resolve(answer);
+      };
+      const timer = setTimeout(() => done(null), Math.max(0, deadlineMs - Date.now()));
+      timer.unref();
+      this.hostRequests.set(key, done);
+      if (!this.o.writer.send({ jsonrpc: "2.0", id, method, params })) done(null);
+    });
   }
 
   get currentMode(): Mode {
@@ -154,6 +214,8 @@ export class Proxy {
   stop(): void {
     if (this.pollTimer) clearInterval(this.pollTimer);
     this.pollTimer = null;
+    this.paid?.stop();
+    for (const done of [...this.hostRequests.values()]) done(null);
   }
 
   /** Waits for answers still in flight, at most `maxMs`. */
@@ -208,8 +270,13 @@ export class Proxy {
   private handleMessage(value: unknown, raw: string): void {
     const c = classify(value);
     switch (c.kind) {
-      case "response":
-        return; // §7.6: host responses to server requests are dropped
+      case "response": {
+        // An answer to a request the proxy itself sent (elicitation); any other is dropped (§7.6).
+        const id = c.message.id;
+        const waiting = id === null ? undefined : this.hostRequests.get(idKey(id));
+        if (waiting) waiting("result" in c.message ? c.message.result : { action: "cancel" });
+        return;
+      }
       case "invalid": {
         const isResponseShape = typeof value === "object" && value !== null && !("method" in value);
         if (!isResponseShape) this.o.writer.send(errorResponse(c.id, INVALID_REQUEST, "Invalid Request"));
@@ -259,6 +326,7 @@ export class Proxy {
       const { version, result } = answerInitialize(req.params);
       this.hostVersion = version;
       this.app = appName(req.params?.clientInfo);
+      this.hostElicits = declaresFormElicitation(req.params?.capabilities);
       return resultResponse(req.id, result);
     }
     if (this.mode === "pre-sign-in") await this.lookForGrant();
@@ -401,21 +469,17 @@ export class Proxy {
         return resultResponse(req.id, { content: [{ type: "text", text: "Assay is connected. Its tools are listed here." }] });
       }
       const original = name === null ? null : this.aliases.original(name);
-      const params = req.params ?? {};
-      if (original !== null && original !== name) {
-        // A call on an alias goes out with the exact original name.
-        const rewritten = { ...params, name: original };
-        body = JSON.stringify({ ...req, params: rewritten });
-        call = this.calls.begin(req.id, original, rewritten);
-      } else {
-        call = this.calls.begin(req.id, original ?? "", params);
-      }
+      // §7.7 step 1: a host voucher or rail is dropped, the idempotency key kept or added.
+      // A call on an alias goes out with the exact original name.
+      const prepared = prepareCallParams(original !== null && original !== name ? { ...(req.params ?? {}), name: original } : (req.params ?? {}));
+      body = JSON.stringify({ ...req, params: prepared });
+      call = this.calls.begin(req.id, original ?? "", prepared);
       if (call === null) return errorResponse(req.id, INVALID_REQUEST, "A request with this id is already in flight.");
     }
     try {
       const response = await this.exchange(req, body);
       if (response === "signed-out") return this.answerSignedOut(req);
-      return call !== null && this.o.onToolResult ? await this.o.onToolResult(call, response) : response;
+      return call !== null && this.paid ? await this.paid.onToolResult(call, response) : response;
     } finally {
       if (call !== null) this.calls.end(call);
     }
@@ -473,6 +537,8 @@ export class Proxy {
     const base = { jsonrpc: "2.0" as const, id: req.id };
     if ("error" in response) return { ...base, error: response.error };
     if (req.method === "tools/list") {
+      // G3 quotes by the remote's own names, before any alias is applied.
+      this.paid?.observeList(quotesFromList(response.result));
       return { ...base, result: this.aliases.rewriteList(response.result, req.params?.cursor === undefined) };
     }
     return { ...base, result: response.result };
@@ -535,4 +601,13 @@ function tokenError(err: unknown, log: Logger): { code: number; message: string 
   if (err instanceof KeychainError) return { code: SERVER_ERROR, message: err.message };
   log.warn("token unavailable", { error: errorName(err) });
   return { code: SERVER_ERROR, message: "Assay sign-in could not be read. Try again." };
+}
+
+/** The host declared form elicitation: `capabilities.elicitation` is `{}` or names `form`. */
+export function declaresFormElicitation(capabilities: unknown): boolean {
+  if (typeof capabilities !== "object" || capabilities === null) return false;
+  const e = (capabilities as Record<string, unknown>).elicitation;
+  if (typeof e !== "object" || e === null || Array.isArray(e)) return false;
+  const keys = Object.keys(e);
+  return keys.length === 0 || keys.includes("form");
 }

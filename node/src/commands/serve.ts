@@ -13,7 +13,10 @@ import { KeychainError, openOsKeychain, reportKeychainError, type OsKeychain } f
 import type { LockOptions, ProfileRef } from "../profile/lock.js";
 import { configDir, isValidProfileName, profileFile, safeJoin } from "../profile/paths.js";
 import { checkEnvironment, readProfileSettings } from "../proxy/environment.js";
-import { Proxy, type ToolResultHook } from "../proxy/proxy.js";
+import { createChainReader } from "../chain/reads.js";
+import { QuoteCache } from "../guards/quote-cache.js";
+import { PaidPath } from "../proxy/paid.js";
+import { Proxy } from "../proxy/proxy.js";
 import { readLines, StdoutWriter } from "../proxy/stdio.js";
 
 /**
@@ -112,7 +115,9 @@ export interface ServeDeps {
   readonly requestTimeoutMs?: number;
   readonly grantPollMs?: number;
   readonly signInTimeoutMs?: number;
-  readonly onToolResult?: ToolResultHook;
+  /** The enable-paid poll interval and bound (tests shorten them). */
+  readonly paidPollMs?: number;
+  readonly paidPollMaxMs?: number;
 }
 
 /** How long answers still in flight may take once stdin has ended. */
@@ -207,7 +212,25 @@ export async function serve(args: readonly string[], deps: ServeDeps = {}): Prom
       ...(deps.lockOptions ? { lockOptions: deps.lockOptions } : {}),
       ...(deps.requestTimeoutMs !== undefined ? { requestTimeoutMs: deps.requestTimeoutMs } : {}),
       ...(deps.grantPollMs !== undefined ? { grantPollMs: deps.grantPollMs } : {}),
-      ...(deps.onToolResult ? { onToolResult: deps.onToolResult } : {}),
+      paid: (host) =>
+        new PaidPath(
+          {
+            deployment,
+            profile,
+            keychain,
+            noPaid: parsed.noPaid,
+            chain: createChainReader({ environment: deployment.environment, profile: profile.name }),
+            quotes: new QuoteCache(),
+            fetch: (url, init) => pinnedFetch(deployment, url, init),
+            openBrowser: browser,
+            stderr,
+            log,
+            ...(deps.lockOptions ? { lockOptions: deps.lockOptions } : {}),
+            ...(deps.paidPollMs !== undefined ? { pollMs: deps.paidPollMs } : {}),
+            ...(deps.paidPollMaxMs !== undefined ? { pollMaxMs: deps.paidPollMaxMs } : {}),
+          },
+          host,
+        ),
     });
     if (parsed.noPaid) log.info("paid calls are off for this server (--no-paid)");
 
