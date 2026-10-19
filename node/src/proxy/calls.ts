@@ -30,7 +30,9 @@ export interface ForwardedCall {
   readonly startedAt: number;
   /** Vouchers signed for this call so far (0 or 1). */
   readonly vouchers: number;
-  /** True the first time only: the caller may sign one voucher for this call. */
+  /** The host sent `notifications/cancelled` for this call: no voucher may be signed for it. */
+  readonly cancelled: boolean;
+  /** True the first time only, and never after a cancel: the caller may sign one voucher for this call. */
   claimVoucher(): boolean;
 }
 
@@ -41,6 +43,7 @@ export type ConfirmationOutcome =
 
 class CallRecord implements ForwardedCall {
   vouchers = 0;
+  cancelled = false;
   constructor(
     readonly id: JsonRpcId,
     readonly tool: string,
@@ -48,7 +51,7 @@ class CallRecord implements ForwardedCall {
     readonly startedAt: number,
   ) {}
   claimVoucher(): boolean {
-    if (this.vouchers > 0) return false;
+    if (this.vouchers > 0 || this.cancelled) return false;
     this.vouchers = 1;
     return true;
   }
@@ -78,6 +81,12 @@ export class CallRegistry {
   /** The in-flight record for an id. */
   get(id: JsonRpcId): ForwardedCall | null {
     return this.open.get(idKey(id)) ?? null;
+  }
+
+  /** The host cancelled the call with this id (`notifications/cancelled`); unknown ids are ignored. */
+  cancel(id: JsonRpcId): void {
+    const record = this.open.get(idKey(id));
+    if (record) record.cancelled = true;
   }
 
   /** Closes a record once its answer went to the host; its confirmation tokens die with it. */

@@ -1,4 +1,4 @@
-import { withLock, type LockOptions, type ProfileRef } from "../profile/lock.js";
+import { withLock, type LockHandle, type LockOptions, type ProfileRef } from "../profile/lock.js";
 import { readLimitsIfPresent, updateState, usdToUnits, type SpendEntry } from "../profile/profile.js";
 import { SPEND_WINDOW_SECONDS } from "./guards.js";
 import type { LocalLimits } from "./types.js";
@@ -52,30 +52,39 @@ export function sumSpend(entries: readonly SpendEntry[]): bigint {
 
 /** Records one signed voucher of `amount` base units, refusing it when the 24 h cap would be passed. */
 export async function recordUnderLock(profile: ProfileRef, amount: bigint, options: RecordOptions): Promise<RecordResult> {
+  checkRecordInput(amount, options);
+  return withLock(profile, (lock) => recordHeld(profile, lock, amount, options), options);
+}
+
+function checkRecordInput(amount: bigint, options: RecordOptions): void {
   if (typeof amount !== "bigint" || amount <= 0n) throw new RangeError("amount must be a positive bigint");
   if (!options || !options.limits) throw new TypeError("the limits are required");
+}
+
+/**
+ * {@link recordUnderLock} for a caller that already holds the profile lock (the paid path runs
+ * the guards and records the voucher in one hold, so nothing can be signed between the two).
+ * Same rules: `limits.json` is re-read here, the stricter `perDay` applies, and the entry is
+ * written before the caller releases the lock.
+ */
+export function recordHeld(profile: ProfileRef, lock: LockHandle, amount: bigint, options: Omit<RecordOptions, keyof LockOptions> & Pick<LockOptions, "now">): RecordResult {
+  checkRecordInput(amount, options as RecordOptions);
   const callerPerDay = usdToUnits(options.limits.perDay, options.decimals);
   const now = options.now ?? Date.now;
-  return withLock(
-    profile,
-    (lock) => {
-      // N2: re-read limits.json under the lock and use the stricter perDay, so a `limits set`
-      // made while a call was in flight applies at once. An unreadable or invalid file (including
-      // failed 0600/owner checks) throws here: fail closed. A missing file adds no constraint.
-      const onDisk = readLimitsIfPresent(profile);
-      const diskPerDay = onDisk ? usdToUnits(onDisk.perDay, options.decimals) : callerPerDay;
-      const perDay = diskPerDay < callerPerDay ? diskPerDay : callerPerDay;
-      let total = 0n;
-      updateState(profile, lock, (state) => {
-        const nowSeconds = Math.floor(now() / 1000);
-        const kept = pruneSpend(state.signed, nowSeconds);
-        const spent = sumSpend(kept);
-        if (spent + amount > perDay) throw new SpendLimitError(spent, amount, perDay);
-        total = spent + amount;
-        return { ...state, signed: [...kept, { at: nowSeconds, amount: amount.toString() }] };
-      });
-      return { total };
-    },
-    options,
-  );
+  // N2: re-read limits.json under the lock and use the stricter perDay, so a `limits set`
+  // made while a call was in flight applies at once. An unreadable or invalid file (including
+  // failed 0600/owner checks) throws here: fail closed. A missing file adds no constraint.
+  const onDisk = readLimitsIfPresent(profile);
+  const diskPerDay = onDisk ? usdToUnits(onDisk.perDay, options.decimals) : callerPerDay;
+  const perDay = diskPerDay < callerPerDay ? diskPerDay : callerPerDay;
+  let total = 0n;
+  updateState(profile, lock, (state) => {
+    const nowSeconds = Math.floor(now() / 1000);
+    const kept = pruneSpend(state.signed, nowSeconds);
+    const spent = sumSpend(kept);
+    if (spent + amount > perDay) throw new SpendLimitError(spent, amount, perDay);
+    total = spent + amount;
+    return { ...state, signed: [...kept, { at: nowSeconds, amount: amount.toString() }] };
+  });
+  return { total };
 }

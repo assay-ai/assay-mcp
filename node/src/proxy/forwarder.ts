@@ -1,5 +1,6 @@
 import { silentLogger, type Logger } from "../log/logger.js";
 import { PinnedFetchError, type PinnedInit } from "../net/fetch.js";
+import { dateHeaderOffset } from "../signer/clock.js";
 import { VERSION } from "../version.js";
 import {
   classify,
@@ -131,6 +132,8 @@ class Slots {
 
 export class Forwarder {
   private sessionId: string | null = null;
+  /** Server clock minus local clock (seconds) from the last answer's `Date` header (§7.7 `issuedAt`). */
+  private offsetSeconds = 0;
   private readonly timeoutMs: number;
   private readonly maxBytes: number;
   private readonly log: Logger;
@@ -143,6 +146,11 @@ export class Forwarder {
     this.slots = new Slots(options.maxConcurrent ?? MAX_CONCURRENT, options.maxQueue ?? MAX_QUEUE);
     this.pool = { used: 0, max: options.maxInflightBytes ?? MAX_INFLIGHT_BYTES };
     this.log = (options.log ?? silentLogger).child("forward");
+  }
+
+  /** The last `Date` offset seen; unclamped (the signer's `issuedAt` clamps it to ±120 s). */
+  dateOffset(): number {
+    return this.offsetSeconds;
   }
 
   /** Forgets the session id (a new sign-in starts a new remote session). */
@@ -226,6 +234,8 @@ export class Forwarder {
       await cancel(res);
       return { kind: "unauthorized" };
     }
+    const date = res.headers.get("date");
+    if (date !== null) this.offsetSeconds = dateHeaderOffset(date, Date.now() / 1000);
     const session = res.headers.get("mcp-session-id");
     if (session !== null && SESSION_ID_RE.test(session)) this.sessionId = session;
 
