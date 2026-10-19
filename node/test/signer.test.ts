@@ -1,14 +1,17 @@
+import { inspect } from "node:util";
 import { describe, expect, it } from "vitest";
 import { hashTypedData, recoverTypedDataAddress, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import bindingVectors from "../../vectors/binding.json" with { type: "json" };
 import voucherVectors from "../../vectors/vouchers.json" with { type: "json" };
-import { builtInDeployments, type Deployment } from "../src/deployments.js";
-import { checkBindingChallenge, DELEGATE_BINDING_TYPES } from "../src/signer/binding.js";
+import { builtInDeployments, type Deployment, type Deployments } from "../src/deployments.js";
+import { checkBindingChallenge, DELEGATE_BINDING_TYPES, type BindingContext } from "../src/signer/binding.js";
 import { dateHeaderOffset, issuedAt } from "../src/signer/clock.js";
 import { SignerRefusal } from "../src/signer/errors.js";
 import { generate } from "../src/signer/keygen.js";
+import { resolveNetworkFrom, type ResolvedNetwork } from "../src/signer/network.internal.js";
 import { buildVoucher, VOUCHER_TYPES, type VoucherRequirement } from "../src/signer/voucher.js";
+import { buildVoucherFor } from "../src/signer/voucher.internal.js";
 
 /** Integers as decimal strings, the way the vectors store typed data. */
 function decimals(value: unknown): unknown {
@@ -56,7 +59,7 @@ describe("vectors", () => {
 });
 
 describe("checkBindingChallenge", () => {
-  const ctx = bindingVectors.context;
+  const ctx = bindingVectors.context as BindingContext;
   const valid = bindingVectors.valid[0]!.challenge;
 
   it.each(bindingVectors.valid.map((c) => [c.name, c] as const))("accepts %s", async (_name, c) => {
@@ -100,8 +103,31 @@ describe("checkBindingChallenge", () => {
     expect(() => checkBindingChallenge(at(ctx.nowSeconds + 300), ctx)).not.toThrow();
   });
 
-  it("refuses a challenge for another chain than the network's", () => {
-    expect(refusalField(() => checkBindingChallenge(valid, { ...ctx, chainId: 1 }))).toBe("domain.chainId");
+  it("takes the chain id from the built-in table, never from the caller", () => {
+    expect(refusalField(() => checkBindingChallenge(valid, { ...ctx, network: "eip155:1" }))).toBe("network");
+    expect(refusalField(() => checkBindingChallenge(valid, { ...ctx, network: "__proto__" }))).toBe("network");
+    // a caller-supplied chain id is not part of the context and is ignored
+    const sneaky = { ...ctx, chainId: 1 } as BindingContext;
+    expect(() => checkBindingChallenge(valid, sneaky)).not.toThrow();
+  });
+
+  it("refuses a placeholder environment (staging) and an unknown one", () => {
+    expect(refusalField(() => checkBindingChallenge(valid, { ...ctx, environment: "staging" }))).toBe("network.escrow");
+    expect(
+      refusalField(() => checkBindingChallenge(valid, { ...ctx, environment: "custom" as BindingContext["environment"] })),
+    ).toBe("environment");
+  });
+
+  it("refuses an unusable context with a SignerRefusal", () => {
+    expect(refusalField(() => checkBindingChallenge(valid, { ...ctx, nowSeconds: Number.NaN }))).toBe(
+      "context.nowSeconds",
+    );
+    expect(refusalField(() => checkBindingChallenge(valid, { ...ctx, nowSeconds: Infinity }))).toBe(
+      "context.nowSeconds",
+    );
+    expect(refusalField(() => checkBindingChallenge(valid, { ...ctx, localAddress: "0x12" }))).toBe(
+      "context.localAddress",
+    );
   });
 
   it("refuses a challenge for another profile credential or key", () => {
@@ -137,21 +163,31 @@ describe("checkBindingChallenge", () => {
   });
 });
 
-function deploymentFor(network: { caip2: string; escrow: string; asset: string; decimals: number }): Deployment {
-  return {
+type VectorNetwork = { caip2: string; escrow: string; asset: string; decimals: number };
+
+/** A fixture table holding one network, resolved through the same checks as the built-in one. */
+function fixtureTable(network: VectorNetwork): Deployments {
+  const d: Deployment = {
     mcp: "https://mcp.example.com",
     issuer: "https://mcp.example.com",
     api: "https://api.example.com",
     web: "https://app.example.com",
     networks: { [network.caip2]: { escrow: network.escrow, asset: network.asset, decimals: network.decimals, rpc: [] } },
   };
+  return { production: d, staging: d, e2e: d, anvil: d };
+}
+
+function resolved(network: VectorNetwork): ResolvedNetwork {
+  return resolveNetworkFrom(fixtureTable(network), "production", network.caip2, "the voucher");
 }
 
 describe("buildVoucher", () => {
   const cases = voucherVectors.cases;
+  const builtIn = voucherVectors.cases.find((v) => v.name === "built-in-escrow")!;
+  const req = builtIn.requirement as VoucherRequirement;
 
   it.each(cases.map((c) => [c.name, c] as const))("%s: digest equals the vector", async (_name, c) => {
-    const { wire, typedData } = buildVoucher(c.requirement as VoucherRequirement, c.issuedAt, deploymentFor(c.network));
+    const { wire, typedData } = buildVoucherFor(c.requirement as VoucherRequirement, c.issuedAt, resolved(c.network));
     expect(wire).toEqual(c.wire);
     expect(decimals(typedData)).toEqual(c.typedData);
     expect(typedData.types).toBe(VOUCHER_TYPES);
@@ -161,37 +197,114 @@ describe("buildVoucher", () => {
 
   it("matches the digest foundry cast computed for the backend's golden voucher", () => {
     const c = cases.find((v) => v.name === "backend-cast-golden")!;
-    const { typedData } = buildVoucher(c.requirement as VoucherRequirement, c.issuedAt, deploymentFor(c.network));
+    const { typedData } = buildVoucherFor(c.requirement as VoucherRequirement, c.issuedAt, resolved(c.network));
     expect(hashTypedData(typedData)).toBe("0xb50bc1d1af99579d1bdef9a5531e5a4114abe8c0d6352c4956bb66bc439241e1");
   });
 
-  it("uses the built-in chain id and escrow", () => {
-    const c = cases.find((v) => v.name === "built-in-escrow")!;
-    const { typedData } = buildVoucher(c.requirement as VoucherRequirement, c.issuedAt, builtInDeployments().production);
-    expect(typedData.domain).toEqual({
-      name: "Assay Settlement",
-      version: "2",
-      chainId: 46630,
-      verifyingContract: "0x1D2625efD87c2fc10b8563f3F0890072845Fcf41",
-    });
-    expect(hashTypedData(typedData)).toBe(c.digest);
+  it.each(["production", "e2e", "anvil"] as const)("uses the built-in chain id and escrow (%s)", (env) => {
+    for (const c of cases.filter((v) => v.network.escrow === builtIn.network.escrow)) {
+      const { typedData } = buildVoucher(c.requirement as VoucherRequirement, c.issuedAt, env);
+      expect(typedData.domain).toEqual({
+        name: "Assay Settlement",
+        version: "2",
+        chainId: 46630,
+        verifyingContract: "0x1D2625efD87c2fc10b8563f3F0890072845Fcf41",
+      });
+      expect(hashTypedData(typedData)).toBe(c.digest);
+    }
+  });
+
+  it("the built-in table is deep-frozen: a write throws and vouchers keep the production escrow", () => {
+    const table = builtInDeployments();
+    const net = table.production.networks["eip155:46630"]!;
+    const golden = cases.find((v) => v.name === "backend-cast-golden")!;
+    expect(Object.isFrozen(table)).toBe(true);
+    expect(() => {
+      (net as { escrow: string }).escrow = golden.network.escrow;
+    }).toThrow(TypeError);
+    expect(() => {
+      (net as { decimals: number }).decimals = 18;
+    }).toThrow(TypeError);
+    expect(() => {
+      (net.rpc as string[]).push("https://rpc.example.com");
+    }).toThrow(TypeError);
+    expect(() => {
+      (table.production.networks as Record<string, unknown>)["eip155:1"] = net;
+    }).toThrow(TypeError);
+    expect(() => {
+      (table as Record<string, unknown>).production = table.e2e;
+    }).toThrow(TypeError);
+    expect(() => Object.assign(table.production, { api: "https://api.example.com" })).toThrow(TypeError);
+    expect(net.escrow).toBe("eip155:46630:0x1D2625efD87c2fc10b8563f3F0890072845Fcf41");
+    const { typedData } = buildVoucher(req, builtIn.issuedAt, "production");
+    expect(typedData.domain.verifyingContract).toBe("0x1D2625efD87c2fc10b8563f3F0890072845Fcf41");
+    expect(refusalField(() => buildVoucher(golden.requirement as VoucherRequirement, golden.issuedAt, "production"))).toBe(
+      "payTo",
+    );
+  });
+
+  it("refuses to sign for the built-in table's placeholder entry (staging)", () => {
+    expect(refusalField(() => buildVoucher(req, builtIn.issuedAt, "staging"))).toBe("network.escrow");
+  });
+
+  it("refuses an environment that is not built in", () => {
+    expect(
+      refusalField(() => buildVoucher(req, builtIn.issuedAt, "custom" as Parameters<typeof buildVoucher>[2])),
+    ).toBe("environment");
+  });
+
+  it("refuses a requirement network that is not built in, or not own", () => {
+    for (const network of ["eip155:1", "__proto__", "constructor", "toString"]) {
+      expect(refusalField(() => buildVoucher({ ...req, network }, builtIn.issuedAt, "production"))).toBe("network");
+    }
+  });
+
+  it("refuses a payTo that is not the built-in escrow (the golden escrow included)", () => {
+    const golden = cases.find((v) => v.name === "backend-cast-golden")!;
+    expect(
+      refusalField(() => buildVoucher(golden.requirement as VoucherRequirement, golden.issuedAt, "production")),
+    ).toBe("payTo");
+  });
+
+  it("refuses a table whose escrow or asset is on another chain than the network", () => {
+    const n = builtIn.network;
+    const field = (over: Partial<VectorNetwork>) =>
+      refusalField(() => resolved({ ...n, ...over }));
+    expect(field({ escrow: "eip155:1:0x1D2625efD87c2fc10b8563f3F0890072845Fcf41" })).toBe("network.escrow");
+    expect(field({ asset: "eip155:1/erc20:0xDbbC156dD414f43f2c952C1Be0f16A0B9a826Cd3" })).toBe("network.asset");
+    expect(field({ escrow: "<escrow>" })).toBe("network.escrow");
+    expect(field({ asset: "<asset>" })).toBe("network.asset");
+    expect(field({ caip2: "solana:5eykt" })).toBe("network");
+  });
+
+  it("refuses a requirement for another network than the resolved one", () => {
+    const net = resolved(builtIn.network);
+    expect(refusalField(() => buildVoucherFor({ ...req, network: "eip155:1" }, builtIn.issuedAt, net))).toBe("network");
+  });
+
+  it("only accepts a resolved network at the type level", () => {
+    const handMade = { caip2: "eip155:46630", chainId: 46630, escrow: "0x1111111111111111111111111111111111111111", asset: "", decimals: 6 };
+    // @ts-expect-error a hand-built network is not a ResolvedNetwork
+    expect(() => buildVoucherFor(req, builtIn.issuedAt, handMade)).toThrow();
+    // @ts-expect-error the public entry takes an environment name, not a deployment
+    expect(() => buildVoucher(req, builtIn.issuedAt, builtInDeployments().production)).toThrow(SignerRefusal);
   });
 
   it("expiresAt = issuedAt + min(240, maxTimeoutSeconds)", () => {
-    const c = cases.find((v) => v.name === "built-in-escrow")!;
-    const req = c.requirement as VoucherRequirement;
-    const d = deploymentFor(c.network);
-    expect(buildVoucher({ ...req, maxTimeoutSeconds: 300 }, 1000, d).wire.expiresAt).toBe(1240);
-    expect(buildVoucher({ ...req, maxTimeoutSeconds: 60 }, 1000, d).wire.expiresAt).toBe(1060);
+    expect(buildVoucher({ ...req, maxTimeoutSeconds: 300 }, 1000, "production").wire.expiresAt).toBe(1240);
+    expect(buildVoucher({ ...req, maxTimeoutSeconds: 60 }, 1000, "production").wire.expiresAt).toBe(1060);
+  });
+
+  it("builds the wire amount fresh, in the built-in asset and scale", () => {
+    const extra = { ...req, amount: { ...req.amount, extra: "x" } as VoucherRequirement["amount"] };
+    const { wire } = buildVoucher(extra, builtIn.issuedAt, "production");
+    expect(wire.amount).toEqual(builtIn.wire.amount);
+    expect(wire.amount).not.toBe(extra.amount);
   });
 
   it("refuses what it cannot encode as the backend verifies it", () => {
-    const c = cases.find((v) => v.name === "built-in-escrow")!;
-    const req = c.requirement as VoucherRequirement;
-    const d = deploymentFor(c.network);
-    const field = (r: Partial<VoucherRequirement>, at = c.issuedAt) =>
-      refusalField(() => buildVoucher({ ...req, ...r }, at, d));
-    expect(field({ network: "eip155:1" })).toBe("network");
+    const field = (r: Partial<VoucherRequirement>, at = builtIn.issuedAt) =>
+      refusalField(() => buildVoucher({ ...req, ...r }, at, "production"));
     expect(field({ payTo: "eip155:46630:0x1111111111111111111111111111111111111111" })).toBe("payTo");
     expect(field({ payer: "eip155:1:0x70997970C51812dc3A010C7d01b50e0d17dc79C8" })).toBe("payer");
     expect(field({ provider: "eip155:46630:0x3c44cdddb6a900fa2b585dd299e03d12fa4293bC" })).toBe("provider");
@@ -199,6 +312,10 @@ describe("buildVoucher", () => {
     expect(field({ seq: "18446744073709551616" })).toBe("seq");
     expect(field({ seq: "-1" })).toBe("seq");
     expect(field({ amount: { ...req.amount, amount: "1.5" } })).toBe("amount");
+    expect(field({ amount: { ...req.amount, asset: "eip155:46630/erc20:0x1111111111111111111111111111111111111111" } })).toBe(
+      "amount.asset",
+    );
+    expect(field({ amount: { ...req.amount, decimals: 18 } })).toBe("amount.decimals");
     expect(field({ resource: "" })).toBe("resource");
     expect(field({ maxTimeoutSeconds: 0 })).toBe("maxTimeoutSeconds");
     expect(field({}, 1.5)).toBe("issuedAt");
@@ -241,5 +358,14 @@ describe("keygen", () => {
     expect(a.privateKey).toMatch(/^0x[0-9a-f]{64}$/);
     expect(privateKeyToAccount(a.privateKey).address).toBe(a.address);
     expect(a.privateKey).not.toBe(b.privateKey);
+  });
+
+  it("never shows the private key when serialised, inspected or spread", () => {
+    const a = generate();
+    const hex = a.privateKey.slice(2);
+    expect(JSON.stringify(a)).not.toContain(hex);
+    expect(inspect(a, { depth: 5 })).not.toContain(hex);
+    expect(JSON.stringify({ ...a })).not.toContain(hex);
+    expect(Object.keys(a)).toEqual(["address"]);
   });
 });
