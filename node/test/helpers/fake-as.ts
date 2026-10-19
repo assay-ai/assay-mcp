@@ -58,6 +58,10 @@ export class FakeAs {
   tokenGate: Promise<void> | null = null;
   /** Forces this status and error on `/oauth/token`. */
   forceTokenError: { status: number; error: string } | null = null;
+  /** Per path: answer badly (never, one byte at a time, reset after the headers, too long). */
+  misbehave: Partial<Record<string, "stall" | "drip" | "reset" | "huge">> = {};
+  /** Overrides `expires_in` on issued pairs. */
+  expiresIn: number | null = null;
   readonly requests: SeenRequest[] = [];
   readonly authorizeParams: URLSearchParams[] = [];
   readonly grants: Grant[] = [];
@@ -128,7 +132,8 @@ export class FakeAs {
     return true;
   }
 
-  private issue(grant: Grant, expiresIn = 3600) {
+  private issue(grant: Grant, requested = 3600) {
+    const expiresIn = this.expiresIn ?? requested;
     const refresh = `assay_rt_${b64()}`;
     const access = `assay_at_${b64()}`;
     this.refresh.set(refresh, { grant, usedAt: null, child: null, grace: null });
@@ -143,6 +148,25 @@ export class FakeAs {
     const url = new URL(req.url ?? "/", "http://x");
     const form = req.headers["content-type"] === "application/x-www-form-urlencoded" ? new URLSearchParams(raw) : null;
     this.requests.push({ method: req.method ?? "", path: url.pathname, form, authorization: req.headers.authorization });
+    const mode = this.misbehave[url.pathname];
+    if (mode === "stall") return; // never answers; the socket stays open
+    if (mode === "drip") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.write("{");
+      const t = setInterval(() => (res.destroyed ? clearInterval(t) : res.write(" ")), 20);
+      res.on("close", () => clearInterval(t));
+      return;
+    }
+    if (mode === "reset") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.write('{"access_token":"');
+      setTimeout(() => req.socket.destroy(), 20);
+      return;
+    }
+    if (mode === "huge") {
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ error: "x", pad: "a".repeat(100_000) }));
+      return;
+    }
     const json = (status: number, body: unknown) => {
       res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" }).end(JSON.stringify(body));
     };

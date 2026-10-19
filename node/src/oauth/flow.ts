@@ -1,13 +1,27 @@
 import { execFile as nodeExecFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { hostname as osHostname } from "node:os";
+import { existsSync } from "node:fs";
+import { hostname as osHostname, tmpdir } from "node:os";
+import { win32 } from "node:path";
 import { silentLogger, type Logger } from "../log/logger.js";
 import { pinnedFetch } from "../net/fetch.js";
 import type { ResolvedDeployment } from "../profile/deployments.js";
 import type { Keychain } from "../profile/keychain.js";
 import { withLock, type LockHandle, type LockOptions, type ProfileRef } from "../profile/lock.js";
 import { createProfile, readProfileFor, updateProfile } from "../profile/profile.js";
-import { clientIdOf, endpoint, issuerOf, postForm, readTokenAnswer, resourceOf, SCOPE, type IssuedTokens } from "./endpoints.js";
+import {
+  clientIdOf,
+  endpoint,
+  issuerOf,
+  postForm,
+  readCapped,
+  readTokenAnswer,
+  REQUEST_TIMEOUT_MS,
+  requestSignal,
+  resourceOf,
+  SCOPE,
+  type IssuedTokens,
+} from "./endpoints.js";
 import { startLoopback, type CallbackResult } from "./loopback.js";
 
 /**
@@ -48,7 +62,15 @@ export interface SignInOptions {
   readonly replaces?: string | null;
 }
 
-export type ExecFile = (file: string, args: readonly string[], options: { shell: false; windowsHide: true; timeout: number }, callback: (err: Error | null) => void) => unknown;
+export interface LaunchOptions {
+  readonly shell: false;
+  readonly windowsHide: true;
+  readonly timeout: number;
+  /** A fixed directory (the profile dir), never the host's cwd. */
+  readonly cwd: string;
+  readonly env: NodeJS.ProcessEnv;
+}
+export type ExecFile = (file: string, args: readonly string[], options: LaunchOptions, callback: (err: Error | null) => void) => unknown;
 
 export interface SignInDeps {
   /** The profile's secrets, through the lock-aware 2.5 API. */
@@ -65,6 +87,8 @@ export interface SignInDeps {
   readonly lockOptions?: LockOptions;
   /** Loopback ports to try (tests). */
   readonly ports?: readonly number[];
+  /** Per-request timeout for the exchange and the credential read; default 15 s. */
+  readonly requestTimeoutMs?: number;
 }
 
 export interface SignInResult {
@@ -120,21 +144,61 @@ export function authorizeUrl(deployment: ResolvedDeployment, p: AuthorizeParams)
   return url.href;
 }
 
-/** The launcher for each platform: never a shell, the URL as one argument. */
-export function browserCommand(platform: NodeJS.Platform, url: string): { file: string; args: string[] } {
-  if (platform === "darwin") return { file: "open", args: [url] };
-  if (platform === "win32") return { file: "rundll32", args: ["url.dll,FileProtocolHandler", url] };
-  return { file: "xdg-open", args: [url] };
+/** Where the launcher may live: absolute paths only, never `PATH` or the cwd (I3). */
+export const POSIX_OPENERS: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  darwin: Object.freeze(["/usr/bin/open"]),
+  linux: Object.freeze(["/usr/bin/xdg-open", "/usr/local/bin/xdg-open"]),
+});
+const WINDOWS_DIR_RE = /^[A-Za-z]:\\Windows$/i;
+const DEFAULT_WINDOWS_DIR = "C:\\Windows";
+
+export interface LauncherInputs {
+  readonly platform: NodeJS.Platform;
+  /** Only `SystemRoot` is read on Windows, and only in the form `X:\Windows`. */
+  readonly env: Readonly<Record<string, string | undefined>>;
+  readonly exists: (path: string) => boolean;
 }
 
 /**
- * Opens `url` in the browser with `execFile` (no shell). Only an `http(s)` URL on the
- * deployment's issuer or web origin is opened (R-MCP-18); anything else is refused.
+ * The launcher for each platform, as an absolute path, with the URL as one argument; `null`
+ * when none is installed where expected (the caller then only prints the link).
+ * - macOS: `/usr/bin/open`.
+ * - Windows: `{SystemRoot}\System32\rundll32.exe url.dll,FileProtocolHandler`. A project
+ *   config can set env, so `SystemRoot` is trusted only as a drive's `\Windows`; otherwise
+ *   `C:\Windows`.
+ * - Linux and the rest: `xdg-open` from `/usr/bin` or `/usr/local/bin`.
+ */
+export function browserCommand(inputs: LauncherInputs, url: string): { file: string; args: string[] } | null {
+  if (inputs.platform === "win32") {
+    const fromEnv = inputs.env.SystemRoot ?? "";
+    const roots = WINDOWS_DIR_RE.test(fromEnv) ? [fromEnv, DEFAULT_WINDOWS_DIR] : [DEFAULT_WINDOWS_DIR];
+    for (const root of roots) {
+      const file = win32.join(root, "System32", "rundll32.exe");
+      if (inputs.exists(file)) return { file, args: ["url.dll,FileProtocolHandler", url] };
+    }
+    return null;
+  }
+  const candidates = POSIX_OPENERS[inputs.platform] ?? POSIX_OPENERS.linux!;
+  const file = candidates.find((c) => inputs.exists(c));
+  return file ? { file, args: [url] } : null;
+}
+
+/** The launcher's environment: the process env without `BROWSER` (xdg-open would run it). */
+function launcherEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const copy = { ...env };
+  delete copy.BROWSER;
+  return copy;
+}
+
+/**
+ * Opens `url` in the browser with `execFile` (no shell, an absolute launcher, a fixed cwd).
+ * Only an `http(s)` URL on the deployment's issuer or web origin is opened (R-MCP-18);
+ * anything else, or a missing launcher, returns false and the caller prints the link.
  */
 export function openBrowser(
   deployment: ResolvedDeployment,
   url: string,
-  options: { execFile?: ExecFile; platform?: NodeJS.Platform } = {},
+  options: { execFile?: ExecFile; platform?: NodeJS.Platform; env?: NodeJS.ProcessEnv; exists?: (path: string) => boolean; cwd?: string } = {},
 ): Promise<boolean> {
   let parsed: URL;
   try {
@@ -152,11 +216,14 @@ export function openBrowser(
   if (!/^https?:$/.test(parsed.protocol) || !allowed.includes(parsed.origin) || parsed.username || parsed.password) {
     return Promise.resolve(false);
   }
-  const { file, args } = browserCommand(options.platform ?? process.platform, parsed.href);
+  const env = options.env ?? process.env;
+  const command = browserCommand({ platform: options.platform ?? process.platform, env, exists: options.exists ?? existsSync }, parsed.href);
+  if (command === null) return Promise.resolve(false);
   const run = options.execFile ?? (nodeExecFile as unknown as ExecFile);
+  const launch: LaunchOptions = { shell: false, windowsHide: true, timeout: 15_000, cwd: options.cwd ?? tmpdir(), env: launcherEnv(env) };
   return new Promise((resolve) => {
     try {
-      run(file, args, { shell: false, windowsHide: true, timeout: 15_000 }, (err) => resolve(err === null));
+      run(command.file, command.args, launch, (err) => resolve(err === null));
     } catch {
       resolve(false);
     }
@@ -167,15 +234,26 @@ export function openBrowser(
  * The credential id of an access token: `GET {API}/agents/me/delegate` (`{data: {credentialId}}`
  * through the API envelope). `null` on any failure.
  */
-export async function identifyCredential(deployment: ResolvedDeployment, accessToken: string, log: Logger = silentLogger): Promise<string | null> {
+export async function identifyCredential(
+  deployment: ResolvedDeployment,
+  accessToken: string,
+  log: Logger = silentLogger,
+  options: { signal?: AbortSignal | undefined; timeoutMs?: number | undefined } = {},
+): Promise<string | null> {
   try {
     const res = await pinnedFetch(deployment, `${deployment.api.replace(/\/+$/, "")}/agents/me/delegate`, {
       headers: { accept: "application/json" },
       bearer: accessToken,
       log,
+      signal: requestSignal(options.timeoutMs ?? REQUEST_TIMEOUT_MS, options.signal),
     });
-    if (res.status !== 200) return null;
-    const body = (await res.json()) as { data?: { credentialId?: unknown } } | null;
+    if (res.status !== 200) {
+      await res.body?.cancel().catch(() => {});
+      return null;
+    }
+    const text = await readCapped(res);
+    if (text === null) return null;
+    const body = JSON.parse(text) as { data?: { credentialId?: unknown } } | null;
     const id = body?.data?.credentialId;
     return typeof id === "string" && UUID_RE.test(id) ? id.toLowerCase() : null;
   } catch {
@@ -226,7 +304,7 @@ export async function signIn(profile: ProfileRef, deployment: ResolvedDeployment
       try {
         const link = authorizeUrl(deployment, { redirectUri: loopback.redirectUri, state, challenge, device, replaces });
         deps.onLink?.(link);
-        const opened = await (deps.openBrowser ?? ((u: string) => openBrowser(deployment, u)))(link);
+        const opened = await (deps.openBrowser ?? ((u: string) => openBrowser(deployment, u, { cwd: profile.dir })))(link);
         if (!opened) log.warn("browser not opened; use the printed link");
         let result: CallbackResult;
         try {
@@ -240,7 +318,7 @@ export async function signIn(profile: ProfileRef, deployment: ResolvedDeployment
       }
 
       lock.assertHeld();
-      const answer = await exchange(deployment, lock, { code, verifier, redirectUri: loopback.redirectUri }, nowSeconds, log);
+      const answer = await exchange(deployment, lock, { code, verifier, redirectUri: loopback.redirectUri }, nowSeconds, log, deps.requestTimeoutMs);
       try {
         lock.assertHeld();
         await deps.keychain.storeTokens(lock, { refreshToken: answer.refreshToken, accessToken: { token: answer.accessToken, expiresAt: answer.expiresAt } });
@@ -251,7 +329,7 @@ export async function signIn(profile: ProfileRef, deployment: ResolvedDeployment
       }
       log.info("signed in");
 
-      const credentialId = await identifyCredential(deployment, answer.accessToken, log);
+      const credentialId = await identifyCredential(deployment, answer.accessToken, log, { signal: lock.signal, timeoutMs: deps.requestTimeoutMs });
       if (credentialId === null) {
         log.warn("signed in, but the credential id could not be read; it is read again later");
         return { credentialId: null };
@@ -274,16 +352,23 @@ export async function signIn(profile: ProfileRef, deployment: ResolvedDeployment
   );
 }
 
+/**
+ * The code exchange. Every failure (network, timeout, a reset or oversized body, a refusal) is
+ * `SignInError("failed")`, except a lost lock (`LOCK_LOST`). If the AS minted the grant but
+ * the answer was lost, that grant is orphaned: nothing holds a token to revoke it, and it
+ * expires after 30 idle days or is revoked from Agents & keys.
+ */
 async function exchange(
   deployment: ResolvedDeployment,
   lock: LockHandle,
   input: { code: string; verifier: string; redirectUri: string },
   nowSeconds: () => number,
   log: Logger,
+  timeoutMs: number | undefined,
 ): Promise<IssuedTokens> {
-  let res: Response;
+  let answer;
   try {
-    res = await postForm(
+    const res = await postForm(
       deployment,
       "token",
       {
@@ -294,12 +379,14 @@ async function exchange(
         code_verifier: input.verifier,
         resource: resourceOf(deployment),
       },
-      { signal: lock.signal, log },
+      { signal: lock.signal, log, timeoutMs },
     );
-  } catch {
+    answer = await readTokenAnswer(res, nowSeconds());
+  } catch (err) {
+    lock.assertHeld();
+    log.warn("code exchange failed", { error: err instanceof Error ? err.name : "error" });
     throw fail("failed");
   }
-  const answer = await readTokenAnswer(res, nowSeconds());
   if (!answer.ok) {
     log.warn("code exchange refused", { status: answer.status, error: answer.error });
     throw fail("failed");
