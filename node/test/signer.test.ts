@@ -214,6 +214,35 @@ describe("buildVoucher", () => {
     }
   });
 
+  it("the built-in table is deep-frozen: a write throws and vouchers keep the production escrow", () => {
+    const table = builtInDeployments();
+    const net = table.production.networks["eip155:46630"]!;
+    const golden = cases.find((v) => v.name === "backend-cast-golden")!;
+    expect(Object.isFrozen(table)).toBe(true);
+    expect(() => {
+      (net as { escrow: string }).escrow = golden.network.escrow;
+    }).toThrow(TypeError);
+    expect(() => {
+      (net as { decimals: number }).decimals = 18;
+    }).toThrow(TypeError);
+    expect(() => {
+      (net.rpc as string[]).push("https://rpc.example.com");
+    }).toThrow(TypeError);
+    expect(() => {
+      (table.production.networks as Record<string, unknown>)["eip155:1"] = net;
+    }).toThrow(TypeError);
+    expect(() => {
+      (table as Record<string, unknown>).production = table.e2e;
+    }).toThrow(TypeError);
+    expect(() => Object.assign(table.production, { api: "https://api.example.com" })).toThrow(TypeError);
+    expect(net.escrow).toBe("eip155:46630:0x1D2625efD87c2fc10b8563f3F0890072845Fcf41");
+    const { typedData } = buildVoucher(req, builtIn.issuedAt, "production");
+    expect(typedData.domain.verifyingContract).toBe("0x1D2625efD87c2fc10b8563f3F0890072845Fcf41");
+    expect(refusalField(() => buildVoucher(golden.requirement as VoucherRequirement, golden.issuedAt, "production"))).toBe(
+      "payTo",
+    );
+  });
+
   it("refuses to sign for the built-in table's placeholder entry (staging)", () => {
     expect(refusalField(() => buildVoucher(req, builtIn.issuedAt, "staging"))).toBe("network.escrow");
   });
