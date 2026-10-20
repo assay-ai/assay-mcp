@@ -8,6 +8,7 @@ import { Forwarder, reasonOf } from "../src/proxy/forwarder.js";
 import { appName, SignInController } from "../src/proxy/presignin.js";
 import { classify, negotiateVersion, SUPPORTED_PROTOCOL_VERSIONS } from "../src/proxy/protocol.js";
 import { LineSplitter } from "../src/proxy/stdio.js";
+import { apiRequest, BIND_TEXTS, BindError } from "../src/proxy/delegate-bind.js";
 import { createLogger } from "../src/log/logger.js";
 import { PinnedFetchError } from "../src/net/fetch.js";
 
@@ -215,6 +216,25 @@ describe("alias table", () => {
     expect(lines).toHaveLength(1);
     t.rewriteList({ tools: [{ name: "c" }] }, true);
     expect(t.original(alias)).toBe(alias);
+  });
+});
+
+describe("delegate binding API refusals (M9)", () => {
+  const answer = (status: number, body: unknown) => () => Promise.resolve(new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } }));
+  const call = (fetch: () => Promise<Response>) => apiRequest(fetch, "http://localhost:3000/api/v1", "assay_at_x", "POST", "/agents/me/delegate", {});
+
+  it("a key still bound to another credential gets its own text", async () => {
+    const refused = answer(409, { success: false, error: { code: "ACCOUNT_DELEGATE_ALREADY_BOUND", message: "already bound" } });
+    await expect(call(refused)).rejects.toBeInstanceOf(BindError);
+    await expect(call(refused)).rejects.toThrow(BIND_TEXTS.alreadyBound);
+    expect(BIND_TEXTS.alreadyBound).toMatch(/still bound to another Assay connection\. Run logout, then login/);
+  });
+
+  it("any other refusal stays a generic failure", async () => {
+    expect(await call(answer(409, { error: { code: "SOMETHING_ELSE" } }))).toBeNull();
+    expect(await call(() => Promise.resolve(new Response("not json", { status: 409 })))).toBeNull();
+    expect(await call(answer(400, { error: { code: "ACCOUNT_DELEGATE_ALREADY_BOUND" } }))).toBeNull();
+    expect(await call(answer(200, { data: { ok: true } }))).toMatchObject({ body: { data: { ok: true } } });
   });
 });
 
