@@ -6,13 +6,13 @@ import { currentAccess, hasGrant, RefreshError, refreshUnderLock, type TokenCont
 import type { ResolvedDeployment } from "../profile/deployments.js";
 import { KeychainError, type Keychain } from "../profile/keychain.js";
 import { LockError, withLock, type LockOptions, type ProfileRef } from "../profile/lock.js";
-import { createProfile, readProfileFor, updateProfile } from "../profile/profile.js";
+import { createProfile, readProfile, readProfileFor, updateProfile } from "../profile/profile.js";
 import { AliasTable } from "./aliases.js";
 import { CallRegistry, type ForwardedCall } from "./calls.js";
 import { prepareCallParams, quotesFromList } from "./meta.js";
 import type { PaidHost } from "./paid.js";
 import { Forwarder, type FetchLike, type Outcome } from "./forwarder.js";
-import { answerInitialize, answerSignedOut, appName, SignInController, signInBusyText, signInText, type SignInHooks } from "./presignin.js";
+import { answerInitialize, answerSignedOut, appName, loginCommand, SignInController, signInBusyText, signInEndedText, signInText, type SignInHooks } from "./presignin.js";
 import {
   classify,
   envelopeVersion,
@@ -49,6 +49,13 @@ import type { StdoutWriter } from "./stdio.js";
  *   host's own bytes, except a `tools/call` on an alias, which is sent with the exact original
  *   name. A 401 refreshes under the lock and retries once; if that fails, the proxy goes back
  *   to pre-sign-in mode and sends `list_changed`.
+ *
+ * When the server ended the sign-in (owner decision 2026-10-21), the browser is not opened by
+ * itself: tool calls answer with `login` and a link (a passive sign-in), and the keychain poll
+ * picks up the next grant. "Ended" is this process's `invalid_grant` or 401-after-refresh, or,
+ * after a restart, a profile file without a grant: the profile file is written only after a
+ * sign-in and `logout` deletes it, so a profile that never signed in (or was logged out) still
+ * opens the browser on its first tool call.
  *
  * Nothing here throws to the event loop: every failure is a JSON-RPC answer or a log line.
  */
@@ -102,6 +109,8 @@ export class Proxy {
   private remoteInit: Promise<Outcome> | null = null;
   /** A refresh token the server refused while it was still stored: not a new sign-in. */
   private rejectedRefresh: string | null = null;
+  /** The server ended this process's sign-in (`invalid_grant`, or a 401 after a refresh). */
+  private serverEnded = false;
   private pollTimer: NodeJS.Timeout | null = null;
   private credentialChecked = false;
   private credentialAttemptAt = 0;
@@ -185,7 +194,23 @@ export class Proxy {
       keychain: this.o.keychain,
       log: this.o.log ?? silentLogger,
       ...(this.o.lockOptions ? { lockOptions: this.o.lockOptions } : {}),
+      onSignInEnded: () => {
+        this.serverEnded = true;
+      },
     };
+  }
+
+  /**
+   * Whether this profile signed in before and the server ended that sign-in: then nothing
+   * opens the browser by itself. An unreadable profile file counts as signed in before.
+   */
+  private signInEnded(): boolean {
+    if (this.serverEnded) return true;
+    try {
+      return readProfile(this.o.profile) !== null;
+    } catch {
+      return true;
+    }
   }
 
   /** Decides the starting mode; signed out, starts F1 and prints its link to stderr. */
@@ -205,8 +230,14 @@ export class Proxy {
       return;
     }
     this.enterSignedOut(false);
+    const ended = this.signInEnded();
     this.signIns.begin(false).then(
-      (link) => this.o.stderr(`assay-mcp: sign in to Assay: ${link}\n`),
+      (link) =>
+        this.o.stderr(
+          ended
+            ? `assay-mcp: the Assay sign-in was ended on the web. Sign in again with \`${loginCommand(this.o.profile.name)}\` in a terminal, or open: ${link}\n`
+            : `assay-mcp: sign in to Assay: ${link}\n`,
+        ),
       (err: unknown) => this.log.info("sign-in not started at startup", { error: errorName(err) }),
     );
   }
@@ -340,9 +371,10 @@ export class Proxy {
 
   private async answerSignedOut(req: JsonRpcRequest): Promise<JsonRpcResponse> {
     if (req.method !== "tools/call") {
-      const local = answerSignedOut(req.method);
+      const local = answerSignedOut(req.method, req.method === "tools/list" && this.signInEnded());
       return "result" in local ? resultResponse(req.id, local.result) : { jsonrpc: "2.0", id: req.id, error: local.error };
     }
+    if (this.signInEnded()) return this.answerSignInEnded(req);
     // §7.6 step 3: assay_sign_in, or any other tool, starts F1 and opens the browser.
     let link: string;
     try {
@@ -365,6 +397,36 @@ export class Proxy {
     });
   }
 
+  /**
+   * A tool call after the server ended the sign-in: never opens the browser. Joins (or starts)
+   * a passive sign-in for its link; `login` in a terminal takes that over, and either way the
+   * keychain poll or the flow itself brings the proxy back to signed-in.
+   */
+  private async answerSignInEnded(req: JsonRpcRequest): Promise<JsonRpcResponse> {
+    const tool = typeof req.params?.name === "string" ? req.params.name : "";
+    let link: string | null = null;
+    let held: string | null = null;
+    try {
+      held = await this.o.keychain.get("refresh_token");
+    } catch {
+      // unreadable: the link is tried; the flow reports a keychain failure as no link
+    }
+    // A refused grant still stored (401 after a refresh) would end a sign-in at once as
+    // "existing": only `login` (which replaces it) helps then, so no link is offered.
+    if (held === null) {
+      try {
+        link = await this.signIns.begin(false);
+      } catch (err) {
+        if (this.mode === "signed-in") return this.forward(req, JSON.stringify(req)); // a grant was stored meanwhile
+        this.log.info("no sign-in link after the sign-in ended", { error: errorName(err) });
+      }
+    }
+    return resultResponse(req.id, {
+      content: [{ type: "text", text: signInEndedText(link, this.app, this.o.profile.name) }],
+      ...(tool === SIGN_IN_TOOL ? {} : { isError: true }),
+    });
+  }
+
   private async runSignIn(hooks: SignInHooks): Promise<void> {
     let result: SignInResult;
     try {
@@ -375,6 +437,7 @@ export class Proxy {
       throw err;
     }
     this.rejectedRefresh = null;
+    this.serverEnded = false;
     if (result.existing) {
       // A grant was stored before or meanwhile (another window): use it.
       this.credentialChecked = false;
@@ -397,6 +460,7 @@ export class Proxy {
     }
     if (refresh !== null && refresh !== this.rejectedRefresh) {
       this.signIns.cancel(); // another process signed in: stop waiting for our own browser
+      this.serverEnded = false;
       this.credentialChecked = false;
       this.enterSignedIn();
     }
@@ -511,8 +575,9 @@ export class Proxy {
       if (outcome.kind === "unauthorized") {
         if (this.o.apiKey !== null) return errorResponse(req.id, SERVER_ERROR, "Assay refused the API key in the environment.");
         if (attempt > 0) {
-          // Refused even with a fresh token: back to sign-in.
+          // Refused even with a fresh token: the server ended the sign-in; back to sign-in.
           await this.rememberRefused();
+          this.serverEnded = true;
           this.enterSignedOut(true);
           return "signed-out";
         }

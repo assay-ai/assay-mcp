@@ -10,6 +10,8 @@ import { aliasTool } from "../src/clients/server-name.js";
 import { addDevOrigin } from "../src/profile/dev-origins.js";
 import { Keychain } from "../src/profile/keychain.js";
 import { withLock } from "../src/profile/lock.js";
+import { createProfile } from "../src/profile/profile.js";
+import { RUN } from "../src/version.js";
 import { bundleFixture } from "./helpers/bundle.js";
 import { E2E_MCP, FakeAs } from "./helpers/fake-as.js";
 import { FakeMcp } from "./helpers/fake-mcp.js";
@@ -554,6 +556,91 @@ describe("aliases", () => {
     expect(la.tools[0]!.name).toBe(lb.tools[0]!.name);
     expect(la.tools[0]!.name).toBe(aliasTool("x".repeat(16), LONG));
     expect(la.tools[0]!.name).not.toBe(LONG);
+  });
+});
+
+describe("sign-in ended by the server (owner decision 2026-10-21)", () => {
+  const textOf = (r: Record<string, unknown>) => (r.content as { text: string }[])[0]!.text;
+  const ENDED_RE = /^Your Assay sign-in was ended on the web \(or it expired\)\. To sign in again, run in a terminal:\n(.+)\nor open this link in your browser:\n(http:\/\/localhost:3200\/oauth\/authorize\?\S+)\nAssay tools appear here when you're done \(if they don't, restart test-host\)\.$/;
+
+  /** A grant stored for `profile`, as `login` in a terminal leaves it. */
+  async function loginStores(profile = "default") {
+    const pair = as.seedGrant();
+    const keychain = new Keychain(new FileKeyring(keyringFile), { profile, environment: "e2e" });
+    await withLock({ dir, name: profile }, (lock) =>
+      keychain.storeTokens(lock, { refreshToken: pair.refreshToken, accessToken: { token: pair.accessToken, expiresAt: Math.floor(Date.now() / 1000) + 3600 } }),
+    );
+  }
+
+  it("revoked, then a call: no browser; the answer has the login command and the link; login brings the tools back", async () => {
+    await signedIn();
+    const { client, changed } = await connect();
+    expect((await client.listTools()).tools.map((t) => t.name)).toEqual(["echo"]);
+    as.grants[0]!.revoked = true; // 401, then the refresh gets invalid_grant
+    const res = await client.callTool({ name: "echo", arguments: {} });
+    expect(res.isError).toBe(true);
+    const m = ENDED_RE.exec(textOf(res));
+    expect(m).not.toBeNull();
+    expect(m![1]).toBe(`${RUN} login`);
+    expect(as.tokenCalls("refresh_token")).toHaveLength(1);
+    await until(() => changed.length === 1);
+    // The sign-in tool says it does not open the browser, and calling it does not either.
+    const { tools } = await client.listTools();
+    expect(tools.map((t) => t.name)).toEqual(["assay_sign_in"]);
+    expect(tools[0]!.description).toMatch(/does not open your browser/);
+    const again = await client.callTool({ name: "assay_sign_in", arguments: {} });
+    expect(again.isError).toBeUndefined();
+    expect(ENDED_RE.exec(textOf(again))![2]).toBe(m![2]); // the same passive sign-in
+    await sleep(300);
+    expect(mcp.opened).toEqual([]);
+
+    // `login` in a terminal: the keychain poll picks the new grant up, no restart.
+    await loginStores();
+    await until(() => changed.length === 2, 5_000);
+    expect((await client.listTools()).tools.map((t) => t.name)).toEqual(["echo"]);
+    expect((await client.callTool({ name: "echo", arguments: {} })).isError).toBeFalsy();
+    expect(mcp.opened).toEqual([]);
+  });
+
+  it("the person opens the link themselves: signed in again, nothing opened", async () => {
+    await signedIn();
+    const { client, changed } = await connect();
+    expect((await client.listTools()).tools.map((t) => t.name)).toEqual(["echo"]);
+    as.grants[0]!.revoked = true;
+    const link = ENDED_RE.exec(textOf(await client.callTool({ name: "echo", arguments: {} })))![2]!;
+    await fetch(as.approve(link)).then((r) => r.text());
+    await until(() => changed.length === 2, 10_000);
+    expect((await client.listTools()).tools.map((t) => t.name)).toEqual(["echo"]);
+    expect(mcp.opened).toEqual([]);
+    expect(as.tokenCalls("authorization_code")).toHaveLength(1);
+  });
+
+  it("a first sign-in still opens the browser on the first tool call", async () => {
+    const { client, changed } = await connect();
+    const res = await client.callTool({ name: "echo", arguments: {} });
+    expect(textOf(res)).toMatch(/^Approve in your browser:\n/);
+    expect(res.isError).toBe(true);
+    await until(() => changed.length > 0, 10_000);
+    expect(mcp.opened).toHaveLength(1);
+  });
+
+  it("restarted on a profile whose sign-in ended: no browser; the hint names the profile", async () => {
+    // What a sign-in leaves and invalid_grant keeps: the profile file, no tokens.
+    await withLock({ dir, name: "work" }, (lock) => {
+      createProfile({ dir, name: "work" }, lock, { environment: "e2e", credentialId: "8f0c2b6e-1d2a-4c3b-9e4f-5a6b7c8d9e0f", agentLabel: "agent", createdAt: "2026-10-01T00:00:00Z" });
+    });
+    const { client, changed, stderr } = await connect(["--profile", "work"]);
+    await until(() => /sign-in was ended on the web/.test(stderr()));
+    expect(stderr()).toContain(`${RUN} login --profile work`);
+    const res = await client.callTool({ name: "echo", arguments: {} });
+    const m = ENDED_RE.exec(textOf(res));
+    expect(m![1]).toBe(`${RUN} login --profile work`);
+    await sleep(300);
+    expect(mcp.opened).toEqual([]);
+    await loginStores("work");
+    await until(() => changed.length === 1, 5_000);
+    expect((await client.listTools()).tools.map((t) => t.name)).toEqual(["echo"]);
+    expect(mcp.opened).toEqual([]);
   });
 });
 

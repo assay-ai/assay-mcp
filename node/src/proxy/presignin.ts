@@ -1,5 +1,6 @@
+import { DEFAULT_PROFILE } from "../clients/install-command.js";
 import { SIGN_IN_TOOL } from "../clients/server-name.js";
-import { VERSION } from "../version.js";
+import { RUN, VERSION } from "../version.js";
 import { METHOD_NOT_FOUND, negotiateVersion, type JsonRpcError, type ProtocolVersion } from "./protocol.js";
 
 /**
@@ -8,16 +9,39 @@ import { METHOD_NOT_FOUND, negotiateVersion, type JsonRpcError, type ProtocolVer
  * `initialize` is always answered here, signed in or not. Without a credential, `tools/list`
  * offers the one local tool `assay_sign_in`; calling it (or any tool) starts F1 and returns
  * the link; `resources/*` and `prompts/*` are empty.
+ *
+ * After the server ended the sign-in (owner decision 2026-10-21: the app was removed on the
+ * web, the grant expired), nothing opens the browser by itself: tool calls answer with the
+ * `login` command and a sign-in link the person may open. A first sign-in still opens it.
  */
 
 export const INSTRUCTIONS = "If Assay tools are missing, call assay_sign_in.";
 export const SIGN_IN_DESCRIPTION = "Connect Assay. Opens your browser to approve, and returns the link.";
+
+export const SIGN_IN_AGAIN_DESCRIPTION = "Connect Assay again. Your sign-in was ended on the web; returns how to sign in again (does not open your browser).";
 
 export const SIGN_IN_TOOL_DEFINITION = Object.freeze({
   name: SIGN_IN_TOOL,
   description: SIGN_IN_DESCRIPTION,
   inputSchema: { type: "object", properties: {}, additionalProperties: false },
 });
+
+/** The `login` command for `profile`: a named profile must be passed, or it signs in `default`. */
+export function loginCommand(profile: string): string {
+  return `${RUN} login${profile === DEFAULT_PROFILE ? "" : ` --profile ${profile}`}`;
+}
+
+/**
+ * The answer to a tool call after the server ended the sign-in: the `login` command and, when
+ * one could be made, a link the person may open (never opened here). Each stands on its own line.
+ */
+export function signInEndedText(link: string | null, app: string, profile: string): string {
+  const open = link === null ? "" : `or open this link in your browser:\n${link}\n`;
+  return (
+    `Your Assay sign-in was ended on the web (or it expired). To sign in again, run in a terminal:\n${loginCommand(profile)}\n` +
+    `${open}Assay tools appear here when you're done (if they don't, restart ${app}).`
+  );
+}
 
 /**
  * §7.6 step 3. The link stands alone on its own line: hosts that linkify text took a trailing
@@ -74,8 +98,8 @@ const EMPTY: Readonly<Record<string, () => Record<string, unknown>>> = {
  * The local answer for a request other than `initialize` and `tools/call` while signed out:
  * a result, or a JSON-RPC error.
  */
-export function answerSignedOut(method: string): { result: Record<string, unknown> } | { error: JsonRpcError } {
-  if (method === "tools/list") return { result: { tools: [{ ...SIGN_IN_TOOL_DEFINITION }] } };
+export function answerSignedOut(method: string, ended = false): { result: Record<string, unknown> } | { error: JsonRpcError } {
+  if (method === "tools/list") return { result: { tools: [{ ...SIGN_IN_TOOL_DEFINITION, ...(ended ? { description: SIGN_IN_AGAIN_DESCRIPTION } : {}) }] } };
   const empty = EMPTY[method];
   if (empty) return { result: empty() };
   return { error: { code: METHOD_NOT_FOUND, message: "Method not found" } };

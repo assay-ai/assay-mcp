@@ -48,7 +48,7 @@ Hosted apps (claude.ai, ChatGPT and Claude Desktop connectors) connect to `https
 
 ## How it works
 
-1. **Sign in.** On first use, the app shows one tool, `assay_sign_in`. Calling it opens your browser to approve this app for your Assay agent. The tokens are stored in the OS keychain.
+1. **Sign in.** On first use, the app shows one tool, `assay_sign_in`. Calling it opens your browser to approve this app for your Assay agent. The tokens are stored in the OS keychain. If the sign-in is later ended on the Assay website (or expires), `assay-mcp` does not open your browser by itself: tool calls answer with a sign-in link and the command to run in a terminal, `npx -y @goassay-ai/mcp@0.1.0 login` (add `--profile <name>` for a named profile). The tools come back once you sign in again, without restarting the app.
 2. **Free calls** are forwarded to Assay as they are.
 3. **First paid call.** `assay-mcp` creates a payment key on this computer, registers it with your agent, and shows a link and the key's fingerprint (for example `1A2B 9F3C`). Open the link, check that the page shows the same fingerprint, and approve the limits with your wallet.
 4. **Later paid calls.** `assay-mcp` checks every payment request against its local guards, then signs it. It signs at most one payment per tool call.

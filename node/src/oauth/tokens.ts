@@ -44,6 +44,8 @@ export interface TokenContext {
   readonly lockOptions?: LockOptions;
   /** Per-request timeout and refresh bound; tests shorten them. */
   readonly timeouts?: { readonly requestMs?: number; readonly refreshBoundMs?: number };
+  /** Called when the server ended the sign-in (`invalid_grant`, `invalid_client`). */
+  readonly onSignInEnded?: () => void;
 }
 
 /** The longest one refresh may hold the profile lock (below the 30 s lock wait and staleness). */
@@ -121,6 +123,7 @@ export async function refreshUnderLock(ctx: TokenContext, failedToken: string | 
       if (answer.error === "invalid_grant" || answer.error === "invalid_client") {
         await keychain.deleteTokensIfRefreshIs(lock, refreshToken);
         log.warn("sign-in ended by the server; sign in again", { status: answer.status, error: answer.error });
+        ctx.onSignInEnded?.();
         return null;
       }
       log.warn("refresh refused", { status: answer.status, error: answer.error });

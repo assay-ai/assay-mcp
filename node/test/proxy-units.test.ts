@@ -5,7 +5,7 @@ import { AliasTable } from "../src/proxy/aliases.js";
 import { CallRegistry, CONFIRMATION_TTL_MS, TOMBSTONE_MS } from "../src/proxy/calls.js";
 import { checkEnvironment } from "../src/proxy/environment.js";
 import { Forwarder, reasonOf } from "../src/proxy/forwarder.js";
-import { appName, SignInController } from "../src/proxy/presignin.js";
+import { answerSignedOut, appName, loginCommand, SIGN_IN_AGAIN_DESCRIPTION, SIGN_IN_DESCRIPTION, SignInController, signInEndedText } from "../src/proxy/presignin.js";
 import { classify, negotiateVersion, SUPPORTED_PROTOCOL_VERSIONS } from "../src/proxy/protocol.js";
 import { LineSplitter } from "../src/proxy/stdio.js";
 import { apiGet, apiRequest, BIND_TEXTS, BindError } from "../src/proxy/delegate-bind.js";
@@ -199,6 +199,30 @@ describe("sign-in controller", () => {
     expect(appName({ name: "\u001b[31mHost\n" })).toBe("31mHost");
     expect(appName({ name: "\u001b\n" })).toBe("your app");
     expect(appName(null)).toBe("your app");
+  });
+});
+
+describe("sign-in ended texts (owner decision 2026-10-21)", () => {
+  it("names the login command, with --profile only for a named profile", () => {
+    expect(loginCommand("default")).toBe(`${RUN} login`);
+    expect(loginCommand("work")).toBe(`${RUN} login --profile work`);
+  });
+
+  it("puts the command and the link on their own lines; no link line without a link", () => {
+    expect(signInEndedText("https://x.example/a", "Cursor", "work").split("\n")).toEqual([
+      "Your Assay sign-in was ended on the web (or it expired). To sign in again, run in a terminal:",
+      `${RUN} login --profile work`,
+      "or open this link in your browser:",
+      "https://x.example/a",
+      "Assay tools appear here when you're done (if they don't, restart Cursor).",
+    ]);
+    expect(signInEndedText(null, "Cursor", "default")).not.toContain("open this link");
+  });
+
+  it("tools/list describes the sign-in tool by state", () => {
+    const description = (ended: boolean) => ((answerSignedOut("tools/list", ended) as { result: { tools: { description: string }[] } }).result.tools[0]!.description);
+    expect(description(false)).toBe(SIGN_IN_DESCRIPTION);
+    expect(description(true)).toBe(SIGN_IN_AGAIN_DESCRIPTION);
   });
 });
 
