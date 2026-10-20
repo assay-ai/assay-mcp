@@ -8,7 +8,7 @@ import { Forwarder, reasonOf } from "../src/proxy/forwarder.js";
 import { appName, SignInController } from "../src/proxy/presignin.js";
 import { classify, negotiateVersion, SUPPORTED_PROTOCOL_VERSIONS } from "../src/proxy/protocol.js";
 import { LineSplitter } from "../src/proxy/stdio.js";
-import { apiRequest, BIND_TEXTS, BindError } from "../src/proxy/delegate-bind.js";
+import { apiGet, apiRequest, BIND_TEXTS, BindError } from "../src/proxy/delegate-bind.js";
 import { createLogger } from "../src/log/logger.js";
 import { PinnedFetchError } from "../src/net/fetch.js";
 
@@ -235,6 +235,16 @@ describe("delegate binding API refusals (M9)", () => {
     expect(await call(() => Promise.resolve(new Response("not json", { status: 409 })))).toBeNull();
     expect(await call(answer(400, { error: { code: "ACCOUNT_DELEGATE_ALREADY_BOUND" } }))).toBeNull();
     expect(await call(answer(200, { data: { ok: true } }))).toMatchObject({ body: { data: { ok: true } } });
+  });
+
+  it("apiGet tells a 404 (a route an older backend lacks) from a failure; apiRequest does not", async () => {
+    const get = (fetch: () => Promise<Response>) => apiGet(fetch, "http://localhost:3000/api/v1", "assay_at_x", "/agents/me/delegate/status");
+    expect(await get(answer(404, { message: "Cannot GET" }))).toBe("not-found");
+    expect(await get(answer(500, {}))).toBeNull();
+    expect(await get(answer(409, { error: { code: "ACCOUNT_DELEGATE_ALREADY_BOUND" } }))).toBeNull();
+    expect(await get(() => Promise.reject(new Error("down")))).toBeNull();
+    expect(await get(answer(200, { data: { bound: true } }))).toMatchObject({ body: { data: { bound: true } } });
+    expect(await call(answer(404, {}))).toBeNull();
   });
 });
 

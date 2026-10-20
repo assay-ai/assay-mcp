@@ -262,13 +262,34 @@ describe("paid path (SDK client → proxy → fake Assay)", () => {
     expect(privateKeyToAccount(pk as `0x${string}`).address).toBe(address);
     expect(stderr()).not.toContain(pk!.slice(2));
 
-    // The page is approved: the poll sees ACTIVE, confirms on chain, and says so.
+    // The page is approved: the wait sees the grant on chain, Assay confirms it, and says so.
+    const fullReads = () => fake.paths.filter((p) => p === "GET /api/v1/agents/me/delegate").length;
+    await until(() => fake.paths.includes("GET /api/v1/agents/me/delegate/status"));
+    await new Promise((r) => setTimeout(r, 500)); // a few ticks of the wait, none of them on the API
+    const before = fullReads();
     fake.grant(address);
     await until(() => stderr().includes("Paid calls are on"));
+    // One status read and one full read for the whole wait, however many ticks it took.
+    expect(fake.paths.filter((p) => p === "GET /api/v1/agents/me/delegate/status")).toHaveLength(1);
+    expect(fullReads()).toBe(before + 1);
     // Then the next call pays.
     const paid = await client.callTool({ name: "weather", arguments: {} });
     expect(paid.isError).toBeFalsy();
     expect(fake.accepted).toHaveLength(1);
+  });
+
+  it("an older backend (no status route, 404): the wait polls the full route as before and still turns paid calls on", async () => {
+    await seedProfile(false);
+    fake.statusRoute = false;
+    const { client, stderr } = await connect({ extraEnv: { TEST_POLL_MS: "100" } });
+    const r = await client.callTool({ name: "weather", arguments: {} });
+    expect(textOf(r)).toContain("paid calls are off for this agent");
+    await until(() => fake.paths.filter((p) => p === "GET /api/v1/agents/me/delegate").length >= 2);
+    fake.grant(fake.delegate!);
+    await until(() => stderr().includes("Paid calls are on"));
+    expect(fake.paths.filter((p) => p === "GET /api/v1/agents/me/delegate/status")).toHaveLength(1);
+    const paid = await client.callTool({ name: "weather", arguments: {} });
+    expect(paid.isError).toBeFalsy();
   });
 
   it("binding: the challenge is checked against a Date-corrected clock (skew 100 s), refused past the clamp (200 s) after one retry", async () => {

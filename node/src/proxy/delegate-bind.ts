@@ -39,6 +39,8 @@ export const BIND_TEXTS = Object.freeze({
 
 /** The backend's 409 when the key is bound to another live credential (only the bind request can get it). */
 const ALREADY_BOUND_CODE = "ACCOUNT_DELEGATE_ALREADY_BOUND" as const;
+/** `request`'s answer to a 404. */
+const NOT_FOUND = "not-found" as const;
 
 const API_TIMEOUT_MS = 15_000;
 const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
@@ -71,7 +73,22 @@ export async function apiRequest(
 ): Promise<{ body: unknown; date: string | null } | null> {
   const answer = await request(fetch, apiBase, bearer, method, path, body, log);
   if (answer === ALREADY_BOUND_CODE) throw new BindError(BIND_TEXTS.alreadyBound);
-  return answer;
+  return answer === NOT_FOUND ? null : answer;
+}
+
+/**
+ * A GET like `apiRequest`, except that a 404 answers `"not-found"`, so a caller can tell a route an
+ * older backend does not have from a failure (the backend and the proxy deploy separately).
+ */
+export async function apiGet(
+  fetch: FetchLike,
+  apiBase: string,
+  bearer: string,
+  path: string,
+  log: Logger = silentLogger,
+): Promise<{ body: unknown; date: string | null } | typeof NOT_FOUND | null> {
+  const answer = await request(fetch, apiBase, bearer, "GET", path, undefined, log);
+  return answer === ALREADY_BOUND_CODE ? null : answer;
 }
 
 async function request(
@@ -82,7 +99,7 @@ async function request(
   path: string,
   body: unknown,
   log: Logger,
-): Promise<{ body: unknown; date: string | null } | typeof ALREADY_BOUND_CODE | null> {
+): Promise<{ body: unknown; date: string | null } | typeof ALREADY_BOUND_CODE | typeof NOT_FOUND | null> {
   try {
     const signal = requestSignal(API_TIMEOUT_MS);
     const res = await fetch(`${apiBase.replace(/\/+$/, "")}${path}`, {
@@ -98,7 +115,7 @@ async function request(
       log.info("API refused", { path: path.split("/").slice(0, 4).join("/"), status: res.status });
       if (res.status !== 409) {
         await res.body?.cancel().catch(() => {});
-        return null;
+        return res.status === 404 ? NOT_FOUND : null;
       }
       const text = await readCapped(res, MAX_BODY_BYTES, signal);
       const refusal: unknown = text === null ? null : JSON.parse(text);

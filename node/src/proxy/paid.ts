@@ -16,7 +16,8 @@ import { createProfile, paidUrlKey, readLimits, readPaidUrls, readProfileFor, re
 import { issuedAt } from "../signer/clock.js";
 import { generate } from "../signer/keygen.js";
 import { openThroughGate } from "./browser-gate.js";
-import { apiRequest, BindError, bindDelegateKey } from "./delegate-bind.js";
+import { apiGet, apiRequest, BindError, bindDelegateKey } from "./delegate-bind.js";
+import { startEnablePoll } from "./enable-poll.js";
 import { CONFIRMATION_TTL_MS, type CallRegistry, type ForwardedCall } from "./calls.js";
 import type { FetchLike } from "./forwarder.js";
 import {
@@ -54,7 +55,7 @@ import type { JsonRpcResponse } from "./protocol.js";
  * - no payment key bound here, or no active grant on chain for it: under the profile lock, a key
  *   is generated if there is none and bound (F4 steps 2–3, every challenge field checked); the
  *   enable-paid text with the link and the fingerprint; the browser through the 10-minute gate;
- *   and a poll of `GET {API}/agents/me/delegate` that ends with a chain read;
+ *   and a wait on fresh chain reads that ends with one `GET {API}/agents/me/delegate`;
  * - enabled: the guards on one frozen copy of the requirement, the G7 confirmation (MCP form
  *   elicitation, bound to this payment and to a single-use token) when the amount is above
  *   `confirmAbove`, then, in one hold of the profile lock, the spend record and the signature;
@@ -99,13 +100,12 @@ export interface PaidOptions {
   readonly lockOptions?: LockOptions;
   /** Milliseconds clock. */
   readonly now?: () => number;
-  /** The enable-paid poll: every 5 s, for up to 15 minutes. */
+  /** The enable-paid wait: every 5 s (15 s after 2 minutes), for up to 15 minutes. */
   readonly pollMs?: number;
   readonly pollMaxMs?: number;
 }
 
-export const POLL_MS = 5_000;
-export const POLL_MAX_MS = 15 * 60_000;
+export { POLL_MAX_MS, POLL_MS } from "./enable-poll.js";
 const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 const SIGNED_OUT_DURING_BIND = "Paid calls could not be set up: you signed out while the payment key was being bound. Sign in again, then ask again.";
 const PRIVATE_KEY_RE = /^0x[0-9a-fA-F]{64}$/;
@@ -567,49 +567,36 @@ export class PaidPath {
   // ---- after the link (F4 step 6) -------------------------------------------------------------
 
   /**
-   * Polls `GET {API}/agents/me/delegate` every 5 s for up to 15 minutes; when the server says the
-   * key is ACTIVE, confirms with a fresh chain read (G4) and logs "Paid calls are on". One poll
-   * per process. The server's answer is for display only: the guards still read the chain.
+   * The wait for the person's approval (`enable-poll.ts`): fresh chain reads, then one
+   * `GET {API}/agents/me/delegate`; logs "Paid calls are on". One wait per process. The server's
+   * answer is for display only: the guards still read the chain.
    */
   private startPoll(network: BuiltInNetwork, payer: string, address: string): void {
     if (this.poll) return;
-    const every = this.o.pollMs ?? POLL_MS;
-    const until = this.now() + (this.o.pollMaxMs ?? POLL_MAX_MS);
-    let running = false;
-    const timer = setInterval(() => {
-      if (running) return;
-      if (this.now() > until) return stop();
-      running = true;
-      void this.pollOnce(network, payer, address)
-        .then((on) => {
-          if (on) {
-            // Shown at the default level (review M4): the one line the user waits for.
-            this.log.warn("Paid calls are on");
-            stop();
-          }
-        })
-        .catch(() => {})
-        .finally(() => {
-          running = false;
-        });
-    }, every);
-    timer.unref();
-    const stop = () => {
-      clearInterval(timer);
-      this.poll = null;
-    };
-    this.poll = { stop };
+    const handle = startEnablePoll({
+      network: network.id,
+      payer,
+      address,
+      chain: this.o.chain,
+      get: (path) => this.apiGet(path),
+      now: this.now,
+      log: this.log,
+      // Shown at the default level (review M4): the one line the user waits for.
+      onActive: () => this.log.warn("Paid calls are on"),
+      onEnd: () => {
+        if (this.poll === handle) this.poll = null;
+      },
+      ...(this.o.pollMs !== undefined ? { pollMs: this.o.pollMs } : {}),
+      ...(this.o.pollMaxMs !== undefined ? { pollMaxMs: this.o.pollMaxMs } : {}),
+    });
+    this.poll = handle;
   }
 
-  private async pollOnce(network: BuiltInNetwork, payer: string, address: string): Promise<boolean> {
-    const answer = await this.api("GET", "/agents/me/delegate");
-    const data = answer && isObject(answer.body) ? answer.body.data : undefined;
-    if (!isObject(data) || !isObject(data.paidCalls) || data.paidCalls.status !== "ACTIVE") return false;
-    const chainId = Number(network.id.slice("eip155:".length));
-    const delegate = accountOn(data.delegate, chainId);
-    if (delegate !== getAddress(address)) return false;
-    const chain = toGuardChain(await this.o.chain.readDelegation(network.id, payer, address, { fresh: true }), address);
-    return chain !== null && chain.active && BigInt(chain.validUntil) > BigInt(Math.floor(this.now() / 1000));
+  /** A GET with the bearer; `"not-found"` on a 404 (a route an older backend lacks). */
+  private async apiGet(path: string): Promise<{ body: unknown } | "not-found" | null> {
+    const bearer = await this.host.bearer();
+    if (bearer === null) return null;
+    return apiGet(this.o.fetch, this.o.deployment.api, bearer, path, this.log);
   }
 
   /** Stops the poll (process end). */
