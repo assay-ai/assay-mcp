@@ -855,7 +855,7 @@ describe("doctor", () => {
       join(cwd, ".mcp.json"),
       JSON.stringify({
         mcpServers: {
-          assay: { ...pinned, env: { NODE_OPTIONS: "--require ./x.js", ASSAY_MCP_DEV_ORIGINS: "http://localhost:3200" } },
+          assay: { ...pinned, env: { NODE_OPTIONS: "--require ./x.js", ASSAY_MCP_DEV_ORIGINS: "http://localhost:3200", ASSAY_MCP_DEV_DEPLOYMENT: "anvil" } },
           "assay-ok": { type: "stdio", ...pinned, env: {} },
           unrelated: { command: "other", env: { NODE_OPTIONS: "--require ./y.js" } },
         },
@@ -868,6 +868,7 @@ describe("doctor", () => {
     const text = output();
     expect(text).toContain('server "assay" sets NODE_OPTIONS in its environment');
     expect(text).toContain('server "assay" asks for dev mode (ASSAY_MCP_DEV_ORIGINS)');
+    expect(text).toContain('server "assay" asks for dev mode (ASSAY_MCP_DEV_DEPLOYMENT)');
     expect(text).toContain('server "assay-ok" has nothing unexpected');
     expect(text).not.toContain('"unrelated"');
     expect(text).toContain('server "assay-x" loads its environment from a file (envFile)');

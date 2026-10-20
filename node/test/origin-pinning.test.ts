@@ -182,6 +182,21 @@ describe("only production reaches the signer outside dev mode", () => {
     expect(Object.isFrozen(d)).toBe(true);
   });
 
+  it("ASSAY_MCP_DEV_DEPLOYMENT picks anvil on the origin it shares with e2e; e2e stays the default (M10)", () => {
+    const base = { ASSAY_MCP_DEV_ORIGINS: DEV };
+    const r = (env: Record<string, string>) => resolveDeployment({ url: `${DEV}/`, env: { ...base, ...env }, devOrigins: [DEV], warn });
+    expect(r({})).toMatchObject({ environment: "e2e", dev: true });
+    expect(r({ ASSAY_MCP_DEV_DEPLOYMENT: "e2e" })).toMatchObject({ environment: "e2e", dev: true });
+    const anvil = r({ ASSAY_MCP_DEV_DEPLOYMENT: "anvil" });
+    expect(anvil).toMatchObject({ environment: "anvil", dev: true });
+    expect(anvil.networks["eip155:46630"]!.rpc).toEqual(["http://127.0.0.1:8547", "http://localhost:8547"]);
+    expect(() => assertSignerEnvironment(anvil)).not.toThrow();
+    for (const bad of ["production", "staging", "nope"]) expect(() => r({ ASSAY_MCP_DEV_DEPLOYMENT: bad }), bad).toThrow(OriginError);
+    // Outside dev mode the name changes nothing: production stays production.
+    expect(resolveDeployment({ env: { ASSAY_MCP_DEV_DEPLOYMENT: "anvil" }, devOrigins: [], warn }).environment).toBe("production");
+    expect(() => resolveDeployment({ url: `${DEV}/`, env: { ASSAY_MCP_DEV_DEPLOYMENT: "anvil" }, devOrigins: [DEV], warn })).toThrow(OriginError);
+  });
+
   it("the signer gate accepts only resolveDeployment results, never a look-alike object", () => {
     const prod = resolveDeployment({ env: {}, devOrigins: [], warn });
     expect(() => assertSignerEnvironment(prod)).not.toThrow();

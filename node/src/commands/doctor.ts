@@ -58,7 +58,7 @@ export function checkProjectEntry(where: string, name: string, entry: unknown): 
         out.push({ level: "problem", text: `${at} sets ${key} in its environment. A project config can use it to change how assay-mcp runs; remove it unless you put it there yourself.` });
       } else if (key === "ASSAY_API_KEY" || key === "ASSAY_DEV_API_KEY") {
         out.push({ level: "problem", text: `${at} carries ${key} in a project file. Keys belong in your own environment, never in a shared config.` });
-      } else if (key === "ASSAY_MCP_DEV_ORIGINS") {
+      } else if (key === "ASSAY_MCP_DEV_ORIGINS" || key === "ASSAY_MCP_DEV_DEPLOYMENT") {
         out.push({ level: "problem", text: `${at} asks for dev mode (${key}). A project config should never do this.` });
       }
     }
