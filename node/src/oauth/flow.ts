@@ -273,6 +273,7 @@ export interface CredentialIdentity {
 }
 
 /** Characters never shown in a terminal: C0/C1 controls, bidi controls, line/paragraph separators. */
+// eslint-disable-next-line no-control-regex -- matching control characters is the point
 const UNPRINTABLE = /[\u0000-\u001f\u007f-\u009f\u200e\u200f\u2028-\u202e\u2066-\u2069]/g;
 
 /** An agent label fit for `status`: unprintable characters dropped, 1–128 characters, else `null`. */
