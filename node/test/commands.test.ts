@@ -333,6 +333,28 @@ describe("status", () => {
     expect(seen).toEqual(["http://localhost:3000/api/v1/agents/me/delegate Bearer assay_at_seed"]);
   });
 
+  it("an expired stored sign-in leaves the key's state unknown, never 'not turned on' (M3)", async () => {
+    await seedProfile("e2e", { delegate: true });
+    addDevOrigin(dir, E2E_MCP);
+    seedSecret("default", "e2e", "refresh_token", "assay_rt_seed");
+    seedSecret("default", "e2e", "access_token", JSON.stringify({ token: "assay_at_seed", expiresAt: NOW - 1 }));
+    const fetch = vi.spyOn(globalThis, "fetch");
+    const keyLine = async () => (await statusText([], deps({ env: E2E_ENV }))).split("\n")[3];
+    expect(await keyLine()).toBe(`Payment key 1A2B 9F3C · unknown: the stored sign-in has expired (it renews on the next call, or run \`${RUN} login\`)`);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("a key with no sign-in, or no answer from Assay, is unknown too", async () => {
+    await seedProfile("e2e", { delegate: true });
+    addDevOrigin(dir, E2E_MCP);
+    const keyLine = async () => (await statusText([], deps({ env: E2E_ENV }))).split("\n")[3];
+    expect(await keyLine()).toBe(`Payment key 1A2B 9F3C · unknown while signed out · run \`${RUN} login\``);
+    seedSecret("default", "e2e", "refresh_token", "assay_rt_seed");
+    seedSecret("default", "e2e", "access_token", JSON.stringify({ token: "assay_at_seed", expiresAt: NOW + 600 }));
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response("", { status: 503 }));
+    expect(await keyLine()).toBe("Payment key 1A2B 9F3C · can't check with Assay right now");
+  });
+
   it("refuses a dev profile while dev mode is off", async () => {
     await seedProfile("e2e");
     expect(await runStatus([], deps())).toBe(2);
