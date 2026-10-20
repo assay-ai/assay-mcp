@@ -205,6 +205,20 @@ describe("pre-sign-in mode", () => {
     expect(readFileSync(keyringFile, "utf8")).not.toMatch(/refresh_token|access_token/);
   });
 
+  it("invalid_client on refresh → back to assay_sign_in", async () => {
+    await signedIn();
+    const { client, changed } = await connect();
+    expect((await client.listTools()).tools.map((t) => t.name)).toEqual(["echo"]);
+    as.grants[0]!.revoked = true; // 401 from the MCP server, then the refresh …
+    as.forceTokenError = { status: 400, error: "invalid_client" }; // … names an unknown client
+    const { tools } = await client.listTools();
+    expect(tools.map((t) => t.name)).toEqual(["assay_sign_in"]);
+    await until(() => changed.length === 1);
+    expect(as.tokenCalls("refresh_token")).toHaveLength(1);
+    expect(readFileSync(keyringFile, "utf8")).not.toMatch(/refresh_token|access_token/);
+    as.forceTokenError = null;
+  });
+
   it("lock wait over the limit → -32001", async () => {
     let release!: () => void;
     const held = withLock({ dir, name: "default" }, () => new Promise<void>((r) => (release = r)));

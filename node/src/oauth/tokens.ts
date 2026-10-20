@@ -17,7 +17,8 @@ import { clientIdOf, postForm, readTokenAnswer, REQUEST_TIMEOUT_MS, requestSigna
  * - an answer that arrives after the lock was lost is dropped (nothing stored, nothing used),
  *   so two token generations are never stored; the server's 30 s grace covers the next run;
  * - the new pair is stored (lock-aware writes) before the access token is returned;
- * - `invalid_grant` means the grant was revoked, expired or reused: the tokens are deleted if
+ * - `invalid_grant` means the grant was revoked, expired or reused (and `invalid_client`, that the
+ *   server no longer knows the client id, is handled the same): the tokens are deleted if
  *   the keychain still holds the refresh token that was sent; the delegate key and the profile
  *   (its credential id, for `assay_replaces`) are kept, and the process is signed out.
  * Any other failure (network, timeout, a reset or oversized body, 429, 5xx, 503
@@ -115,9 +116,11 @@ export async function refreshUnderLock(ctx: TokenContext, failedToken: string | 
         log.info("token refreshed");
         return accessToken;
       }
-      if (answer.error === "invalid_grant") {
+      // `invalid_client` (400, or 401): the server no longer knows this client id, so these
+      // tokens can never refresh. Retrying would loop; sign out as for `invalid_grant`.
+      if (answer.error === "invalid_grant" || answer.error === "invalid_client") {
         await keychain.deleteTokensIfRefreshIs(lock, refreshToken);
-        log.warn("sign-in ended by the server; sign in again", { status: answer.status });
+        log.warn("sign-in ended by the server; sign in again", { status: answer.status, error: answer.error });
         return null;
       }
       log.warn("refresh refused", { status: answer.status, error: answer.error });
