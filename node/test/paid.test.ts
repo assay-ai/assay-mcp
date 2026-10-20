@@ -265,7 +265,10 @@ describe("paid path (SDK client → proxy → fake Assay)", () => {
     // The page is approved: the wait sees the grant on chain, Assay confirms it, and says so.
     const fullReads = () => fake.paths.filter((p) => p === "GET /api/v1/agents/me/delegate").length;
     await until(() => fake.paths.includes("GET /api/v1/agents/me/delegate/status"));
-    await new Promise((r) => setTimeout(r, 500)); // a few ticks of the wait, none of them on the API
+    // Three ticks of the wait (three eth_call per read on the one e2e RPC), none of them on the API.
+    const calls = () => fake.rpcCalls.filter((m) => m === "eth_call").length;
+    const reads = calls();
+    await until(() => calls() >= reads + 9);
     const before = fullReads();
     fake.grant(address);
     await until(() => stderr().includes("Paid calls are on"));

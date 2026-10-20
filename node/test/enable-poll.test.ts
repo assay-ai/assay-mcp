@@ -35,6 +35,11 @@ function grant(active: boolean): DelegationResult {
 function world() {
   const w = {
     live: false,
+    /** The next chain reads fail (CHAIN_UNCONFIRMED), this many. */
+    chainFails: 0,
+    signedIn: true,
+    /** A chain read held open until the test releases it. */
+    hold: null as Promise<void> | null,
     statusRoute: true as boolean,
     statusFails: 0,
     serverStatus: "ACTIVE" as string,
@@ -48,6 +53,11 @@ function world() {
   const chain: ChainReader = {
     readDelegation: async (_network, _payer, _delegate, opts) => {
       w.reads.push({ fresh: opts?.fresh });
+      if (w.hold) await w.hold;
+      if (w.chainFails > 0) {
+        w.chainFails--;
+        return { ok: false, code: "CHAIN_UNCONFIRMED", reason: "rpc[0] timeout" };
+      }
       return grant(w.live);
     },
     invalidate: () => {
@@ -72,13 +82,14 @@ function world() {
     }
     return null;
   };
-  const start = (extra: { pollMs?: number } = {}) =>
+  const start = () =>
     startEnablePoll({
       network: NET,
       payer: PAYER,
       address: KEY,
       chain,
       get,
+      signedIn: async () => w.signedIn,
       now: () => Date.now(),
       log: silentLogger,
       onActive: () => {
@@ -87,7 +98,6 @@ function world() {
       onEnd: () => {
         w.ended++;
       },
-      ...extra,
     });
   return { w, start };
 }
@@ -195,6 +205,65 @@ describe("enable-paid wait (F4 step 6)", () => {
     await tick(60_000);
     expect(w.reads).toHaveLength(76);
     expect(w.active).toBe(0);
+  });
+
+  it("stop() while a tick is in flight that then sees the grant: nothing is announced", async () => {
+    const { w, start } = world();
+    let release!: () => void;
+    w.hold = new Promise<void>((r) => (release = r));
+    w.live = true;
+    const handle = start();
+    await tick(); // the chain read is in flight
+    expect(w.reads).toHaveLength(1);
+    handle.stop();
+    w.hold = null;
+    release();
+    await tick(60_000);
+    expect(w.active).toBe(0);
+    expect(w.ended).toBe(1);
+    expect(w.gets).toEqual([DELEGATE_STATUS_PATH]); // the final full read never ran
+    expect(w.reads).toHaveLength(1);
+  });
+
+  it("a chain read that fails mid-wait: not on, nothing dropped from the cache, the wait goes on", async () => {
+    const { w, start } = world();
+    start();
+    await tick();
+    expect(w.invalidated).toBe(1);
+    w.live = true;
+    w.chainFails = 2;
+    await tick(2 * 5_000);
+    expect(w.active).toBe(0);
+    expect(w.invalidated).toBe(1); // a failed read is never cached: nothing to invalidate
+    expect(w.gets).toEqual([DELEGATE_STATUS_PATH]);
+    await tick();
+    expect(w.active).toBe(1);
+    expect(w.reads).toHaveLength(4);
+  });
+
+  it("signed out in chain mode: no chain read and no API request on those ticks", async () => {
+    const { w, start } = world();
+    start();
+    await tick(2 * 5_000);
+    expect(w.reads).toHaveLength(2);
+    w.signedIn = false;
+    w.live = true;
+    await tick(10 * 5_000);
+    expect(w.reads).toHaveLength(2);
+    expect(w.gets).toEqual([DELEGATE_STATUS_PATH]);
+    expect(w.active).toBe(0);
+    w.signedIn = true;
+    await tick();
+    expect(w.active).toBe(1);
+  });
+
+  it("signed out before the first tick: the status route is not asked either", async () => {
+    const { w, start } = world();
+    w.signedIn = false;
+    start();
+    await tick(3 * 5_000);
+    expect(w.gets).toEqual([]);
+    expect(w.reads).toEqual([]);
   });
 
   it("stop() ends the wait (process end)", async () => {

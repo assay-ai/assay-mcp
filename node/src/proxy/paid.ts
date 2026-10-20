@@ -159,7 +159,7 @@ export function confirmationMessage(c: Confirmation, decimals: number, chainId: 
 export class PaidPath {
   private readonly log: Logger;
   private readonly now: () => number;
-  private poll: { stop: () => void } | null = null;
+  private poll: { stop: () => void; network: string; payer: string; address: string } | null = null;
 
   constructor(
     private readonly o: PaidOptions,
@@ -569,27 +569,31 @@ export class PaidPath {
   /**
    * The wait for the person's approval (`enable-poll.ts`): fresh chain reads, then one
    * `GET {API}/agents/me/delegate`; logs "Paid calls are on". One wait per process. The server's
-   * answer is for display only: the guards still read the chain.
+   * answer is for display only: the guards still read the chain. A wait for another network, payer
+   * or key (another account signed in) replaces the running one.
    */
   private startPoll(network: BuiltInNetwork, payer: string, address: string): void {
-    if (this.poll) return;
+    const p = this.poll;
+    if (p !== null && p.network === network.id && p.payer === getAddress(payer) && p.address === getAddress(address)) return;
+    p?.stop();
     const handle = startEnablePoll({
       network: network.id,
       payer,
       address,
       chain: this.o.chain,
       get: (path) => this.apiGet(path),
+      signedIn: async () => (await this.host.bearer()) !== null,
       now: this.now,
       log: this.log,
       // Shown at the default level (review M4): the one line the user waits for.
       onActive: () => this.log.warn("Paid calls are on"),
       onEnd: () => {
-        if (this.poll === handle) this.poll = null;
+        if (this.poll?.stop === handle.stop) this.poll = null;
       },
       ...(this.o.pollMs !== undefined ? { pollMs: this.o.pollMs } : {}),
       ...(this.o.pollMaxMs !== undefined ? { pollMaxMs: this.o.pollMaxMs } : {}),
     });
-    this.poll = handle;
+    this.poll = { stop: handle.stop, network: network.id, payer: getAddress(payer), address: getAddress(address) };
   }
 
   /** A GET with the bearer; `"not-found"` on a 404 (a route an older backend lacks). */
@@ -599,7 +603,7 @@ export class PaidPath {
     return apiGet(this.o.fetch, this.o.deployment.api, bearer, path, this.log);
   }
 
-  /** Stops the poll (process end). */
+  /** Stops the enable-paid wait (process end, sign-out, another credential). */
   stop(): void {
     this.poll?.stop();
   }

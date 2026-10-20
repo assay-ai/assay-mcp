@@ -61,6 +61,7 @@ export interface PaidHooks {
   onToolResult(call: ForwardedCall, response: JsonRpcResponse): Promise<JsonRpcResponse>;
   /** Quotes (`assay/price`) from a remote `tools/list` page, by original tool name. */
   observeList(pairs: ReturnType<typeof quotesFromList>): void;
+  /** Stops the enable-paid wait; called at process end, on sign-out and on a credential change. */
   stop(): void;
 }
 
@@ -405,6 +406,8 @@ export class Proxy {
     if (this.pollTimer) clearInterval(this.pollTimer);
     this.pollTimer = null;
     const changed = this.mode !== "signed-in";
+    // A new sign-in may be another account: a wait from before it must not go on.
+    if (changed) this.paid?.stop();
     this.mode = "signed-in";
     this.remoteInit = null;
     this.forwarder.reset();
@@ -414,6 +417,8 @@ export class Proxy {
   private enterSignedOut(notify: boolean): void {
     const changed = this.mode !== "pre-sign-in";
     this.mode = "pre-sign-in";
+    // No chain or API reads for a wait nobody signed in can finish.
+    this.paid?.stop();
     this.remoteInit = null;
     this.forwarder.reset();
     if (!this.pollTimer && this.o.apiKey === null) {
@@ -570,6 +575,8 @@ export class Proxy {
     const stale = (r: { credentialId: string; agentLabel: string } | null) => r?.credentialId !== id || (agentLabel !== null && r.agentLabel !== agentLabel);
     try {
       const record = readProfileFor(profile, deployment.environment);
+      // Another credential behind the token: a wait started for the old one ends.
+      if (record !== null && record.credentialId.toLowerCase() !== id.toLowerCase()) this.paid?.stop();
       if (stale(record)) {
         await withLock(
           profile,

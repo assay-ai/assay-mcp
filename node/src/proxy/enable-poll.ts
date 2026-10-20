@@ -41,6 +41,8 @@ export interface EnablePollInputs {
   readonly address: string;
   readonly chain: ChainReader;
   readonly get: ApiGet;
+  /** Whether this process is signed in now (a bearer exists); a tick without one reads nothing. */
+  readonly signedIn: () => Promise<boolean>;
   /** Milliseconds clock. */
   readonly now: () => number;
   readonly log: Logger;
@@ -89,16 +91,20 @@ export function startEnablePoll(o: EnablePollInputs): { stop: () => void } {
     return namesLocal(data.delegate);
   };
 
-  /** A fresh chain read shows a live grant to this key. A read that does not is not left cached. */
+  /** A fresh chain read shows a live grant to this key. An agreed read that does not is not left cached. */
   const chainLive = async (): Promise<boolean> => {
-    const chain = toGuardChain(await o.chain.readDelegation(o.network, o.payer, o.address, { fresh: true }), o.address);
+    const result = await o.chain.readDelegation(o.network, o.payer, o.address, { fresh: true });
+    const chain = toGuardChain(result, o.address);
     const live = chain !== null && chain.active && BigInt(chain.validUntil) > BigInt(Math.floor(o.now() / 1000));
-    // Not cached as "off": a paid call asked meanwhile reads the chain again, so an approval shows at once.
-    if (!live) o.chain.invalidate(o.payer, o.address, o.network);
+    // Not cached as "off": a paid call asked meanwhile reads the chain again, so an approval shows
+    // at once. A failed read is never cached, so there is nothing to drop.
+    if (result.ok && !live) o.chain.invalidate(o.payer, o.address, o.network);
     return live;
   };
 
   const once = async (): Promise<boolean> => {
+    // Signed out (the proxy also stops the wait then): no RPC or API request on this tick.
+    if (!(await o.signedIn()) || stopped) return false;
     if (mode === "probe") {
       probes++;
       const answer = await o.get(DELEGATE_STATUS_PATH);
@@ -114,11 +120,12 @@ export function startEnablePoll(o: EnablePollInputs): { stop: () => void } {
         mode = "chain";
       }
     }
+    // A wait stopped while a step was in flight (sign-out, process end) asks nothing more.
     if (mode === "legacy") {
       // The backend reads the chain; the proxy confirms with its own read (G4).
-      return (await serverActive()) && (await chainLive());
+      return (await serverActive()) && !stopped && (await chainLive());
     }
-    return (await chainLive()) && (await serverActive());
+    return (await chainLive()) && !stopped && (await serverActive());
   };
 
   const stop = (): void => {
