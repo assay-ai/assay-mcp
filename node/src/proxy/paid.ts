@@ -12,7 +12,7 @@ import { identifyCredential } from "../oauth/flow.js";
 import type { ResolvedDeployment } from "../profile/deployments.js";
 import type { Keychain } from "../profile/keychain.js";
 import { withLock, type LockHandle, type LockOptions, type ProfileRef } from "../profile/lock.js";
-import { createProfile, paidUrlKey, readLimits, readPaidUrls, readProfileFor, readState, updateProfile } from "../profile/profile.js";
+import { createProfile, paidUrlKey, readExplicitPaidUrls, readLimits, readPaidUrls, readProfileFor, readState, updateProfile } from "../profile/profile.js";
 import { issuedAt } from "../signer/clock.js";
 import { generate } from "../signer/keygen.js";
 import { openThroughGate } from "./browser-gate.js";
@@ -89,6 +89,11 @@ export interface PaidOptions {
   readonly keychain: Keychain;
   /** `--no-paid`: never sign. */
   readonly noPaid: boolean;
+  /**
+   * A serve without `--name`, the form of a project-scope entry (R-MU-4): only URLs a person
+   * allowed on a TTY count, not the `{MCP}/` a new profile starts with (R-MU-13).
+   */
+  readonly projectForm?: boolean;
   readonly chain: ChainReader;
   readonly quotes: QuoteCache;
   /** `pinnedFetch` bound to the deployment (API requests). */
@@ -206,14 +211,14 @@ export class PaidPath {
   }
 
   private async pay(call: ForwardedCall, response: JsonRpcResponse, result: Record<string, unknown>, raw: unknown, reasked = false): Promise<JsonRpcResponse> {
-    const { deployment, profile } = this.o;
+    const { deployment } = this.o;
     // G1: the tool this call pays for (the inner name on `call_tool`).
     const tool = paidToolOf(call.tool, call.params);
     if (tool === null) return this.refused(response, result, new Refusal("G1", "the payment request is not the answer to a forwarded tool call"));
 
     // §7.7 step 5 (G11).
     const urlKey = paidUrlKey(deployment);
-    if (!readPaidUrls(profile).includes(urlKey)) return { ...response, result: errorResult(notAllowedText(deployment.url), result) };
+    if (!this.paidUrls().includes(urlKey)) return { ...response, result: errorResult(notAllowedText(deployment.url), result) };
 
     // One frozen copy of the requirement: every decision below reads this, and so does the signer.
     let requirement: Record<string, unknown>;
@@ -295,7 +300,7 @@ export class PaidPath {
             signed: readState(profile).signed,
             confirmation,
             canonicalUrl: urlKey,
-            paidUrls: readPaidUrls(profile),
+            paidUrls: this.paidUrls(),
             nowSeconds,
           };
           const built = guardAndBuild(ctx, issuedAt(nowSeconds, this.host.dateOffset()), env);
@@ -532,6 +537,11 @@ export class PaidPath {
     } else {
       updateProfile(profile, lock, (c) => ({ ...c, credentialId, delegateAddress: address, network, ...(c.delegateAddress !== address ? { payer: null } : {}) }));
     }
+  }
+
+  /** G11's list for this serve: every paid URL, or only the explicit ones in project form. */
+  private paidUrls(): string[] {
+    return this.o.projectForm === true ? readExplicitPaidUrls(this.o.profile) : readPaidUrls(this.o.profile);
   }
 
   /** The profile's credential id, or the one the API names for this bearer. */

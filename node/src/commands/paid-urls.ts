@@ -10,7 +10,7 @@ import { RUN } from "../version.js";
 import { EXIT_OK } from "../exit-codes.js";
 import { UrlRefused, type ResolvedUrl } from "../clients/ports.js";
 import { withLock } from "../profile/lock.js";
-import { addPaidUrl, readPaidUrls, readProfileFor, removePaidUrl } from "../profile/profile.js";
+import { addPaidUrl, readExplicitPaidUrls, readPaidUrls, readProfileFor, removePaidUrl } from "../profile/profile.js";
 import { requireTty } from "../tty.js";
 import { parseFlags, UsageError } from "./context.js";
 import { checkProfileName, DECLINED_TEXT, profileRef, reportFailure, typedConfirm, type ProfileDeps } from "./profile-context.js";
@@ -31,7 +31,10 @@ export async function changePaidUrl(command: PaidUrlChange, args: readonly strin
   }
   const ref = profileRef(deps, profile);
   readProfileFor(ref, url.environment); // refused before any question; checked again under the lock
-  if (command === "allow-paid" && !readPaidUrls(ref).includes(url.pathAndQuery)) {
+  // `allow-paid` counts only what a person allowed: the `{MCP}/` a profile starts with does not
+  // reach project installs (R-MU-13), so allowing it asks and makes it explicit.
+  const current = (): string[] => (command === "allow-paid" ? readExplicitPaidUrls(ref) : readPaidUrls(ref));
+  if (command === "allow-paid" && !current().includes(url.pathAndQuery)) {
     const yes = await typedConfirm(
       deps,
       `Allow paid calls through ${url.url} for profile "${profile}"? Tools behind this URL can then spend within your local caps.`,
@@ -46,9 +49,10 @@ export async function changePaidUrl(command: PaidUrlChange, args: readonly strin
     ref,
     (lock) => {
       readProfileFor(ref, url.environment); // a profile of another environment is refused
-      const before = readPaidUrls(ref);
-      const after = command === "allow-paid" ? addPaidUrl(ref, lock, url.pathAndQuery) : removePaidUrl(ref, lock, url.pathAndQuery);
-      return { changed: before.includes(url.pathAndQuery) !== after.includes(url.pathAndQuery) };
+      const before = current().includes(url.pathAndQuery);
+      if (command === "allow-paid") addPaidUrl(ref, lock, url.pathAndQuery);
+      else removePaidUrl(ref, lock, url.pathAndQuery);
+      return { changed: before !== current().includes(url.pathAndQuery) };
     },
     deps.lockOptions,
   );

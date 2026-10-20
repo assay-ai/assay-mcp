@@ -39,7 +39,7 @@ import { Keychain, KeychainError, KEYCHAIN_SERVICE, type OsKeychain } from "../s
 import { LockError, withLock, type ProfileRef } from "../src/profile/lock.js";
 import { configDir, profileFile, writePrivateFile } from "../src/profile/paths.js";
 import { testHome } from "./setup/temp-home.js";
-import { addPaidUrl, createProfile, readLimits, readPaidUrls, readProfile, updateProfile } from "../src/profile/profile.js";
+import { addPaidUrl, createProfile, readExplicitPaidUrls, readLimits, readPaidUrls, readProfile, updateProfile } from "../src/profile/profile.js";
 import { readSettings } from "../src/profile/settings.js";
 import { checkEnvironment, readProfileSettings } from "../src/proxy/environment.js";
 import { RUN } from "../src/version.js";
@@ -283,7 +283,7 @@ describe("status", () => {
         "Agent       research-bot",
         "Payment key 1A2B 9F3C · on (read from chain) · $0.50 a call · $5 per 24 h · until 2026-11-18",
         "Local caps  $0.50 a call · $5 per 24 h · spent today $1.20 · confirm above: off · providers: any",
-        "Paid URLs   /  ·  /c/weather",
+        "Paid URLs   / (user installs only)  ·  /c/weather",
         "Installs    assay (claude-code, user) → /    weather (claude-code, user) → /c/weather",
         "",
       ].join("\n"),
@@ -311,7 +311,7 @@ describe("status", () => {
     expect(lines[1]).toBe(`Signed in   no · run \`${RUN} login\``);
     expect(lines[3]).toBe("Payment key none yet · made on the first paid call");
     expect(lines[4]).toBe("Local caps  $0.50 a call · $5 per 24 h · spent today $0 · confirm above: off · providers: any");
-    expect(lines[5]).toBe("Paid URLs   /");
+    expect(lines[5]).toBe("Paid URLs   / (user installs only)");
     expect(lines[6]).toBe("Installs    none");
     // Read only: status creates no file.
     expect(existsSync(dir)).toBe(false);
@@ -703,6 +703,23 @@ describe("allow-paid / disallow-paid", () => {
     // Asked once: allowing a URL already allowed, and disallowing, ask nothing.
     expect(confirmAsked).toHaveLength(1);
     expect(confirmAsked[0]).toContain('Type the profile name (default)');
+  });
+
+  it("the / a profile starts with is for user installs only: allow-paid / asks and makes it explicit (M2, R-MU-13)", async () => {
+    await seedProfile("production");
+    confirmAnswer = true;
+    const t = deps({ isTTY: true });
+    expect(readPaidUrls(ref())).toEqual(["/"]);
+    expect(readExplicitPaidUrls(ref())).toEqual([]);
+    expect(await runPaidUrlChange("allow-paid", ["/"], t)).toBe(0);
+    expect(confirmAsked).toHaveLength(1);
+    expect(output()).toContain("Paid calls are allowed through https://mcp.assay.ai/");
+    expect(readExplicitPaidUrls(ref())).toEqual(["/"]);
+    expect(await runPaidUrlChange("allow-paid", ["/"], t)).toBe(0);
+    expect(output()).toContain("were already allowed");
+    expect(confirmAsked).toHaveLength(1);
+    expect(await runPaidUrlChange("disallow-paid", ["/"], t)).toBe(0);
+    expect(readPaidUrls(ref())).toEqual([]);
   });
 
   it("a plain yes is not enough: nothing changes and the exit code is 0", async () => {

@@ -17,6 +17,7 @@ import {
   paidUrlKey,
   ProfileStateError,
   readLimits,
+  readExplicitPaidUrls,
   readPaidUrls,
   readProfile,
   readProfileFor,
@@ -113,6 +114,21 @@ describe("profile files", () => {
       expect(() => addPaidUrl(profile, lock, "https://evil.example/")).toThrow(ProfileStateError);
     });
     writeFileSync(join(profilesDir(), "default.paid-urls.json"), JSON.stringify({ version: 1, urls: ["https://evil.example/"] }));
+    expect(() => readPaidUrls(profile)).toThrow(ProfileStateError);
+  });
+
+  it("the / a new profile starts with is seeded, not explicit, until a person allows it (R-MU-13)", async () => {
+    expect(readExplicitPaidUrls(profile)).toEqual([]);
+    await withLock(profile, (lock) => createProfile(profile, lock, newProfile));
+    expect(JSON.parse(readFileSync(join(profilesDir(), "default.paid-urls.json"), "utf8"))).toEqual({ version: 1, urls: ["/"], seeded: ["/"] });
+    expect(readPaidUrls(profile)).toEqual(["/"]);
+    expect(readExplicitPaidUrls(profile)).toEqual([]);
+    await withLock(profile, (lock) => addPaidUrl(profile, lock, "/c/weather"));
+    expect(readExplicitPaidUrls(profile)).toEqual(["/c/weather"]);
+    await withLock(profile, (lock) => addPaidUrl(profile, lock, "/"));
+    expect(readPaidUrls(profile)).toEqual(["/", "/c/weather"]);
+    expect(readExplicitPaidUrls(profile)).toEqual(["/", "/c/weather"]);
+    writeFileSync(join(profilesDir(), "default.paid-urls.json"), JSON.stringify({ version: 1, urls: ["/"], seeded: ["/c/weather"] }));
     expect(() => readPaidUrls(profile)).toThrow(ProfileStateError);
   });
 

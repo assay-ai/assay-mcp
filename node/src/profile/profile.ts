@@ -62,7 +62,15 @@ export interface PaidUrls {
   version: number;
   /** Canonical `path?query` on the profile's MCP origin. */
   urls: string[];
+  /**
+   * The subset of `urls` only there because the profile was created with it (`{MCP}/`), never
+   * allowed by a person on a TTY. A project-form serve does not count these (R-MU-13).
+   */
+  seeded: string[];
 }
+
+/** What a new profile starts with: `{MCP}/`, for user installs only. */
+const SEEDED_PAID_URLS: Readonly<PaidUrls> = Object.freeze({ version: PROFILE_VERSION, urls: ["/"], seeded: ["/"] });
 
 /** One signed voucher: `at` in Unix seconds, `amount` in asset base units (decimal string). */
 export type SpendEntry = SignedVoucher;
@@ -174,7 +182,15 @@ export function validatePaidUrls(v: unknown): PaidUrls {
     if (c === null || c !== u) throw new ProfileStateError("paid-urls file: invalid URL path");
     if (!urls.includes(c)) urls.push(c);
   }
-  return { version: PROFILE_VERSION, urls };
+  const seeded: string[] = [];
+  if (v.seeded !== undefined) {
+    if (!Array.isArray(v.seeded)) throw new ProfileStateError("paid-urls file: invalid record");
+    for (const u of v.seeded) {
+      if (typeof u !== "string" || !urls.includes(u)) throw new ProfileStateError("paid-urls file: invalid seeded URL");
+      if (!seeded.includes(u)) seeded.push(u);
+    }
+  }
+  return { version: PROFILE_VERSION, urls, seeded };
 }
 
 export function validateState(v: unknown): ProfileState {
@@ -216,7 +232,8 @@ export function readProfileFor(profile: ProfileRef, environment: Environment): P
 /**
  * Creates (or replaces, after a new sign-in) `profiles/{profile}.json`. On first creation
  * also writes the default `limits.json` ($0.50 / $5 / off / any) and `paid-urls.json`
- * with `{MCP}/`; existing limits and paid URLs are kept.
+ * with `{MCP}/`, marked seeded (user installs only, R-MU-13); existing limits and paid URLs
+ * are kept.
  */
 export function createProfile(profile: ProfileRef, lock: LockHandle, input: NewProfile): ProfileRecord {
   assertLock(profile, lock);
@@ -238,7 +255,7 @@ export function createProfile(profile: ProfileRef, lock: LockHandle, input: NewP
     writeJson(profile, profileFile(profile.name, "limits"), DEFAULT_LIMITS);
   }
   if (readJson(profile, profileFile(profile.name, "paid-urls")) === undefined) {
-    writeJson(profile, profileFile(profile.name, "paid-urls"), { version: PROFILE_VERSION, urls: ["/"] });
+    writeJson(profile, profileFile(profile.name, "paid-urls"), SEEDED_PAID_URLS);
   }
   writeJson(profile, profileFile(profile.name, "profile"), record);
   return record;
@@ -282,20 +299,35 @@ export function writeLimits(profile: ProfileRef, lock: LockHandle, limits: Omit<
 
 // ---- paid-urls.json ------------------------------------------------------------------
 
-/** Canonical paths allowed for paid calls; `["/"]` when the file does not exist yet. */
-export function readPaidUrls(profile: ProfileRef): string[] {
+function readPaidUrlsRecord(profile: ProfileRef): PaidUrls {
   const v = readJson(profile, profileFile(profile.name, "paid-urls"));
-  return v === undefined ? ["/"] : validatePaidUrls(v).urls;
+  return v === undefined ? structuredClone(SEEDED_PAID_URLS) : validatePaidUrls(v);
+}
+
+/** Canonical paths allowed for paid calls through a user install; `["/"]` when the file does not exist yet. */
+export function readPaidUrls(profile: ProfileRef): string[] {
+  return readPaidUrlsRecord(profile).urls;
+}
+
+/**
+ * The paths a person allowed on a TTY (`add --scope user`, `allow-paid`): the paid URLs without
+ * the `{MCP}/` a new profile starts with. The only ones a project-form serve honours (R-MU-13).
+ */
+export function readExplicitPaidUrls(profile: ProfileRef): string[] {
+  const { urls, seeded } = readPaidUrlsRecord(profile);
+  return urls.filter((u) => !seeded.includes(u));
 }
 
 function changePaidUrls(profile: ProfileRef, lock: LockHandle, pathAndQuery: string, add: boolean): string[] {
   assertLock(profile, lock);
   const c = canonicalPaidUrl(pathAndQuery);
   if (c === null) throw new ProfileStateError("not an Assay MCP URL path");
-  const urls = readPaidUrls(profile).filter((u) => u !== c);
-  if (add) urls.push(c);
+  const current = readPaidUrlsRecord(profile);
+  // Allowing makes a URL explicit; disallowing removes it either way.
+  const seeded = current.seeded.filter((u) => u !== c);
+  const urls = add ? (current.urls.includes(c) ? current.urls : [...current.urls, c]) : current.urls.filter((u) => u !== c);
   lock.assertHeld();
-  writeJson(profile, profileFile(profile.name, "paid-urls"), { version: PROFILE_VERSION, urls });
+  writeJson(profile, profileFile(profile.name, "paid-urls"), { version: PROFILE_VERSION, urls, seeded });
   return urls;
 }
 

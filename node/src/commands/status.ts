@@ -15,7 +15,7 @@ import { pinnedFetch } from "../net/fetch.js";
 import type { ResolvedDeployment } from "../profile/deployments.js";
 import { fingerprint } from "../profile/fingerprint.js";
 import type { Keychain } from "../profile/keychain.js";
-import { readLimits, readPaidUrls, readProfile, readState, type ProfileRecord } from "../profile/profile.js";
+import { readExplicitPaidUrls, readLimits, readPaidUrls, readProfile, readState, type ProfileRecord } from "../profile/profile.js";
 import { parseFlags } from "./context.js";
 import { unitsToUsd, usd, utcDate } from "./format.js";
 import {
@@ -112,6 +112,13 @@ async function signedInBearer(keychain: Keychain, nowSeconds: number): Promise<s
   return access !== null && access.expiresAt > nowSeconds ? access.token : null;
 }
 
+/** The paid URLs; the `/` a profile starts with is marked, since project installs do not count it (R-MU-13). */
+function paidUrlsText(ref: ReturnType<typeof profileRef>): string {
+  const explicit = readExplicitPaidUrls(ref);
+  const urls = readPaidUrls(ref).map((u) => (explicit.includes(u) ? u : `${u} (user installs only)`));
+  return urls.length === 0 ? "none" : urls.join("  ·  ");
+}
+
 export async function statusText(args: readonly string[], deps: ProfileDeps): Promise<string> {
   const { values } = parseFlags(args, { profile: { type: "string" } }, 0);
   const profile = checkProfileName(values.profile as string | undefined);
@@ -159,7 +166,7 @@ export async function statusText(args: readonly string[], deps: ProfileDeps): Pr
       "Local caps",
       `${usd(limits.perCall)} a call · ${usd(limits.perDay)} per 24 h · spent today ${unitsToUsd(spent, decimals)} · confirm above: ${limits.confirmAbove === null ? "off" : usd(limits.confirmAbove)} · providers: ${providers}`,
     ),
-    line("Paid URLs", readPaidUrls(ref).join("  ·  ")),
+    line("Paid URLs", paidUrlsText(ref)),
     line("Installs", installs),
   ].join("\n");
 }

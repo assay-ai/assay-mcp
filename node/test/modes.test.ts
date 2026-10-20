@@ -76,7 +76,8 @@ async function world(mode: Mode) {
   }
   const transport = new StdioClientTransport({
     command: process.execPath,
-    args: [fixture.file, "--url", `${E2E_MCP}/`],
+    // A user install (with --name), as the Connect commands write it.
+    args: [fixture.file, "--url", `${E2E_MCP}/`, "--name", "assay"],
     env: {
       ASSAY_MCP_DEV_ORIGINS: E2E_MCP,
       ...(mode === "A" ? { ASSAY_DEV_API_KEY: API_KEY } : {}),

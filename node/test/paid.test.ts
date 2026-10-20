@@ -124,10 +124,11 @@ async function setLimits(limits: { perCall?: string; perDay?: string; confirmAbo
 
 type ElicitHandler = (params: Record<string, unknown>) => Promise<Record<string, unknown>>;
 
-async function connect(opts: { args?: string[]; elicit?: ElicitHandler; extraEnv?: Record<string, string> } = {}) {
+/** A user-scope entry (with `--name`) unless `projectForm`: a project-scope entry carries no `--name` (R-MU-4). */
+async function connect(opts: { args?: string[]; elicit?: ElicitHandler; extraEnv?: Record<string, string>; projectForm?: boolean } = {}) {
   const transport = new StdioClientTransport({
     command: process.execPath,
-    args: [fixture.file, "--url", `${E2E_MCP}/`, ...(opts.args ?? [])],
+    args: [fixture.file, "--url", `${E2E_MCP}/`, ...(opts.projectForm === true ? [] : ["--name", "assay"]), ...(opts.args ?? [])],
     env: {
       ASSAY_MCP_DEV_ORIGINS: E2E_MCP,
       ASSAY_DEV_API_KEY: API_KEY,
@@ -323,6 +324,23 @@ describe("paid path (SDK client → proxy → fake Assay)", () => {
     expect(r.isError).toBe(true);
     expect(fake.accepted).toHaveLength(0);
     await withLock(profile(), (lock) => addPaidUrl(profile(), lock, "/"));
+  });
+
+  it("a project-form serve (no --name) does not pay through the / a profile starts with, only after allow-paid (M2, R-MU-13)", async () => {
+    await enabled();
+    const project = await connect({ projectForm: true });
+    const r = await project.client.callTool({ name: "weather", arguments: {} });
+    expect(r.isError).toBe(true);
+    expect(textOf(r)).toBe(`Paid calls through this server are off. To allow them, run in a terminal: npx -y @goassay-ai/mcp@${VERSION} allow-paid ${E2E_MCP}/`);
+    expect(fake.accepted).toHaveLength(0);
+    // The same profile pays at once through a user install of /.
+    const user = await connect();
+    expect((await user.client.callTool({ name: "weather", arguments: {} })).isError).toBeFalsy();
+    expect(fake.accepted).toHaveLength(1);
+    // allow-paid / (here written directly) makes it explicit: the project install pays too.
+    await withLock(profile(), (lock) => addPaidUrl(profile(), lock, "/"));
+    expect((await project.client.callTool({ name: "weather", arguments: {} })).isError).toBeFalsy();
+    expect(fake.accepted).toHaveLength(2);
   });
 
   it("the payer is recorded after the first paid call; a later different payer is refused (G4 payer changed)", async () => {
