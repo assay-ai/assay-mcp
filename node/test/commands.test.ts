@@ -474,7 +474,7 @@ describe("login and logout (fake AS)", () => {
     await seedProfile("e2e");
     seedSecret("default", "e2e", "refresh_token", "assay_rt_unknown_to_the_server");
     expect(await runLogout([], deps({ env: E2E_ENV }))).toBe(0);
-    expect(output()).toContain("This signs out all 0 Assay servers on this computer.");
+    expect(output()).not.toContain("Assay servers on this computer");
     expect(output()).not.toContain("payment key was deleted");
     expect(keyring.entries.size).toBe(0);
     expect(readProfile(ref())).toBeNull();
@@ -1169,5 +1169,13 @@ describe("global guard (review I2)", () => {
     const { defaultProfileDeps } = await import("../src/commands/profile-context.js");
     expect(defaultProfileDeps().dir).toBe(configDir());
     expect(configDir().startsWith(testHome())).toBe(true);
+  });
+});
+
+describe("signsOutText", () => {
+  it("says nothing when add installed no server, and reads naturally for one", () => {
+    expect(signsOutText(0)).toBeNull();
+    expect(signsOutText(1)).toBe("This signs out the Assay server on this computer.");
+    expect(signsOutText(3)).toBe("This signs out all 3 Assay servers on this computer.");
   });
 });

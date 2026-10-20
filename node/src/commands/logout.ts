@@ -34,7 +34,10 @@ import {
 /** Profile files deleted by logout; `limits` and `paid-urls` are kept (F7 step 2). */
 export const LOGOUT_DELETES = ["profile", "state", "settings"] as const;
 
-export function signsOutText(n: number): string {
+/** The spec's line for two or more servers; null when `add` installed none (nothing to warn about). */
+export function signsOutText(n: number): string | null {
+  if (n <= 0) return null;
+  if (n === 1) return "This signs out the Assay server on this computer.";
   return `This signs out all ${n} Assay servers on this computer.`;
 }
 
@@ -151,7 +154,8 @@ export async function logout(args: readonly string[], deps: ProfileDeps): Promis
   }
 
   // Printed only after the lock work is done, so a lock or keychain failure never follows it.
-  deps.print(`${signsOutText(n)}\n`);
+  const servers = signsOutText(n);
+  if (servers !== null) deps.print(`${servers}\n`);
   const web = deployment?.web.replace(/\/+$/, "") ?? null;
   if (localOnly !== null) {
     deps.print(`Signed out on this computer only (${localOnly}). Revoke the app at Agents & keys on the Assay website if it still shows.\n`);

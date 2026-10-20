@@ -608,7 +608,7 @@ describe("remove", () => {
     expect(await runRemove(["assay-weather"], h.deps)).toBe(0);
     expect([...entriesOf(client).keys()]).toEqual(["keep"]);
     expect(h.deps.installs.read().map((r) => r.name)).toEqual(["keep"]);
-    expect(h.out.join("")).toContain("still signed in");
+    expect(h.out.join("")).toContain("This does not sign out");
   });
 
   it("refuses an entry assay-mcp did not write, even under a recorded name", async () => {
