@@ -19,6 +19,8 @@ export interface InstallDeps {
   onPath(bin: string): boolean;
   /** Asks the user to pick one of `choices` on the TTY; null when nothing was chosen. */
   ask(question: string, choices: readonly string[]): Promise<string | null>;
+  /** A free-text answer on the TTY (trimmed); null when there was none. */
+  prompt(question: string): Promise<string | null>;
   /** All human output goes to stderr (only `serve` writes to stdout). */
   print(text: string): void;
   version: string;

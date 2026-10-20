@@ -1,3 +1,4 @@
+import { RUN } from "../src/version.js";
 import {
   existsSync,
   lstatSync,
@@ -165,6 +166,8 @@ function resolveUrl(input: string): ResolvedUrl {
 
 interface Harness {
   deps: InstallDeps;
+  /** The questions `prompt` was asked. */
+  prompts: string[];
   out: string[];
   calls: { bin: string; argv: string[]; cwd: string }[];
   paid: { profile: string; url: string }[];
@@ -177,6 +180,7 @@ function harness(overrides: Partial<InstallDeps> = {}): Harness {
   const out: string[] = [];
   const calls: Harness["calls"] = [];
   const paid: Harness["paid"] = [];
+  const prompts: string[] = [];
   const store = new Map<string, string>();
   const profilesPresent = new Set<string>(["default"]);
   const measured = { L: 20 as number | null };
@@ -188,6 +192,8 @@ function harness(overrides: Partial<InstallDeps> = {}): Harness {
   const profiles: ProfilePort = {
     isValidName: (n) => /^[a-z0-9][a-z0-9-]{0,31}$/.test(n),
     exists: (n) => profilesPresent.has(n),
+    // Like paid-urls.json: every profile starts with `/`.
+    isPaidUrl: (profile, url) => url.pathAndQuery === "/" || paid.some((p) => p.profile === profile && p.url === url.pathAndQuery),
     addPaidUrl: (profile, url) => (paid.push({ profile, url: url.pathAndQuery }), Promise.resolve()),
     longestTool: () => Promise.resolve(measured.L),
   };
@@ -202,12 +208,14 @@ function harness(overrides: Partial<InstallDeps> = {}): Harness {
     isTTY: true,
     onPath: () => false,
     ask: () => Promise.resolve(null),
+    // The typed confirmation: the profile name.
+    prompt: (q) => (prompts.push(q), Promise.resolve("default")),
     print: (t) => void out.push(t),
     version: V,
     productionOrigin: MCP,
     ...overrides,
   };
-  return { deps, out, calls, paid, store, profilesPresent, measured };
+  return { deps, prompts, out, calls, paid, store, profilesPresent, measured };
 }
 
 function userConfig(client: ClientId): string {
@@ -404,8 +412,42 @@ describe("add", () => {
   it("a default name that is taken gets -2", async () => {
     const h = harness();
     expect(await runAdd(["/c/weather", "--client", "cursor"], h.deps)).toBe(0);
-    expect(await runAdd(["/c/weather", "--client", "cursor"], h.deps)).toBe(0);
+    expect(await runAdd(["/my/weather", "--client", "cursor"], h.deps)).toBe(0);
     expect([...entriesOf("cursor").keys()]).toEqual(["assay-weather", "assay-weather-2"]);
+  });
+
+  it.each(CLIENT_IDS)("add again for the same URL and profile is already installed, exit 0 (M4): %s", async (client) => {
+    const h = harness();
+    expect(await runAdd(["/c/weather", "--client", client], h.deps)).toBe(0);
+    const before = [...entriesOf(client).keys()];
+    h.out.length = 0;
+    expect(await runAdd(["/c/weather", "--client", client], h.deps)).toBe(0);
+    expect(h.out.join("")).toBe(`assay-weather → ${MCP}/c/weather is already installed in ${CLIENTS[client].label}. Nothing changed. Pass a new --name to add a second entry.\n`);
+    expect([...entriesOf(client).keys()]).toEqual(before);
+    expect(h.deps.installs.read()).toHaveLength(1);
+    // The same name typed again is no new name either.
+    expect(await runAdd(["/c/weather", "--client", client, "--name", "assay-weather"], h.deps)).toBe(0);
+    expect(h.deps.installs.read()).toHaveLength(1);
+    // A new --name adds a second entry.
+    expect(await runAdd(["/c/weather", "--client", client, "--name", "weather-two"], h.deps)).toBe(0);
+    expect([...entriesOf(client).keys()].sort()).toEqual(["assay-weather", "weather-two"]);
+  });
+
+  it("an install removed from the client config by hand is installed again", async () => {
+    const h = harness();
+    expect(await runAdd(["/c/weather", "--client", "cursor"], h.deps)).toBe(0);
+    writeJson(userConfig("cursor"), { mcpServers: {} });
+    expect(await runAdd(["/c/weather", "--client", "cursor"], h.deps)).toBe(0);
+    expect([...entriesOf("cursor").keys()]).toEqual(["assay-weather"]);
+  });
+
+  it("another profile or scope is not the same install", async () => {
+    const h = harness();
+    h.profilesPresent.add("work");
+    expect(await runAdd(["/c/weather", "--client", "cursor"], h.deps)).toBe(0);
+    expect(await runAdd(["/c/weather", "--client", "cursor", "--profile", "work"], h.deps)).toBe(0);
+    expect(await runAdd(["/c/weather", "--client", "cursor", "--scope", "project"], h.deps)).toBe(0);
+    expect(h.deps.installs.read()).toHaveLength(3);
   });
 
   it("names: the default drops to assay for the root, and a typed name that does not fit is refused", async () => {
@@ -430,14 +472,37 @@ describe("add", () => {
     expect(existsSync(userConfig("cursor"))).toBe(false);
   });
 
-  it("user scope on a TTY allows the URL for paid calls and records the install", async () => {
+  it("user scope on a TTY allows the URL for paid calls after the typed profile name, and records the install", async () => {
     const h = harness();
     expect(await runAdd(["/c/weather", "--client", "cursor"], h.deps)).toBe(0);
+    expect(h.prompts).toHaveLength(1);
+    expect(h.prompts[0]).toContain(`Allow paid calls through ${MCP}/c/weather for profile "default"?`);
+    expect(h.prompts[0]).toContain("Type the profile name (default) to confirm");
     expect(h.paid).toEqual([{ profile: "default", url: "/c/weather" }]);
     expect(h.deps.installs.read()).toEqual([
       { client: "cursor", scope: "user", name: "assay-weather", url: `${MCP}/c/weather`, profile: "default", configPath: userConfig("cursor") },
     ]);
     expect(h.out.join("")).toContain(`Added assay-weather → ${MCP}/c/weather. Restart Cursor if it is open.`);
+  });
+
+  it("a plain yes on the TTY does not allow paid calls; the install still happens (M5)", async () => {
+    for (const answer of ["y", "yes", "", null, "Default"]) {
+      const h = harness({ prompt: () => Promise.resolve(answer) });
+      expect(await runAdd(["/c/weather", "--client", "cursor"], h.deps)).toBe(0);
+      expect(h.paid).toEqual([]);
+      expect(h.out.join("")).toContain(`This install did not allow paid calls for ${MCP}/c/weather. Run \`${RUN} allow-paid ${MCP}/c/weather\``);
+      expect(entriesOf("cursor").has("assay-weather")).toBe(true);
+      rmSync(home, { recursive: true, force: true });
+      mkdirSync(home);
+    }
+  });
+
+  it("a URL already allowed asks nothing", async () => {
+    const h = harness();
+    expect(await runAdd(["/", "--client", "cursor"], h.deps)).toBe(0);
+    expect(h.prompts).toEqual([]);
+    expect(h.paid).toEqual([]);
+    expect(h.out.join("")).not.toContain("allow-paid");
   });
 
   it("without a TTY the URL is not allowed for paid calls", async () => {
@@ -971,6 +1036,7 @@ describe("wired to the URL parser, {dir} files and the profile store", () => {
       isTTY,
       print: (t) => void out.push(t),
       ask: () => Promise.resolve(null),
+      prompt: () => Promise.resolve("default"),
       onPath: () => false,
     });
     return { deps, out, dir };

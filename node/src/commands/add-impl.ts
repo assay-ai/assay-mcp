@@ -9,6 +9,7 @@ import { UrlRefused, type ResolvedUrl } from "../clients/ports.js";
 import { SIGNED_OUT_L, SIGN_IN_HINT } from "../clients/server-name.js";
 import { EXIT_FATAL, EXIT_OK, EXIT_USAGE } from "../exit-codes.js";
 import { parseFlags, UsageError, type InstallDeps } from "./context.js";
+import { typedConfirm } from "./profile-context.js";
 
 const API_KEY_ENV = "ASSAY_API_KEY";
 
@@ -99,10 +100,20 @@ export async function add(options: AddOptions, deps: InstallDeps): Promise<void>
   if (!client.scopes.includes(options.scope)) throw new UsageError(`${client.label} has no ${options.scope} scope`);
   const target = client.target(options.scope, deps.clientEnv);
 
-  const measured = await deps.profiles.longestTool(profile, url);
-  const L = measured ?? SIGNED_OUT_L;
   const taken = [...client.entries(target, deps.clientEnv).keys()];
 
+  // Idempotent: the same URL for the same profile already installed in this client and scope
+  // (and still in its config) is reported, not installed again under another name.
+  const existing = deps.installs
+    .read()
+    .find((r) => r.client === client.id && r.scope === options.scope && r.url === url.url && r.profile === profile && r.configPath === target.configPath && taken.includes(r.name));
+  if (existing !== undefined && (options.name === undefined || (options.name === existing.name && !options.force))) {
+    deps.print(`${existing.name} → ${url.url} is already installed in ${client.label}. Nothing changed. Pass a new --name to add a second entry.\n`);
+    return;
+  }
+
+  const measured = await deps.profiles.longestTool(profile, url);
+  const L = measured ?? SIGNED_OUT_L;
   const choice = chooseName({ scope: options.scope, L, slugWords: url.slugWords, taken, ...(options.name !== undefined ? { typed: options.name } : {}) });
   if (!choice.ok) throw new UsageError(`${choice.message}${measured === null ? ` ${SIGN_IN_HINT}` : ""}`);
   const name = choice.name;
@@ -121,10 +132,22 @@ export async function add(options: AddOptions, deps: InstallDeps): Promise<void>
 
   const allowHint = `Run \`${RUN} allow-paid ${shellQuote(url.url)}\` in a terminal to allow paid calls through it.`;
   if (options.scope === "user" && deps.isTTY) {
-    try {
-      await deps.profiles.addPaidUrl(profile, url);
-    } catch (err) {
-      deps.print(`Could not allow paid calls for ${url.url} (${(err as Error).message}). ${allowHint}\n`);
+    // The same typed confirmation as `allow-paid`: an agent driving a pseudo-terminal passes the TTY check.
+    if (!deps.profiles.isPaidUrl(profile, url)) {
+      const yes = await typedConfirm(
+        deps,
+        `Allow paid calls through ${url.url} for profile "${profile}"? Tools behind this URL can then spend within your local caps.`,
+        profile,
+      );
+      if (!yes) {
+        deps.print(`This install did not allow paid calls for ${url.url}. ${allowHint}\n`);
+      } else {
+        try {
+          await deps.profiles.addPaidUrl(profile, url);
+        } catch (err) {
+          deps.print(`Could not allow paid calls for ${url.url} (${(err as Error).message}). ${allowHint}\n`);
+        }
+      }
     }
   } else if (options.scope === "user") {
     deps.print(`This install did not allow paid calls for ${url.url}. ${allowHint}\n`);

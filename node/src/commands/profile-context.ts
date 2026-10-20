@@ -160,7 +160,7 @@ export async function typedConfirm(deps: Pick<ProfileDeps, "prompt">, question: 
 /** The message and exit code for a confirmation the user declined: nothing changed, exit 0. */
 export const DECLINED_TEXT = "Nothing changed.";
 
-async function promptOnTty(question: string): Promise<string | null> {
+export async function promptOnTty(question: string): Promise<string | null> {
   const rl = createInterface({ input: process.stdin, output: process.stderr });
   try {
     return (await rl.question(`${question} `)).trim();

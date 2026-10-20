@@ -33,7 +33,9 @@ export interface ProfilePort {
   isValidName(name: string): boolean;
   /** True when `profiles/{name}.json` exists. */
   exists(name: string): boolean;
-  /** Adds the URL to `paid-urls.json` under the profile lock (TTY only; the caller checks). */
+  /** True when the URL is already in `paid-urls.json` (the `/` a profile starts with included). */
+  isPaidUrl(profile: string, url: ResolvedUrl): boolean;
+  /** Adds the URL to `paid-urls.json` under the profile lock (TTY only, after the typed confirmation; the caller checks). */
   addPaidUrl(profile: string, url: ResolvedUrl): Promise<void>;
   /** L(u) from `tools/list` on the URL with the profile's token; null when not signed in. */
   longestTool(profile: string, url: ResolvedUrl): Promise<number | null>;

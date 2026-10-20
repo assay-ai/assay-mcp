@@ -21,9 +21,10 @@ import { readDevOrigins } from "../profile/dev-origins.js";
 import { withLock, type ProfileRef } from "../profile/lock.js";
 import { parseMcpAbsoluteUrl } from "../profile/mcp-url.js";
 import { configDir, isValidProfileName, readPrivateFile, writePrivateFile } from "../profile/paths.js";
-import { addPaidUrl, paidUrlKey, readProfile, readProfileFor } from "../profile/profile.js";
+import { addPaidUrl, paidUrlKey, readPaidUrls, readProfile, readProfileFor } from "../profile/profile.js";
 import { VERSION } from "../version.js";
 import type { InstallDeps } from "./context.js";
+import { promptOnTty } from "./profile-context.js";
 import { measureLongestTool } from "./measure-tools.js";
 
 /**
@@ -61,6 +62,7 @@ export interface WiringInputs {
   isTTY: boolean;
   print(text: string): void;
   ask(question: string, choices: readonly string[]): Promise<string | null>;
+  prompt(question: string): Promise<string | null>;
   onPath(bin: string): boolean;
   /** L(u) with the profile's token; null (the signed-out 48) when not given. */
   longestTool?: ProfilePort["longestTool"];
@@ -126,6 +128,13 @@ export function wiredDeps(w: WiringInputs): InstallDeps {
   const profiles: ProfilePort = {
     isValidName: isValidProfileName,
     exists: (name) => readProfile(ref(name)) !== null,
+    isPaidUrl: (name, url) => {
+      try {
+        return readPaidUrls(ref(name)).includes(url.pathAndQuery);
+      } catch {
+        return false; // an unreadable file: ask, and let the write report it
+      }
+    },
     addPaidUrl: async (name, url) => {
       await withLock(ref(name), (lock) => {
         readProfileFor(ref(name), url.environment);
@@ -151,6 +160,7 @@ export function wiredDeps(w: WiringInputs): InstallDeps {
     isTTY: w.isTTY,
     onPath: w.onPath,
     ask: w.ask,
+    prompt: w.prompt,
     print: w.print,
     version: VERSION,
     productionOrigin: builtInDeployments().production.mcp,
@@ -169,6 +179,7 @@ export function defaultDeps(): InstallDeps {
     isTTY: Boolean(process.stdin.isTTY && process.stdout.isTTY),
     print: (text) => void process.stderr.write(text),
     ask,
+    prompt: promptOnTty,
     onPath: (bin) => onPath(bin),
     longestTool: tokenLongestTool({ dir, env: process.env, openKeychain: openOsKeychain }),
   });
