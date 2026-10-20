@@ -72,12 +72,12 @@ async function world(mode: Mode) {
     await withLock(profile, async (lock) => {
       await keychain.storeTokens(lock, { refreshToken: REFRESH_TOKEN, accessToken: { token: ACCESS_TOKEN, expiresAt: Math.floor(Date.now() / 1000) + 3600 } });
       createProfile(profile, lock, { environment: "e2e", credentialId: CREDENTIAL_ID, agentLabel: "agent", createdAt: new Date().toISOString() });
+      addPaidUrl(profile, lock, "/"); // what `add` on a TTY leaves after the typed confirm
     });
   }
   const transport = new StdioClientTransport({
     command: process.execPath,
-    // A user install (with --name), as the Connect commands write it.
-    args: [fixture.file, "--url", `${E2E_MCP}/`, "--name", "assay"],
+    args: [fixture.file, "--url", `${E2E_MCP}/`],
     env: {
       ASSAY_MCP_DEV_ORIGINS: E2E_MCP,
       ...(mode === "A" ? { ASSAY_DEV_API_KEY: API_KEY } : {}),

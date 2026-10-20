@@ -15,7 +15,7 @@ import { pinnedFetch } from "../net/fetch.js";
 import type { ResolvedDeployment } from "../profile/deployments.js";
 import { fingerprint } from "../profile/fingerprint.js";
 import type { Keychain } from "../profile/keychain.js";
-import { readExplicitPaidUrls, readLimits, readPaidUrls, readProfile, readState, type ProfileRecord } from "../profile/profile.js";
+import { readLimits, readPaidUrls, readProfile, readState, type ProfileRecord } from "../profile/profile.js";
 import { parseFlags } from "./context.js";
 import { unitsToUsd, usd, utcDate } from "./format.js";
 import {
@@ -38,7 +38,8 @@ export function thisComputer(platform: NodeJS.Platform): string {
 }
 
 export interface PaidCallsView {
-  status: "NONE" | "ACTIVE" | "EXPIRED" | "REVOKED";
+  /** The API's `paidCalls.status`; `UNBOUND` for `paidCalls: null` (no key bound), `UNKNOWN` when `paidCallsUnknown` is true. */
+  status: "NONE" | "ACTIVE" | "EXPIRED" | "REVOKED" | "UNBOUND" | "UNKNOWN";
 }
 
 /** `GET {API}/agents/me/delegate` → `paidCalls.status` (UX only); null on any failure. */
@@ -56,7 +57,10 @@ async function paidCallsFromApi(deployment: ResolvedDeployment, bearer: string, 
     }
     const text = await readCapped(res, MAX_BODY_BYTES, signal);
     if (text === null) return null;
-    const status = (JSON.parse(text) as { data?: { paidCalls?: { status?: unknown } | null } } | null)?.data?.paidCalls?.status;
+    const data = (JSON.parse(text) as { data?: { paidCalls?: { status?: unknown } | null; paidCallsUnknown?: unknown } } | null)?.data;
+    if (data?.paidCallsUnknown === true) return { status: "UNKNOWN" };
+    if (data?.paidCalls === null && data.paidCallsUnknown === false) return { status: "UNBOUND" };
+    const status = data?.paidCalls?.status;
     return status === "NONE" || status === "ACTIVE" || status === "EXPIRED" || status === "REVOKED" ? { status } : null;
   } catch {
     return null;
@@ -101,7 +105,8 @@ async function paymentKeyLine(
       : `${fp} · unknown while signed out · run \`${RUN} login\``;
   }
   const api = await paidCallsFromApi(deployment, bearer, deps.requestTimeoutMs ?? REQUEST_TIMEOUT_MS);
-  if (api === null) return `${fp} · can't check with Assay right now`;
+  if (api === null || api.status === "UNKNOWN") return `${fp} · can't check with Assay right now`;
+  if (api.status === "UNBOUND") return `${fp} · not bound to this sign-in · ${enable}`;
   if (api.status === "NONE") return `${fp} · not turned on · ${enable}`;
   const word = { ACTIVE: "on", EXPIRED: "expired", REVOKED: "stopped" }[api.status];
   return `${fp} · ${word} (reported by Assay, not yet read from chain)${api.status === "ACTIVE" ? "" : ` · ${enable}`}`;
@@ -112,11 +117,10 @@ async function signedInBearer(keychain: Keychain, nowSeconds: number): Promise<s
   return access !== null && access.expiresAt > nowSeconds ? access.token : null;
 }
 
-/** The paid URLs; the `/` a profile starts with is marked, since project installs do not count it (R-MU-13). */
+/** The URLs a person allowed for paid calls (R-MU-13); none until `add` (typed confirm) or `allow-paid`. */
 function paidUrlsText(ref: ReturnType<typeof profileRef>): string {
-  const explicit = readExplicitPaidUrls(ref);
-  const urls = readPaidUrls(ref).map((u) => (explicit.includes(u) ? u : `${u} (user installs only)`));
-  return urls.length === 0 ? "none" : urls.join("  ·  ");
+  const urls = readPaidUrls(ref);
+  return urls.length === 0 ? `none · run \`${RUN} allow-paid <url>\` in a terminal` : urls.join("  ·  ");
 }
 
 export async function statusText(args: readonly string[], deps: ProfileDeps): Promise<string> {

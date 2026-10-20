@@ -12,7 +12,7 @@ import { identifyCredential } from "../oauth/flow.js";
 import type { ResolvedDeployment } from "../profile/deployments.js";
 import type { Keychain } from "../profile/keychain.js";
 import { withLock, type LockHandle, type LockOptions, type ProfileRef } from "../profile/lock.js";
-import { createProfile, paidUrlKey, readExplicitPaidUrls, readLimits, readPaidUrls, readProfileFor, readState, updateProfile } from "../profile/profile.js";
+import { createProfile, paidUrlKey, readLimits, readPaidUrls, readProfileFor, readState, updateProfile } from "../profile/profile.js";
 import { issuedAt } from "../signer/clock.js";
 import { generate } from "../signer/keygen.js";
 import { openThroughGate } from "./browser-gate.js";
@@ -89,11 +89,6 @@ export interface PaidOptions {
   readonly keychain: Keychain;
   /** `--no-paid`: never sign. */
   readonly noPaid: boolean;
-  /**
-   * A serve without `--name`, the form of a project-scope entry (R-MU-4): only URLs a person
-   * allowed on a TTY count, not the `{MCP}/` a new profile starts with (R-MU-13).
-   */
-  readonly projectForm?: boolean;
   readonly chain: ChainReader;
   readonly quotes: QuoteCache;
   /** `pinnedFetch` bound to the deployment (API requests). */
@@ -539,9 +534,9 @@ export class PaidPath {
     }
   }
 
-  /** G11's list for this serve: every paid URL, or only the explicit ones in project form. */
+  /** G11's list: only URLs a person allowed on a TTY, whatever the client config says (R-MU-13, T13). */
   private paidUrls(): string[] {
-    return this.o.projectForm === true ? readExplicitPaidUrls(this.o.profile) : readPaidUrls(this.o.profile);
+    return readPaidUrls(this.o.profile);
   }
 
   /** The profile's credential id, or the one the API names for this bearer. */

@@ -10,7 +10,7 @@ import { RUN } from "../version.js";
 import { EXIT_OK } from "../exit-codes.js";
 import { UrlRefused, type ResolvedUrl } from "../clients/ports.js";
 import { withLock } from "../profile/lock.js";
-import { addPaidUrl, readExplicitPaidUrls, readPaidUrls, readProfileFor, removePaidUrl } from "../profile/profile.js";
+import { addPaidUrl, readPaidUrls, readProfileFor, removePaidUrl } from "../profile/profile.js";
 import { requireTty } from "../tty.js";
 import { parseFlags, UsageError } from "./context.js";
 import { checkProfileName, DECLINED_TEXT, profileRef, reportFailure, typedConfirm, type ProfileDeps } from "./profile-context.js";
@@ -31,9 +31,7 @@ export async function changePaidUrl(command: PaidUrlChange, args: readonly strin
   }
   const ref = profileRef(deps, profile);
   readProfileFor(ref, url.environment); // refused before any question; checked again under the lock
-  // `allow-paid` counts only what a person allowed: the `{MCP}/` a profile starts with does not
-  // reach project installs (R-MU-13), so allowing it asks and makes it explicit.
-  const current = (): string[] => (command === "allow-paid" ? readExplicitPaidUrls(ref) : readPaidUrls(ref));
+  const current = (): string[] => readPaidUrls(ref);
   if (command === "allow-paid" && !current().includes(url.pathAndQuery)) {
     const yes = await typedConfirm(
       deps,

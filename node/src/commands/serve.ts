@@ -227,8 +227,6 @@ export async function serve(args: readonly string[], deps: ServeDeps = {}): Prom
             profile,
             keychain,
             noPaid: parsed.noPaid,
-            // A project-scope entry never carries --name (R-MU-4); it pays only through explicitly allowed URLs.
-            projectForm: parsed.name === null,
             chain: createChainReader({ environment: deployment.environment, profile: profile.name }),
             quotes: new QuoteCache(),
             fetch: (url, init) => pinnedFetch(deployment, url, init),

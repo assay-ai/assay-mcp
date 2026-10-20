@@ -192,8 +192,7 @@ function harness(overrides: Partial<InstallDeps> = {}): Harness {
   const profiles: ProfilePort = {
     isValidName: (n) => /^[a-z0-9][a-z0-9-]{0,31}$/.test(n),
     exists: (n) => profilesPresent.has(n),
-    // Like paid-urls.json: every profile starts with `/`.
-    isPaidUrl: (profile, url) => url.pathAndQuery === "/" || paid.some((p) => p.profile === profile && p.url === url.pathAndQuery),
+    isPaidUrl: (profile, url) => paid.some((p) => p.profile === profile && p.url === url.pathAndQuery),
     addPaidUrl: (profile, url) => (paid.push({ profile, url: url.pathAndQuery }), Promise.resolve()),
     longestTool: () => Promise.resolve(measured.L),
   };
@@ -433,6 +432,29 @@ describe("add", () => {
     expect([...entriesOf(client).keys()].sort()).toEqual(["assay-weather", "weather-two"]);
   });
 
+  it("--force on an existing install installs it again under its own name, never -2 (m5)", async () => {
+    const h = harness();
+    expect(await runAdd(["/c/weather", "--client", "cursor"], h.deps)).toBe(0);
+    h.out.length = 0;
+    expect(await runAdd(["/c/weather", "--client", "cursor", "--force"], h.deps)).toBe(0);
+    expect(h.out.join("")).toContain("Added assay-weather →");
+    expect([...entriesOf("cursor").keys()]).toEqual(["assay-weather"]);
+    expect(h.deps.installs.read()).toHaveLength(1);
+  });
+
+  it("re-add of a user install whose URL is not paid prints the allow hint (m6)", async () => {
+    const h = harness({ prompt: () => Promise.resolve(null) });
+    expect(await runAdd(["/c/weather", "--client", "cursor"], h.deps)).toBe(0);
+    h.out.length = 0;
+    expect(await runAdd(["/c/weather", "--client", "cursor"], h.deps)).toBe(0);
+    expect(h.out.join("")).toContain("is already installed");
+    expect(h.out.join("")).toContain(`Run \`${RUN} allow-paid ${MCP}/c/weather\` in a terminal`);
+    h.paid.push({ profile: "default", url: "/c/weather" });
+    h.out.length = 0;
+    expect(await runAdd(["/c/weather", "--client", "cursor"], h.deps)).toBe(0);
+    expect(h.out.join("")).not.toContain("allow-paid");
+  });
+
   it("an install removed from the client config by hand is installed again", async () => {
     const h = harness();
     expect(await runAdd(["/c/weather", "--client", "cursor"], h.deps)).toBe(0);
@@ -497,11 +519,19 @@ describe("add", () => {
     }
   });
 
-  it("a URL already allowed asks nothing", async () => {
+  it("the root URL too is allowed only after the typed confirm (I1)", async () => {
     const h = harness();
     expect(await runAdd(["/", "--client", "cursor"], h.deps)).toBe(0);
+    expect(h.prompts).toHaveLength(1);
+    expect(h.paid).toEqual([{ profile: "default", url: "/" }]);
+  });
+
+  it("a URL already allowed asks nothing", async () => {
+    const h = harness();
+    h.paid.push({ profile: "default", url: "/c/weather" });
+    expect(await runAdd(["/c/weather", "--client", "cursor"], h.deps)).toBe(0);
     expect(h.prompts).toEqual([]);
-    expect(h.paid).toEqual([]);
+    expect(h.paid).toEqual([{ profile: "default", url: "/c/weather" }]);
     expect(h.out.join("")).not.toContain("allow-paid");
   });
 
@@ -1048,7 +1078,7 @@ describe("wired to the URL parser, {dir} files and the profile store", () => {
     expect(await runAdd([`${MCP}/?tools=get_weather`, "--client", "cursor"], deps)).toBe(0);
     // signed out (no tools/list yet): L = 48, so `/c/weather` gets `assay` and `assay-get` (9) just fits
     expect([...entriesOf("cursor").keys()]).toEqual(["assay", "assay-get"]);
-    expect(readPaidUrls({ dir, name: "default" })).toEqual(["/", "/c/weather", "/?tools=get_weather"]);
+    expect(readPaidUrls({ dir, name: "default" })).toEqual(["/c/weather", "/?tools=get_weather"]);
     const installs = join(dir, "installs.json");
     if (process.platform !== "win32") expect(lstatSync(installs).mode & 0o777).toBe(0o600);
     expect((JSON.parse(readFileSync(installs, "utf8")) as unknown[]).length).toBe(2);

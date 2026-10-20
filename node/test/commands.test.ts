@@ -39,7 +39,7 @@ import { Keychain, KeychainError, KEYCHAIN_SERVICE, type OsKeychain } from "../s
 import { LockError, withLock, type ProfileRef } from "../src/profile/lock.js";
 import { configDir, profileFile, writePrivateFile } from "../src/profile/paths.js";
 import { testHome } from "./setup/temp-home.js";
-import { addPaidUrl, createProfile, readExplicitPaidUrls, readLimits, readPaidUrls, readProfile, updateProfile } from "../src/profile/profile.js";
+import { addPaidUrl, createProfile, readLimits, readPaidUrls, readProfile, updateProfile } from "../src/profile/profile.js";
 import { readSettings } from "../src/profile/settings.js";
 import { checkEnvironment, readProfileSettings } from "../src/proxy/environment.js";
 import { RUN } from "../src/version.js";
@@ -283,7 +283,7 @@ describe("status", () => {
         "Agent       research-bot",
         "Payment key 1A2B 9F3C · on (read from chain) · $0.50 a call · $5 per 24 h · until 2026-11-18",
         "Local caps  $0.50 a call · $5 per 24 h · spent today $1.20 · confirm above: off · providers: any",
-        "Paid URLs   / (user installs only)  ·  /c/weather",
+        "Paid URLs   /c/weather",
         "Installs    assay (claude-code, user) → /    weather (claude-code, user) → /c/weather",
         "",
       ].join("\n"),
@@ -311,7 +311,7 @@ describe("status", () => {
     expect(lines[1]).toBe(`Signed in   no · run \`${RUN} login\``);
     expect(lines[3]).toBe("Payment key none yet · made on the first paid call");
     expect(lines[4]).toBe("Local caps  $0.50 a call · $5 per 24 h · spent today $0 · confirm above: off · providers: any");
-    expect(lines[5]).toBe("Paid URLs   / (user installs only)");
+    expect(lines[5]).toBe(`Paid URLs   none · run \`${RUN} allow-paid <url>\` in a terminal`);
     expect(lines[6]).toBe("Installs    none");
     // Read only: status creates no file.
     expect(existsSync(dir)).toBe(false);
@@ -353,6 +353,22 @@ describe("status", () => {
     seedSecret("default", "e2e", "access_token", JSON.stringify({ token: "assay_at_seed", expiresAt: NOW + 600 }));
     vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response("", { status: 503 }));
     expect(await keyLine()).toBe("Payment key 1A2B 9F3C · can't check with Assay right now");
+  });
+
+  it("paidCalls null: not bound when the API is sure, can't check when paidCallsUnknown (m2)", async () => {
+    await seedProfile("e2e", { delegate: true });
+    addDevOrigin(dir, E2E_MCP);
+    seedSecret("default", "e2e", "refresh_token", "assay_rt_seed");
+    seedSecret("default", "e2e", "access_token", JSON.stringify({ token: "assay_at_seed", expiresAt: NOW + 600 }));
+    let data: Record<string, unknown> = {};
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify({ data }), { status: 200, headers: { "content-type": "application/json" } }));
+    const keyLine = async () => (await statusText([], deps({ env: E2E_ENV }))).split("\n")[3];
+    data = { credentialId: CRED, paidCalls: null, paidCallsUnknown: false };
+    expect(await keyLine()).toBe(`Payment key 1A2B 9F3C · not bound to this sign-in · run \`${RUN} enable-paid\``);
+    data = { credentialId: CRED, paidCalls: null, paidCallsUnknown: true };
+    expect(await keyLine()).toBe("Payment key 1A2B 9F3C · can't check with Assay right now");
+    data = { credentialId: CRED, paidCalls: { status: "NONE" }, paidCallsUnknown: false };
+    expect(await keyLine()).toBe(`Payment key 1A2B 9F3C · not turned on · run \`${RUN} enable-paid\``);
   });
 
   it("refuses a dev profile while dev mode is off", async () => {
@@ -478,7 +494,7 @@ describe("login and logout (fake AS)", () => {
 
     // Files: limits and paid URLs kept (unchanged), the others deleted.
     expect(readFileSync(join(dir, profileFile("default", "limits")), "utf8")).toBe(limitsBefore);
-    expect(readPaidUrls(ref())).toEqual(["/", "/c/weather"]);
+    expect(readPaidUrls(ref())).toEqual(["/c/weather"]);
     for (const kind of ["profile", "state", "settings"] as const) expect(existsSync(join(dir, profileFile("default", kind)))).toBe(false);
     expect(existsSync(join(dir, profileFile("default", "lock")))).toBe(false);
 
@@ -552,7 +568,7 @@ describe("login and logout (fake AS)", () => {
     expect([...keyring.entries.keys()]).toEqual([]);
     for (const kind of ["profile", "state", "settings"] as const) expect(existsSync(join(dir, profileFile("default", kind)))).toBe(false);
     expect(readFileSync(join(dir, profileFile("default", "limits")), "utf8")).toBe(limitsBefore);
-    expect(readPaidUrls(ref())).toEqual(["/", "/c/weather"]);
+    expect(readPaidUrls(ref())).toEqual(["/c/weather"]);
     expect(output()).toContain(web !== null ? `${onChainHint(web)}\n` : "Your payment key was deleted from this computer. To also cancel its on-chain permission, open Agents & keys");
   }
 
@@ -694,27 +710,26 @@ describe("allow-paid / disallow-paid", () => {
     confirmAnswer = true;
     const t = deps({ isTTY: true });
     expect(await runPaidUrlChange("allow-paid", ["https://mcp.assay.ai/c/weather"], t)).toBe(0);
-    expect(readPaidUrls(ref())).toEqual(["/", "/c/weather"]);
+    expect(readPaidUrls(ref())).toEqual(["/c/weather"]);
     expect(await runPaidUrlChange("allow-paid", ["/c/weather"], t)).toBe(0);
     expect(output()).toContain("were already allowed");
     expect(await runPaidUrlChange("disallow-paid", ["/c/weather"], t)).toBe(0);
-    expect(readPaidUrls(ref())).toEqual(["/"]);
+    expect(readPaidUrls(ref())).toEqual([]);
     expect(readFileSync(join(dir, profileFile("default", "paid-urls")), "utf8")).not.toContain("mcp.assay.ai");
     // Asked once: allowing a URL already allowed, and disallowing, ask nothing.
     expect(confirmAsked).toHaveLength(1);
     expect(confirmAsked[0]).toContain('Type the profile name (default)');
   });
 
-  it("the / a profile starts with is for user installs only: allow-paid / asks and makes it explicit (M2, R-MU-13)", async () => {
+  it("a new profile allows no paid URL, / included: allow-paid / asks and allows it (I1, R-MU-13)", async () => {
     await seedProfile("production");
     confirmAnswer = true;
     const t = deps({ isTTY: true });
-    expect(readPaidUrls(ref())).toEqual(["/"]);
-    expect(readExplicitPaidUrls(ref())).toEqual([]);
+    expect(readPaidUrls(ref())).toEqual([]);
     expect(await runPaidUrlChange("allow-paid", ["/"], t)).toBe(0);
     expect(confirmAsked).toHaveLength(1);
     expect(output()).toContain("Paid calls are allowed through https://mcp.assay.ai/");
-    expect(readExplicitPaidUrls(ref())).toEqual(["/"]);
+    expect(readPaidUrls(ref())).toEqual(["/"]);
     expect(await runPaidUrlChange("allow-paid", ["/"], t)).toBe(0);
     expect(output()).toContain("were already allowed");
     expect(confirmAsked).toHaveLength(1);
@@ -732,7 +747,7 @@ describe("allow-paid / disallow-paid", () => {
     confirmAnswer = true;
     typedAnswer = "Default";
     expect(await runPaidUrlChange("allow-paid", ["/c/weather"], deps({ isTTY: true }))).toBe(0);
-    expect(readPaidUrls(ref())).toEqual(["/"]);
+    expect(readPaidUrls(ref())).toEqual([]);
   });
 
   it("refuses another origin, a dev origin without dev mode, and a profile of another environment", async () => {
@@ -743,7 +758,7 @@ describe("allow-paid / disallow-paid", () => {
     await seedProfile("production");
     addDevOrigin(dir, E2E_MCP);
     expect(await runPaidUrlChange("allow-paid", [`${E2E_MCP}/c/weather`], deps({ isTTY: true, env: E2E_ENV }))).toBe(1);
-    expect(readPaidUrls(ref())).toEqual(["/"]);
+    expect(readPaidUrls(ref())).toEqual([]);
   });
 });
 
