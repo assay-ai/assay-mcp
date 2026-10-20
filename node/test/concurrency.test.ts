@@ -157,7 +157,7 @@ describe("§12.4 concurrency, OAuth mode (fake AS + fake MCP)", () => {
     expect(existsSync(join(dir, "profiles"))).toBe(false);
     const [a, b] = await Promise.all([proxy(), proxy()]);
     const texts = (await Promise.all([a.client.callTool(SIGN_IN), b.client.callTool(SIGN_IN)])).map(textOf);
-    expect(texts.filter((t) => t.startsWith("Approve in your browser: "))).toHaveLength(1);
+    expect(texts.filter((t) => t.startsWith("Approve in your browser:\n"))).toHaveLength(1);
     await until(() => a.changed.length > 0 && b.changed.length > 0);
 
     expect(mcp.opened).toHaveLength(1); // one consent page
