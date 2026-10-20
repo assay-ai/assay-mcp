@@ -16,6 +16,7 @@ import { guard } from "./setup/global-guard.js";
 import { fingerprintDir } from "./setup/real-profile.js";
 import { checkProjectEntry, runDoctor, T13_RISK_TEXT } from "../src/commands/doctor.js";
 import { enablePaidLink, runEnablePaid } from "../src/commands/enable-paid.js";
+import { enablePaidHint } from "../src/commands/status.js";
 import { unitsToUsd, usd, utcDate } from "../src/commands/format.js";
 import { runLimits } from "../src/commands/limits.js";
 import { runLogin } from "../src/commands/login.js";
@@ -288,6 +289,11 @@ describe("status", () => {
         "",
       ].join("\n"),
     );
+  });
+
+  it("names the profile in the enable-paid hint unless it is the default one", () => {
+    expect(enablePaidHint("default")).toBe(`run \`${RUN} enable-paid\``);
+    expect(enablePaidHint("work")).toBe(`run \`${RUN} enable-paid --profile work\``);
   });
 
   it("the payment-key line follows the chain, not the files", async () => {

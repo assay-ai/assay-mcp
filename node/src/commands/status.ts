@@ -6,6 +6,7 @@
  * `paidCalls` is used only when the chain cannot be asked yet (no payer recorded), and is
  * labelled as such. No secret is printed: the payment key appears only as its fingerprint.
  */
+import { DEFAULT_PROFILE } from "../clients/install-command.js";
 import { RUN } from "../version.js";
 import { EXIT_OK } from "../exit-codes.js";
 import { SPEND_WINDOW_SECONDS } from "../guards/guards.js";
@@ -87,7 +88,7 @@ async function paymentKeyLine(
   if (delegate === null) return "none yet · made on the first paid call";
   const fp = fingerprint(delegate);
   const network = networkOf(record, deployment);
-  const enable = `run \`${RUN} enable-paid\``;
+  const enable = enablePaidHint(profile);
   if (record?.payer && network !== null) {
     const read = await deps.chain(deployment.environment, profile).readDelegation(network, record.payer, delegate, { fresh: true });
     if (!read.ok) return `${fp} · can't confirm on chain right now`;
@@ -181,4 +182,10 @@ export async function runStatus(args: readonly string[], deps: ProfileDeps): Pro
 /** `assay-mcp status`. */
 export function run(args: readonly string[]): Promise<number> {
   return runStatus(args, defaultProfileDeps());
+}
+
+/** The `enable-paid` command to run for `profile`: a named profile must be passed, or it acts on `default`. */
+export function enablePaidHint(profile: string): string {
+  const flag = profile === DEFAULT_PROFILE ? "" : ` --profile ${profile}`;
+  return `run \`${RUN} enable-paid${flag}\``;
 }
