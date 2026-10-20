@@ -160,7 +160,8 @@ export class Proxy {
   private async sendToolCall(id: JsonRpcId, params: Record<string, unknown>): Promise<JsonRpcResponse> {
     const req: JsonRpcRequest = { jsonrpc: "2.0", id, method: "tools/call", params };
     const answer = await this.exchange(req, JSON.stringify(req));
-    return answer === "signed-out" ? errorResponse(id, SERVER_ERROR, "Assay sign-in ended. Sign in again, then ask again.") : answer;
+    if (answer !== "signed-out") return answer;
+    return errorResponse(id, SERVER_ERROR, `Assay sign-in ended. Sign in again (\`${loginCommand(this.o.profile.name)}\` in a terminal), then ask again.`);
   }
 
   /**
@@ -220,9 +221,11 @@ export class Proxy {
       return;
     }
     let granted = false;
+    let unreadable = false;
     try {
       granted = await hasGrant(this.tokens);
     } catch (err) {
+      unreadable = true;
       this.log.warn("keychain read failed", { error: errorName(err) });
     }
     if (granted) {
@@ -230,12 +233,13 @@ export class Proxy {
       return;
     }
     this.enterSignedOut(false);
-    const ended = this.signInEnded();
+    // An unreadable keychain says nothing about the sign-in: no "ended" wording for it.
+    const ended = !unreadable && this.signInEnded();
     this.signIns.begin(false).then(
       (link) =>
         this.o.stderr(
           ended
-            ? `assay-mcp: the Assay sign-in was ended on the web. Sign in again with \`${loginCommand(this.o.profile.name)}\` in a terminal, or open: ${link}\n`
+            ? `assay-mcp: the Assay sign-in was ended on the web, or it expired. Sign in again with \`${loginCommand(this.o.profile.name)}\` in a terminal, or open: ${link}\n`
             : `assay-mcp: sign in to Assay: ${link}\n`,
         ),
       (err: unknown) => this.log.info("sign-in not started at startup", { error: errorName(err) }),
@@ -385,10 +389,7 @@ export class Proxy {
         return resultResponse(req.id, { content: [{ type: "text", text: signInBusyText(this.app) }], ...(tool === SIGN_IN_TOOL ? {} : { isError: true }) });
       }
       if (this.mode === "signed-in") return this.forward(req, JSON.stringify(req)); // a grant was already stored
-      if (err instanceof LockError && err.code === "LOCK_TIMEOUT") return errorResponse(req.id, LOCK_BUSY, MESSAGES.lockBusy);
-      if (err instanceof KeychainError) return errorResponse(req.id, SERVER_ERROR, err.message);
-      this.log.warn("sign-in could not start", { error: errorName(err) });
-      return errorResponse(req.id, SERVER_ERROR, "The sign-in could not start. Try again.");
+      return errorResponse(req.id, ...signInStartError(err, this.log));
     }
     const tool = typeof req.params?.name === "string" ? req.params.name : "";
     return resultResponse(req.id, {
@@ -405,11 +406,12 @@ export class Proxy {
   private async answerSignInEnded(req: JsonRpcRequest): Promise<JsonRpcResponse> {
     const tool = typeof req.params?.name === "string" ? req.params.name : "";
     let link: string | null = null;
-    let held: string | null = null;
+    let held: string | null;
     try {
       held = await this.o.keychain.get("refresh_token");
-    } catch {
-      // unreadable: the link is tried; the flow reports a keychain failure as no link
+    } catch (err) {
+      // A locked or missing keychain is not an ended sign-in: say what is wrong.
+      return errorResponse(req.id, ...signInStartError(err, this.log));
     }
     // A refused grant still stored (401 after a refresh) would end a sign-in at once as
     // "existing": only `login` (which replaces it) helps then, so no link is offered.
@@ -418,6 +420,7 @@ export class Proxy {
         link = await this.signIns.begin(false);
       } catch (err) {
         if (this.mode === "signed-in") return this.forward(req, JSON.stringify(req)); // a grant was stored meanwhile
+        if (err instanceof KeychainError || (err instanceof LockError && err.code === "LOCK_TIMEOUT")) return errorResponse(req.id, ...signInStartError(err, this.log));
         this.log.info("no sign-in link after the sign-in ended", { error: errorName(err) });
       }
     }
@@ -667,6 +670,14 @@ export class Proxy {
 function errorName(err: unknown): string {
   if (err instanceof LockError) return `LockError ${err.code}`;
   return err instanceof Error ? err.name : "error";
+}
+
+/** Why a sign-in could not start: LOCK_TIMEOUT → -32001; a keychain failure → its own text. */
+function signInStartError(err: unknown, log: Logger): [number, string] {
+  if (err instanceof LockError && err.code === "LOCK_TIMEOUT") return [LOCK_BUSY, MESSAGES.lockBusy];
+  if (err instanceof KeychainError) return [SERVER_ERROR, err.message];
+  log.warn("sign-in could not start", { error: errorName(err) });
+  return [SERVER_ERROR, "The sign-in could not start. Try again."];
 }
 
 /** CARRY 2.7: LOCK_TIMEOUT → -32001; RefreshError → retry later; keychain → its own text. */

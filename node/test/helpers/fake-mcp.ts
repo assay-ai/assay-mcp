@@ -35,6 +35,8 @@ export class FakeMcp {
   respond: Responder | null = null;
   /** Access tokens refused once with 401 (then accepted), to drive 401 → refresh → retry. */
   readonly refuseOnce = new Set<string>();
+  /** Refuses every access token with 401 (a credential the server no longer accepts). */
+  refuseAll = false;
   /** The largest heapUsed the proxy reported (bytes), when TEST_HEAP is set. */
   peakHeap = 0;
   private server: Server | null = null;
@@ -101,7 +103,7 @@ export class FakeMcp {
     this.requests.push({ path, headers: req.headers, raw, json });
     const bearer = /^Bearer (\S+)$/.exec(req.headers.authorization ?? "")?.[1] ?? "";
     const refusedOnce = this.refuseOnce.delete(bearer);
-    if (refusedOnce || !this.as.use(bearer)) {
+    if (this.refuseAll || refusedOnce || !this.as.use(bearer)) {
       res
         .writeHead(401, {
           "content-type": "application/json",

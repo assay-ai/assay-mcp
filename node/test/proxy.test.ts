@@ -8,7 +8,7 @@ import { McpError, ToolListChangedNotificationSchema } from "@modelcontextprotoc
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { aliasTool } from "../src/clients/server-name.js";
 import { addDevOrigin } from "../src/profile/dev-origins.js";
-import { Keychain } from "../src/profile/keychain.js";
+import { Keychain, NO_KEYCHAIN_MESSAGE } from "../src/profile/keychain.js";
 import { withLock } from "../src/profile/lock.js";
 import { createProfile } from "../src/profile/profile.js";
 import { RUN } from "../src/version.js";
@@ -561,7 +561,7 @@ describe("aliases", () => {
 
 describe("sign-in ended by the server (owner decision 2026-10-21)", () => {
   const textOf = (r: Record<string, unknown>) => (r.content as { text: string }[])[0]!.text;
-  const ENDED_RE = /^Your Assay sign-in was ended on the web \(or it expired\)\. To sign in again, run in a terminal:\n(.+)\nor open this link in your browser:\n(http:\/\/localhost:3200\/oauth\/authorize\?\S+)\nAssay tools appear here when you're done \(if they don't, restart test-host\)\.$/;
+  const ENDED_RE = /^Your Assay sign-in was ended on the web, or it expired\. To sign in again, run in a terminal:\n(.+)\nor open this link in your browser:\n(http:\/\/localhost:3200\/oauth\/authorize\?\S+)\nAssay tools appear here when you're done \(if they don't, restart test-host\)\.$/;
 
   /** A grant stored for `profile`, as `login` in a terminal leaves it. */
   async function loginStores(profile = "default") {
@@ -622,6 +622,52 @@ describe("sign-in ended by the server (owner decision 2026-10-21)", () => {
     expect(res.isError).toBe(true);
     await until(() => changed.length > 0, 10_000);
     expect(mcp.opened).toHaveLength(1);
+  });
+
+  it("401 even with a fresh token: no link (the refused grant is still stored); login replaces it", async () => {
+    await signedIn();
+    const { client, changed } = await connect();
+    expect((await client.listTools()).tools.map((t) => t.name)).toEqual(["echo"]);
+    mcp.refuseAll = true; // the refresh works, the server still refuses the new token
+    const res = await client.callTool({ name: "echo", arguments: {} });
+    expect(res.isError).toBe(true);
+    expect(textOf(res).split("\n")).toEqual([
+      "Your Assay sign-in was ended on the web, or it expired. To sign in again, run in a terminal:",
+      `${RUN} login`,
+      "Assay tools appear here when you're done (if they don't, restart test-host).",
+    ]);
+    expect(as.tokenCalls("refresh_token")).toHaveLength(1);
+    await until(() => changed.length === 1);
+    await sleep(300);
+    expect(mcp.opened).toEqual([]);
+    expect((await client.listTools()).tools.map((t) => t.name)).toEqual(["assay_sign_in"]); // the refused grant is not taken as a new one
+    mcp.refuseAll = false;
+    await loginStores(); // `login` replaces the refused grant
+    await until(() => changed.length === 2, 5_000);
+    expect((await client.callTool({ name: "echo", arguments: {} })).isError).toBeFalsy();
+    expect(mcp.opened).toEqual([]);
+  });
+
+  it("an unreadable keychain is reported as such, not as an ended sign-in", async () => {
+    await withLock({ dir, name: "default" }, (lock) => {
+      createProfile({ dir, name: "default" }, lock, { environment: "e2e", credentialId: "8f0c2b6e-1d2a-4c3b-9e4f-5a6b7c8d9e0f", agentLabel: "agent", createdAt: "2026-10-01T00:00:00Z" });
+    });
+    writeFileSync(keyringFile, "not json"); // every keychain read fails
+    const { client, changed, stderr } = await connect();
+    const err = await client.callTool({ name: "echo", arguments: {} }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(McpError);
+    expect((err as McpError).code).toBe(-32000);
+    expect((err as McpError).message).toContain(NO_KEYCHAIN_MESSAGE);
+    expect(stderr()).not.toMatch(/ended on the web/);
+    expect(mcp.opened).toEqual([]);
+    // The keychain works again and holds a grant: picked up without a restart.
+    rmSync(keyringFile);
+    await loginStores();
+    await until(() => changed.length === 1, 5_000);
+    expect((await client.listTools()).tools.map((t) => t.name)).toEqual(["echo"]);
   });
 
   it("restarted on a profile whose sign-in ended: no browser; the hint names the profile", async () => {

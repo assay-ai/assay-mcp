@@ -61,7 +61,7 @@ Hosted apps (claude.ai, ChatGPT and Claude Desktop connectors) connect to `https
 - **Built-in hosts.** The MCP, API, web and RPC addresses come only from the built-in [`deployments.json`](deployments.json). Your credentials are sent only to the built-in Assay hosts. Redirects are never followed.
 - **One bundle.** The npm package is a single bundled file. Its only runtime dependency is `@napi-rs/keyring`, pinned exactly, with prebuilt binaries and no install scripts.
 - **No telemetry.** Logs go to stderr only and never contain tokens, keys, signatures, tool arguments or results.
-- **Residual risk (T11): the name `assay-mcp`.** The unscoped npm name `assay-mcp` belongs to a third party, not to Assay. Every command here is written as `npx -y @goassay-ai/mcp@0.1.0 …` (the current version), and so is every hint the tool prints. If you run the bare name through `npx` yourself, or follow a page or message that tells you to, you run someone else's code on the computer that holds your payment key. Copy commands from this README, check the scope `@assay-ai`, and never use `latest`.
+- **Residual risk (T11): the name `assay-mcp`.** The unscoped npm name `assay-mcp` belongs to a third party, not to Assay. Every command here is written as `npx -y @goassay-ai/mcp@0.1.0 …` (the current version), and so is every hint the tool prints. If you run the bare name through `npx` yourself, or follow a page or message that tells you to, you run someone else's code on the computer that holds your payment key. Copy commands from this README, check the scope `@goassay-ai`, and never use `latest`.
 
 See [SECURITY.md](SECURITY.md) to report a vulnerability or verify a release.
 

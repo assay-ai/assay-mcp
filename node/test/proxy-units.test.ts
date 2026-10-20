@@ -210,7 +210,7 @@ describe("sign-in ended texts (owner decision 2026-10-21)", () => {
 
   it("puts the command and the link on their own lines; no link line without a link", () => {
     expect(signInEndedText("https://x.example/a", "Cursor", "work").split("\n")).toEqual([
-      "Your Assay sign-in was ended on the web (or it expired). To sign in again, run in a terminal:",
+      "Your Assay sign-in was ended on the web, or it expired. To sign in again, run in a terminal:",
       `${RUN} login --profile work`,
       "or open this link in your browser:",
       "https://x.example/a",
