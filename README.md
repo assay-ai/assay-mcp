@@ -32,13 +32,7 @@ These examples connect the default URL `/`, under the server name `assay`. For a
 }
 ```
 
-These entries start with free tools only. To allow paid calls through them, run this once in a terminal (it asks you to type the profile name):
-
-```sh
-npx -y @goassay-ai/mcp@0.1.0 allow-paid /
-```
-
-To install any URL into any client and also allow it for paid calls (after the same typed confirmation), run this in a terminal:
+To install any URL into any client and also allow it for paid calls, run this in a terminal:
 
 ```sh
 npx -y @goassay-ai/mcp@0.1.0 add /c/weather --client claude-code
@@ -108,7 +102,7 @@ Exit codes: 0 at the end of input, 1 on a fatal startup error, 2 on a usage erro
 
 `limits set`, `allow-paid`, `disallow-paid`, `dev allow` and `settings set` run only in an interactive terminal; anything else (an agent, a script, your MCP app) is refused with exit code 2. `settings set --allow-env-proxy on` (which asks you to type the profile name) lets `assay-mcp` use an HTTP proxy from its environment, which it refuses by default because a project config can set that environment. `doctor` checks project configs and this terminal for settings that change how `assay-mcp` runs.
 
-No client config allows paid calls by itself, a project config included: a server pays only through URLs you allowed in a terminal, with `allow-paid` or with `add --scope user` after typing the profile name. A new profile allows none, `/` included.
+Paid calls go only through URLs your profile allows: `/` is allowed when you sign in, any other URL only after `allow-paid` in a terminal (or `add --scope user` on a TTY, which asks you to type the profile name). This holds for every client config, a project config included: a project install can pay through `/`, and its other URLs stay free-only until you allow them.
 
 On Windows, `npx -y @goassay-ai/mcp@0.1.0 add` runs a client CLI (`claude`, `codex`, `gemini`) only from your home directory and refuses a project-scope install through it; use `--scope user` or a file client. It also refuses a CLI path or URL with characters outside plain ASCII letters, digits and URL punctuation (for example a user name with accents, or `%`), because `cmd.exe` would interpret them; add the server in that client's own settings instead.
 

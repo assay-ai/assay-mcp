@@ -192,7 +192,8 @@ function harness(overrides: Partial<InstallDeps> = {}): Harness {
   const profiles: ProfilePort = {
     isValidName: (n) => /^[a-z0-9][a-z0-9-]{0,31}$/.test(n),
     exists: (n) => profilesPresent.has(n),
-    isPaidUrl: (profile, url) => paid.some((p) => p.profile === profile && p.url === url.pathAndQuery),
+    // Like paid-urls.json: every profile starts with `/`.
+    isPaidUrl: (profile, url) => url.pathAndQuery === "/" || paid.some((p) => p.profile === profile && p.url === url.pathAndQuery),
     addPaidUrl: (profile, url) => (paid.push({ profile, url: url.pathAndQuery }), Promise.resolve()),
     longestTool: () => Promise.resolve(measured.L),
   };
@@ -519,11 +520,12 @@ describe("add", () => {
     }
   });
 
-  it("the root URL too is allowed only after the typed confirm (I1)", async () => {
+  it("the root URL, which every profile starts with, asks nothing", async () => {
     const h = harness();
     expect(await runAdd(["/", "--client", "cursor"], h.deps)).toBe(0);
-    expect(h.prompts).toHaveLength(1);
-    expect(h.paid).toEqual([{ profile: "default", url: "/" }]);
+    expect(h.prompts).toEqual([]);
+    expect(h.paid).toEqual([]);
+    expect(h.out.join("")).not.toContain("allow-paid");
   });
 
   it("a URL already allowed asks nothing", async () => {
@@ -601,8 +603,16 @@ describe("add --scope project", () => {
     expect(entry.env === undefined || JSON.stringify(entry.env) === "{}").toBe(true);
     // R-MU-5 / R-MU-13: never allowed for paid calls from here.
     expect(h.paid).toEqual([]);
-    expect(h.out.join("")).toContain("never allows paid calls");
+    expect(h.out.join("")).toContain(`A project install can pay only through URLs your profile already allows (\`/\` is allowed when you sign in); ${MCP}/c/weather stays free-only. Run`);
     expect(h.deps.installs.read()[0]).toMatchObject({ scope: "project", configPath: path });
+  });
+
+  it("a project install of / says it can pay through /, which the profile allows (M2 wording)", async () => {
+    const h = harness();
+    expect(await runAdd(["/", "--client", "cursor", "--scope", "project"], h.deps)).toBe(0);
+    expect(h.out.join("")).toContain(`A project install can pay only through URLs your profile already allows (\`/\` is allowed when you sign in); ${MCP}/ is one of them.`);
+    expect(h.out.join("")).not.toContain("never allows paid calls");
+    expect(h.paid).toEqual([]);
   });
 
   it("project scope with ASSAY_API_KEY set → refused", async () => {
@@ -1078,7 +1088,7 @@ describe("wired to the URL parser, {dir} files and the profile store", () => {
     expect(await runAdd([`${MCP}/?tools=get_weather`, "--client", "cursor"], deps)).toBe(0);
     // signed out (no tools/list yet): L = 48, so `/c/weather` gets `assay` and `assay-get` (9) just fits
     expect([...entriesOf("cursor").keys()]).toEqual(["assay", "assay-get"]);
-    expect(readPaidUrls({ dir, name: "default" })).toEqual(["/c/weather", "/?tools=get_weather"]);
+    expect(readPaidUrls({ dir, name: "default" })).toEqual(["/", "/c/weather", "/?tools=get_weather"]);
     const installs = join(dir, "installs.json");
     if (process.platform !== "win32") expect(lstatSync(installs).mode & 0o777).toBe(0o600);
     expect((JSON.parse(readFileSync(installs, "utf8")) as unknown[]).length).toBe(2);

@@ -31,8 +31,7 @@ export async function changePaidUrl(command: PaidUrlChange, args: readonly strin
   }
   const ref = profileRef(deps, profile);
   readProfileFor(ref, url.environment); // refused before any question; checked again under the lock
-  const current = (): string[] => readPaidUrls(ref);
-  if (command === "allow-paid" && !current().includes(url.pathAndQuery)) {
+  if (command === "allow-paid" && !readPaidUrls(ref).includes(url.pathAndQuery)) {
     const yes = await typedConfirm(
       deps,
       `Allow paid calls through ${url.url} for profile "${profile}"? Tools behind this URL can then spend within your local caps.`,
@@ -47,10 +46,9 @@ export async function changePaidUrl(command: PaidUrlChange, args: readonly strin
     ref,
     (lock) => {
       readProfileFor(ref, url.environment); // a profile of another environment is refused
-      const before = current().includes(url.pathAndQuery);
-      if (command === "allow-paid") addPaidUrl(ref, lock, url.pathAndQuery);
-      else removePaidUrl(ref, lock, url.pathAndQuery);
-      return { changed: before !== current().includes(url.pathAndQuery) };
+      const before = readPaidUrls(ref);
+      const after = command === "allow-paid" ? addPaidUrl(ref, lock, url.pathAndQuery) : removePaidUrl(ref, lock, url.pathAndQuery);
+      return { changed: before.includes(url.pathAndQuery) !== after.includes(url.pathAndQuery) };
     },
     deps.lockOptions,
   );

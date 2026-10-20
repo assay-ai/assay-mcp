@@ -160,7 +160,8 @@ export async function add(options: AddOptions, deps: InstallDeps): Promise<void>
   } else if (options.scope === "user") {
     deps.print(`This install did not allow paid calls for ${url.url}. ${hint}\n`);
   } else {
-    deps.print(`A project install never allows paid calls by itself. ${hint}\n`);
+    const rule = "A project install can pay only through URLs your profile already allows (`/` is allowed when you sign in)";
+    deps.print(deps.profiles.isPaidUrl(profile, url) ? `${rule}; ${url.url} is one of them.\n` : `${rule}; ${url.url} stays free-only. ${hint}\n`);
   }
   if (options.scope === "project" && client.kind === "file" && hadFile) {
     deps.print(`The previous ${target.configPath} is saved as ${target.configPath}.bak; do not commit it.\n`);

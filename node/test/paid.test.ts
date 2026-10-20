@@ -94,7 +94,7 @@ const profile = () => ({ dir, name: "default" });
 const keychain = () => new Keychain(new FileKeyring(keyringFile), { profile: "default", environment: "e2e" });
 
 /** A profile with the credential, and (when `key`) a delegate key in the keyring. */
-async function seedProfile(key = true, allowRoot = true): Promise<string | null> {
+async function seedProfile(key = true): Promise<string | null> {
   const pk = generatePrivateKey();
   const address = privateKeyToAccount(pk).address;
   await withLock(profile(), async (lock) => {
@@ -106,8 +106,6 @@ async function seedProfile(key = true, allowRoot = true): Promise<string | null>
       ...(key ? { delegateAddress: address, network: NET_ID } : {}),
     });
     if (key) await keychain().set(lock, "delegate_key", pk);
-    // What `add` on a TTY (after the typed confirm) or `allow-paid /` leaves.
-    if (allowRoot) addPaidUrl(profile(), lock, "/");
   });
   return key ? address : null;
 }
@@ -325,26 +323,6 @@ describe("paid path (SDK client → proxy → fake Assay)", () => {
     expect(r.isError).toBe(true);
     expect(fake.accepted).toHaveLength(0);
     await withLock(profile(), (lock) => addPaidUrl(profile(), lock, "/"));
-  });
-
-  it("a new profile pays through no URL until a person allows it, whatever the config passes (I1, R-MU-13, T13)", async () => {
-    const address = (await seedProfile(true, false))!;
-    fake.delegate = address;
-    fake.grant(address);
-    const notAllowed = `Paid calls through this server are off. To allow them, run in a terminal: npx -y @goassay-ai/mcp@${VERSION} allow-paid ${E2E_MCP}/`;
-    // A project-form entry (no --name) and one that claims the user-install form (--name): both refused.
-    const project = await connect();
-    const claimed = await connect({ args: ["--name", "x"] });
-    for (const c of [project, claimed]) {
-      const r = await c.client.callTool({ name: "weather", arguments: {} });
-      expect(r.isError).toBe(true);
-      expect(textOf(r)).toBe(notAllowed);
-    }
-    expect(fake.accepted).toHaveLength(0);
-    // allow-paid / (here written directly): both pay.
-    await withLock(profile(), (lock) => addPaidUrl(profile(), lock, "/"));
-    for (const c of [project, claimed]) expect((await c.client.callTool({ name: "weather", arguments: {} })).isError).toBeFalsy();
-    expect(fake.accepted).toHaveLength(2);
   });
 
   it("the payer is recorded after the first paid call; a later different payer is refused (G4 payer changed)", async () => {
@@ -684,7 +662,6 @@ async function unit(o: UnitOptions = {}) {
   await withLock(profile(), async (lock) => {
     createProfile(profile(), lock, { environment: "e2e", credentialId: CREDENTIAL_ID, agentLabel: "agent", createdAt: new Date().toISOString(), ...(o.key !== false ? { delegateAddress: address, network: NET_ID } : {}) });
     if (o.key !== false) await kc.set(lock, "delegate_key", pk);
-    addPaidUrl(profile(), lock, "/");
   });
   if (o.confirmAbove !== undefined) await setLimits({ confirmAbove: o.confirmAbove });
   const deployment = resolveDeployment({ url: `${E2E_MCP}/`, env: { ASSAY_MCP_DEV_ORIGINS: E2E_MCP }, devOrigins: [E2E_MCP], warn: () => {} });

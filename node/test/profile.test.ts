@@ -66,7 +66,7 @@ describe("profile files", () => {
     const onDisk = JSON.parse(readFileSync(join(profilesDir(), "default.limits.json"), "utf8"));
     expect(onDisk).toEqual(DEFAULT_LIMITS);
     expect(onDisk).toEqual({ version: 1, perCall: "0.50", perDay: "5", confirmAbove: null, providers: null });
-    expect(readPaidUrls(profile)).toEqual([]);
+    expect(readPaidUrls(profile)).toEqual(["/"]);
   });
 
   it("no file contains a host or secret", async () => {
@@ -107,7 +107,6 @@ describe("profile files", () => {
     expect(canonicalPaidUrl("/oauth/x")).toBeNull();
     await withLock(profile, (lock) => {
       createProfile(profile, lock, newProfile);
-      expect(addPaidUrl(profile, lock, "/")).toEqual(["/"]);
       expect(addPaidUrl(profile, lock, "/c/weather")).toEqual(["/", "/c/weather"]);
       expect(addPaidUrl(profile, lock, "/c/weather")).toEqual(["/", "/c/weather"]);
       expect(removePaidUrl(profile, lock, "/")).toEqual(["/c/weather"]);
@@ -115,26 +114,6 @@ describe("profile files", () => {
     });
     writeFileSync(join(profilesDir(), "default.paid-urls.json"), JSON.stringify({ version: 1, urls: ["https://evil.example/"] }));
     expect(() => readPaidUrls(profile)).toThrow(ProfileStateError);
-  });
-
-  it("a new profile allows no paid URL; only an explicit allow counts (R-MU-13, T13)", async () => {
-    expect(readPaidUrls(profile)).toEqual([]);
-    await withLock(profile, (lock) => createProfile(profile, lock, newProfile));
-    expect(JSON.parse(readFileSync(join(profilesDir(), "default.paid-urls.json"), "utf8"))).toEqual({ version: 1, urls: [], seeded: [] });
-    expect(readPaidUrls(profile)).toEqual([]);
-    await withLock(profile, (lock) => addPaidUrl(profile, lock, "/c/weather"));
-    expect(readPaidUrls(profile)).toEqual(["/c/weather"]);
-    writeFileSync(join(profilesDir(), "default.paid-urls.json"), JSON.stringify({ version: 1, urls: ["/"], seeded: ["/c/weather"] }));
-    expect(() => readPaidUrls(profile)).toThrow(ProfileStateError);
-  });
-
-  it("an old paid-urls.json without seeded: its / is the old seed, not an allow (m1)", async () => {
-    await withLock(profile, (lock) => createProfile(profile, lock, newProfile));
-    writeFileSync(join(profilesDir(), "default.paid-urls.json"), JSON.stringify({ version: 1, urls: ["/", "/c/weather"] }));
-    expect(readPaidUrls(profile)).toEqual(["/c/weather"]);
-    await withLock(profile, (lock) => addPaidUrl(profile, lock, "/"));
-    expect(readPaidUrls(profile)).toEqual(["/", "/c/weather"]);
-    expect(JSON.parse(readFileSync(join(profilesDir(), "default.paid-urls.json"), "utf8"))).toEqual({ version: 1, urls: ["/", "/c/weather"], seeded: [] });
   });
 
   it("keeps limits and paid URLs when the profile is created again", async () => {

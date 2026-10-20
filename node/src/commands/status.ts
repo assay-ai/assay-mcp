@@ -117,12 +117,6 @@ async function signedInBearer(keychain: Keychain, nowSeconds: number): Promise<s
   return access !== null && access.expiresAt > nowSeconds ? access.token : null;
 }
 
-/** The URLs a person allowed for paid calls (R-MU-13); none until `add` (typed confirm) or `allow-paid`. */
-function paidUrlsText(ref: ReturnType<typeof profileRef>): string {
-  const urls = readPaidUrls(ref);
-  return urls.length === 0 ? `none · run \`${RUN} allow-paid <url>\` in a terminal` : urls.join("  ·  ");
-}
-
 export async function statusText(args: readonly string[], deps: ProfileDeps): Promise<string> {
   const { values } = parseFlags(args, { profile: { type: "string" } }, 0);
   const profile = checkProfileName(values.profile as string | undefined);
@@ -170,7 +164,7 @@ export async function statusText(args: readonly string[], deps: ProfileDeps): Pr
       "Local caps",
       `${usd(limits.perCall)} a call · ${usd(limits.perDay)} per 24 h · spent today ${unitsToUsd(spent, decimals)} · confirm above: ${limits.confirmAbove === null ? "off" : usd(limits.confirmAbove)} · providers: ${providers}`,
     ),
-    line("Paid URLs", paidUrlsText(ref)),
+    line("Paid URLs", readPaidUrls(ref).join("  ·  ")),
     line("Installs", installs),
   ].join("\n");
 }

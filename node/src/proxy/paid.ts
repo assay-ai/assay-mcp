@@ -206,14 +206,14 @@ export class PaidPath {
   }
 
   private async pay(call: ForwardedCall, response: JsonRpcResponse, result: Record<string, unknown>, raw: unknown, reasked = false): Promise<JsonRpcResponse> {
-    const { deployment } = this.o;
+    const { deployment, profile } = this.o;
     // G1: the tool this call pays for (the inner name on `call_tool`).
     const tool = paidToolOf(call.tool, call.params);
     if (tool === null) return this.refused(response, result, new Refusal("G1", "the payment request is not the answer to a forwarded tool call"));
 
     // §7.7 step 5 (G11).
     const urlKey = paidUrlKey(deployment);
-    if (!this.paidUrls().includes(urlKey)) return { ...response, result: errorResult(notAllowedText(deployment.url), result) };
+    if (!readPaidUrls(profile).includes(urlKey)) return { ...response, result: errorResult(notAllowedText(deployment.url), result) };
 
     // One frozen copy of the requirement: every decision below reads this, and so does the signer.
     let requirement: Record<string, unknown>;
@@ -295,7 +295,7 @@ export class PaidPath {
             signed: readState(profile).signed,
             confirmation,
             canonicalUrl: urlKey,
-            paidUrls: this.paidUrls(),
+            paidUrls: readPaidUrls(profile),
             nowSeconds,
           };
           const built = guardAndBuild(ctx, issuedAt(nowSeconds, this.host.dateOffset()), env);
@@ -532,11 +532,6 @@ export class PaidPath {
     } else {
       updateProfile(profile, lock, (c) => ({ ...c, credentialId, delegateAddress: address, network, ...(c.delegateAddress !== address ? { payer: null } : {}) }));
     }
-  }
-
-  /** G11's list: only URLs a person allowed on a TTY, whatever the client config says (R-MU-13, T13). */
-  private paidUrls(): string[] {
-    return readPaidUrls(this.o.profile);
   }
 
   /** The profile's credential id, or the one the API names for this bearer. */
