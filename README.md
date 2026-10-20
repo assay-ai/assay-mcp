@@ -71,9 +71,9 @@ Spending is bounded in layers:
 
 | Limit | Default | Set where |
 |---|---|---|
-| Per call (local) | $0.50 | `npx -y @goassay-ai/mcp@0.1.0 limits set` in a terminal |
-| Per rolling 24 hours (local) | $5 | `npx -y @goassay-ai/mcp@0.1.0 limits set` in a terminal |
-| Confirm above (local) | off | `npx -y @goassay-ai/mcp@0.1.0 limits set --confirm-above <usd>` |
+| Per call (local) | $0.50 | `npx -y @goassay-ai/mcp@0.1.0 limits set --per-call <usd> --per-day <usd>` in a terminal |
+| Per rolling 24 hours (local) | $5 | `npx -y @goassay-ai/mcp@0.1.0 limits set --per-call <usd> --per-day <usd>` in a terminal |
+| Confirm above (local) | off | `npx -y @goassay-ai/mcp@0.1.0 limits set --per-call <usd> --per-day <usd> --confirm-above <usd>\|off` |
 | Payment key caps (on chain) | $0.50 a call, $5 per 24 hours, for 30 days | the "Enable paid calls" page, signed by your wallet |
 
 The most a payment key can spend before it expires is `per-24h cap × (1 + days)`: $155 at the defaults. One budget covers every Assay server on this computer. Your agent's limits apply across all your computers.
