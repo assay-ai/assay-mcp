@@ -112,7 +112,9 @@ async function connect(args: string[] = [], extraEnv: Record<string, string> = {
 
 /** A raw stdio driver: exact lines in, every stdout line kept. */
 function spawnRaw(args: string[] = [], extraEnv: Record<string, string> = {}) {
-  const child = spawn(process.execPath, [fixture.file, "--url", `${E2E_MCP}/`, ...args], { env: { PATH: process.env.PATH ?? "", ...childEnv(extraEnv) } });
+  // serve refuses a repeated flag, so a test's own --url replaces the default one.
+  const url = args.includes("--url") ? [] : ["--url", `${E2E_MCP}/`];
+  const child = spawn(process.execPath, [fixture.file, ...url, ...args], { env: { PATH: process.env.PATH ?? "", ...childEnv(extraEnv) } });
   children.push(child);
   let out = "";
   let err = "";
@@ -177,10 +179,12 @@ describe("pre-sign-in mode", () => {
     const { client, changed } = await connect();
     const res = await client.callTool({ name: "assay_sign_in", arguments: {} });
     const text = (res.content as { text: string }[])[0]!.text;
-    expect(text).toMatch(/^Approve in your browser: http:\/\/localhost:3200\/oauth\/authorize\?\S+\. Assay tools appear here when you're done \(if they don't, restart test-host\)\.$/);
+    // BUG-A-01: the link stands alone on its line, with no punctuation a host could linkify into it.
+    expect(text).toMatch(/^Approve in your browser:\nhttp:\/\/localhost:3200\/oauth\/authorize\?\S+\nAssay tools appear here when you're done \(if they don't, restart test-host\)\.$/);
     expect(res.isError).toBeUndefined();
     await until(() => changed.length > 0, 10_000);
     expect(mcp.opened).toHaveLength(1);
+    expect(text.split("\n")[1]).toBe(mcp.opened[0]);
     expect(text).toContain(mcp.opened[0]!);
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name)).toEqual(["echo"]);
@@ -602,8 +606,8 @@ describe("sign-in across processes (fix round 1, I1)", () => {
     const texts = [textOf(ra), textOf(rb)];
     // One process runs the browser flow; the other is told it is in progress, or (when the
     // first finished before its call arrived) is already connected.
-    expect(texts.filter((t) => t.startsWith("Approve in your browser: "))).toHaveLength(1);
-    const other = texts.find((t) => !t.startsWith("Approve in your browser: "))!;
+    expect(texts.filter((t) => t.startsWith("Approve in your browser:\n"))).toHaveLength(1);
+    const other = texts.find((t) => !t.startsWith("Approve in your browser:\n"))!;
     expect([
       "Assay sign-in is already in progress in another window. Approve it there; Assay tools appear here when you're done (if they don't, restart test-host).",
       "Assay is connected. Its tools are listed here.",
@@ -619,7 +623,7 @@ describe("sign-in across processes (fix round 1, I1)", () => {
   it("the profile lock stays free while a sign-in waits for the browser; others answer at once", async () => {
     mcp.autoApprove = false;
     const a = await connect();
-    expect(textOf(await a.client.callTool(SIGN_IN))).toMatch(/^Approve in your browser: /);
+    expect(textOf(await a.client.callTool(SIGN_IN))).toMatch(/^Approve in your browser:\n/);
     await until(() => mcp.opened.length === 1);
     // What status, remove, limits and refresh do: take the profile lock. No waiting.
     const t0 = Date.now();
@@ -640,7 +644,7 @@ describe("sign-in across processes (fix round 1, I1)", () => {
     const a = await connect();
     await until(() => /sign in to Assay: /.test(a.stderr())); // A holds a passive marker
     const b = await connect();
-    expect(textOf(await b.client.callTool(SIGN_IN))).toMatch(/^Approve in your browser: /); // B takes it over
+    expect(textOf(await b.client.callTool(SIGN_IN))).toMatch(/^Approve in your browser:\n/); // B takes it over
     await until(() => b.changed.length > 0, 10_000);
     // A's own flow is still waiting for a browser nobody opened; its keychain poll finds B's grant.
     await until(() => a.changed.length > 0, 3_000);
@@ -654,7 +658,7 @@ describe("sign-in across processes (fix round 1, I1)", () => {
     mkdirSync(join(dir, "profiles"), { recursive: true, mode: 0o700 });
     writeFileSync(join(dir, "profiles", "default.signin.json"), JSON.stringify({ version: 1, pid: dead, startedAt: Date.now(), token: "old", passive: false }), { mode: 0o600 });
     const a = await connect();
-    expect(textOf(await a.client.callTool(SIGN_IN))).toMatch(/^Approve in your browser: /);
+    expect(textOf(await a.client.callTool(SIGN_IN))).toMatch(/^Approve in your browser:\n/);
     await until(() => a.changed.length > 0, 10_000);
     expect(mcp.opened).toHaveLength(1);
     expect(existsSync(join(dir, "profiles", "default.signin.json"))).toBe(false);

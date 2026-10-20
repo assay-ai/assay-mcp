@@ -19,9 +19,12 @@ export const SIGN_IN_TOOL_DEFINITION = Object.freeze({
   inputSchema: { type: "object", properties: {}, additionalProperties: false },
 });
 
-/** §7.6 step 3. */
+/**
+ * §7.6 step 3. The link stands alone on its own line: hosts that linkify text took a trailing
+ * `.` into the URL (BUG-A-01).
+ */
 export function signInText(link: string, app: string): string {
-  return `Approve in your browser: ${link}. Assay tools appear here when you're done (if they don't, restart ${app}).`;
+  return `Approve in your browser:\n${link}\nAssay tools appear here when you're done (if they don't, restart ${app}).`;
 }
 
 /** The host's name for `{app}`: its `clientInfo` title or name, printable and short, else "your app". */
