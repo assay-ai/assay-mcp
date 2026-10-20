@@ -227,6 +227,13 @@ describe("serve flags", () => {
     expect(parseServeArgs(["--bogus"])).toHaveProperty("error");
   });
 
+  it("refuses a repeated flag, like every other command", () => {
+    expect(parseServeArgs(["--url", "/a", "--url", "/b"])).toEqual({ error: "--url is given more than once" });
+    expect(parseServeArgs(["--name=a", "--name", "b"])).toEqual({ error: "--name is given more than once" });
+    expect(parseServeArgs(["--no-paid", "--no-paid"])).toEqual({ error: "--no-paid is given more than once" });
+    expect(parseServeArgs(["--profile", "a", "--log-level", "info", "--profile", "a"])).toEqual({ error: "--profile is given more than once" });
+  });
+
   it("gives a short reason for -32003", () => {
     expect(reasonOf(new TypeError("fetch failed", { cause: Object.assign(new Error("x"), { code: "ECONNREFUSED" }) }))).toBe("ECONNREFUSED");
     expect(reasonOf(new PinnedFetchError("x"))).toBe("blocked: not an Assay address");
