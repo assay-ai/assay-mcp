@@ -5,9 +5,10 @@ import { AliasTable } from "../src/proxy/aliases.js";
 import { CallRegistry, CONFIRMATION_TTL_MS, TOMBSTONE_MS } from "../src/proxy/calls.js";
 import { checkEnvironment } from "../src/proxy/environment.js";
 import { Forwarder, reasonOf } from "../src/proxy/forwarder.js";
-import { appName, SignInController } from "../src/proxy/presignin.js";
+import { answerSignedOut, appName, loginCommand, SIGN_IN_AGAIN_DESCRIPTION, SIGN_IN_DESCRIPTION, SignInController, signInEndedText } from "../src/proxy/presignin.js";
 import { classify, negotiateVersion, SUPPORTED_PROTOCOL_VERSIONS } from "../src/proxy/protocol.js";
 import { LineSplitter } from "../src/proxy/stdio.js";
+import { apiGet, apiRequest, BIND_TEXTS, BindError } from "../src/proxy/delegate-bind.js";
 import { createLogger } from "../src/log/logger.js";
 import { PinnedFetchError } from "../src/net/fetch.js";
 
@@ -201,6 +202,30 @@ describe("sign-in controller", () => {
   });
 });
 
+describe("sign-in ended texts (owner decision 2026-10-21)", () => {
+  it("names the login command, with --profile only for a named profile", () => {
+    expect(loginCommand("default")).toBe(`${RUN} login`);
+    expect(loginCommand("work")).toBe(`${RUN} login --profile work`);
+  });
+
+  it("puts the command and the link on their own lines; no link line without a link", () => {
+    expect(signInEndedText("https://x.example/a", "Cursor", "work").split("\n")).toEqual([
+      "Your Assay sign-in was ended on the web, or it expired. To sign in again, run in a terminal:",
+      `${RUN} login --profile work`,
+      "or open this link in your browser:",
+      "https://x.example/a",
+      "Assay tools appear here when you're done (if they don't, restart Cursor).",
+    ]);
+    expect(signInEndedText(null, "Cursor", "default")).not.toContain("open this link");
+  });
+
+  it("tools/list describes the sign-in tool by state", () => {
+    const description = (ended: boolean) => ((answerSignedOut("tools/list", ended) as { result: { tools: { description: string }[] } }).result.tools[0]!.description);
+    expect(description(false)).toBe(SIGN_IN_DESCRIPTION);
+    expect(description(true)).toBe(SIGN_IN_AGAIN_DESCRIPTION);
+  });
+});
+
 describe("alias table", () => {
   it("rebuilds per list, maps back, and warns once per tool", () => {
     const lines: string[] = [];
@@ -218,6 +243,35 @@ describe("alias table", () => {
   });
 });
 
+describe("delegate binding API refusals (M9)", () => {
+  const answer = (status: number, body: unknown) => () => Promise.resolve(new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } }));
+  const call = (fetch: () => Promise<Response>) => apiRequest(fetch, "http://localhost:3000/api/v1", "assay_at_x", "POST", "/agents/me/delegate", {});
+
+  it("a key still bound to another credential gets its own text", async () => {
+    const refused = answer(409, { success: false, error: { code: "ACCOUNT_DELEGATE_ALREADY_BOUND", message: "already bound" } });
+    await expect(call(refused)).rejects.toBeInstanceOf(BindError);
+    await expect(call(refused)).rejects.toThrow(BIND_TEXTS.alreadyBound);
+    expect(BIND_TEXTS.alreadyBound).toMatch(/still bound to another Assay connection\. Run logout, then login/);
+  });
+
+  it("any other refusal stays a generic failure", async () => {
+    expect(await call(answer(409, { error: { code: "SOMETHING_ELSE" } }))).toBeNull();
+    expect(await call(() => Promise.resolve(new Response("not json", { status: 409 })))).toBeNull();
+    expect(await call(answer(400, { error: { code: "ACCOUNT_DELEGATE_ALREADY_BOUND" } }))).toBeNull();
+    expect(await call(answer(200, { data: { ok: true } }))).toMatchObject({ body: { data: { ok: true } } });
+  });
+
+  it("apiGet tells a 404 (a route an older backend lacks) from a failure; apiRequest does not", async () => {
+    const get = (fetch: () => Promise<Response>) => apiGet(fetch, "http://localhost:3000/api/v1", "assay_at_x", "/agents/me/delegate/status");
+    expect(await get(answer(404, { message: "Cannot GET" }))).toBe("not-found");
+    expect(await get(answer(500, {}))).toBeNull();
+    expect(await get(answer(409, { error: { code: "ACCOUNT_DELEGATE_ALREADY_BOUND" } }))).toBeNull();
+    expect(await get(() => Promise.reject(new Error("down")))).toBeNull();
+    expect(await get(answer(200, { data: { bound: true } }))).toMatchObject({ body: { data: { bound: true } } });
+    expect(await call(answer(404, {}))).toBeNull();
+  });
+});
+
 describe("serve flags", () => {
   it("parses and refuses", () => {
     expect(parseServeArgs(["--url", "/c/weather", "--name=assay-weather", "--no-paid", "--log-level", "debug"])).toMatchObject({ url: "/c/weather", name: "assay-weather", noPaid: true, logLevel: "debug" });
@@ -225,6 +279,13 @@ describe("serve flags", () => {
     expect(parseServeArgs(["--name", "Bad_Name"])).toHaveProperty("error");
     expect(parseServeArgs(["--profile", "../x"])).toHaveProperty("error");
     expect(parseServeArgs(["--bogus"])).toHaveProperty("error");
+  });
+
+  it("refuses a repeated flag, like every other command", () => {
+    expect(parseServeArgs(["--url", "/a", "--url", "/b"])).toEqual({ error: "--url is given more than once" });
+    expect(parseServeArgs(["--name=a", "--name", "b"])).toEqual({ error: "--name is given more than once" });
+    expect(parseServeArgs(["--no-paid", "--no-paid"])).toEqual({ error: "--no-paid is given more than once" });
+    expect(parseServeArgs(["--profile", "a", "--log-level", "info", "--profile", "a"])).toEqual({ error: "--profile is given more than once" });
   });
 
   it("gives a short reason for -32003", () => {

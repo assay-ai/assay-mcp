@@ -81,7 +81,7 @@ const voucherSigns = (spy: ReturnType<typeof kms>["signTypedData"]) => spy.mock.
 describe("constructor", () => {
   it("signer set without maxPerCall or maxPerDay → throws", () => {
     const signer = Signers.fromPrivateKey(generatePrivateKey());
-    const base = { url: "https://mcp.assay.ai/", apiKey: API_KEY, signer };
+    const base = { url: "https://mcp.goassay.ai/", apiKey: API_KEY, signer };
     expect(() => new AssayClient(base)).toThrow(/maxPerCall/);
     expect(() => new AssayClient({ ...base, maxPerCall: "0.50" })).toThrow(/maxPerDay/);
     expect(() => new AssayClient({ ...base, maxPerDay: "5" })).toThrow(/maxPerCall/);
@@ -92,13 +92,13 @@ describe("constructor", () => {
 
   it("a signer must come from Signers", () => {
     const fakeSigner = { kind: "account", address: PAYER } as unknown as Signer;
-    expect(() => new AssayClient({ url: "https://mcp.assay.ai/", apiKey: API_KEY, signer: fakeSigner, maxPerCall: "0.5", maxPerDay: "5" })).toThrow(AssayConfigError);
+    expect(() => new AssayClient({ url: "https://mcp.goassay.ai/", apiKey: API_KEY, signer: fakeSigner, maxPerCall: "0.5", maxPerDay: "5" })).toThrow(AssayConfigError);
   });
 
   it("urls must be on the same deployment", () => {
     const signer = Signers.fromPrivateKey(generatePrivateKey());
     expect(
-      () => new AssayClient({ url: `${E2E_MCP}/`, apiKey: API_KEY, dev: { origins: [E2E_MCP] }, signer, maxPerCall: "0.5", maxPerDay: "5", urls: ["https://mcp.assay.ai/"] }),
+      () => new AssayClient({ url: `${E2E_MCP}/`, apiKey: API_KEY, dev: { origins: [E2E_MCP] }, signer, maxPerCall: "0.5", maxPerDay: "5", urls: ["https://mcp.goassay.ai/"] }),
     ).toThrow(/same Assay deployment/);
   });
 });
@@ -212,10 +212,10 @@ describe("paid calls", () => {
 
   it("providers must be a non-empty list of addresses, and needs a signer", () => {
     const signer = Signers.fromPrivateKey(generatePrivateKey());
-    const base = { url: "https://mcp.assay.ai/", apiKey: API_KEY, signer, maxPerCall: "0.5", maxPerDay: "5" };
+    const base = { url: "https://mcp.goassay.ai/", apiKey: API_KEY, signer, maxPerCall: "0.5", maxPerDay: "5" };
     expect(() => new AssayClient({ ...base, providers: [] })).toThrow(/providers/);
     expect(() => new AssayClient({ ...base, providers: ["nope"] })).toThrow(/providers/);
-    expect(() => new AssayClient({ url: "https://mcp.assay.ai/", apiKey: API_KEY, providers: [PROVIDER] })).toThrow(/signer/);
+    expect(() => new AssayClient({ url: "https://mcp.goassay.ai/", apiKey: API_KEY, providers: [PROVIDER] })).toThrow(/signer/);
     expect(() => new AssayClient({ ...base, providers: [PROVIDER] })).not.toThrow();
   });
 

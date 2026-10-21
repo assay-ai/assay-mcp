@@ -262,13 +262,37 @@ describe("paid path (SDK client → proxy → fake Assay)", () => {
     expect(privateKeyToAccount(pk as `0x${string}`).address).toBe(address);
     expect(stderr()).not.toContain(pk!.slice(2));
 
-    // The page is approved: the poll sees ACTIVE, confirms on chain, and says so.
+    // The page is approved: the wait sees the grant on chain, Assay confirms it, and says so.
+    const fullReads = () => fake.paths.filter((p) => p === "GET /api/v1/agents/me/delegate").length;
+    await until(() => fake.paths.includes("GET /api/v1/agents/me/delegate/status"));
+    // Three ticks of the wait (three eth_call per read on the one e2e RPC), none of them on the API.
+    const calls = () => fake.rpcCalls.filter((m) => m === "eth_call").length;
+    const reads = calls();
+    await until(() => calls() >= reads + 9);
+    const before = fullReads();
     fake.grant(address);
     await until(() => stderr().includes("Paid calls are on"));
+    // One status read and one full read for the whole wait, however many ticks it took.
+    expect(fake.paths.filter((p) => p === "GET /api/v1/agents/me/delegate/status")).toHaveLength(1);
+    expect(fullReads()).toBe(before + 1);
     // Then the next call pays.
     const paid = await client.callTool({ name: "weather", arguments: {} });
     expect(paid.isError).toBeFalsy();
     expect(fake.accepted).toHaveLength(1);
+  });
+
+  it("an older backend (no status route, 404): the wait polls the full route as before and still turns paid calls on", async () => {
+    await seedProfile(false);
+    fake.statusRoute = false;
+    const { client, stderr } = await connect({ extraEnv: { TEST_POLL_MS: "100" } });
+    const r = await client.callTool({ name: "weather", arguments: {} });
+    expect(textOf(r)).toContain("paid calls are off for this agent");
+    await until(() => fake.paths.filter((p) => p === "GET /api/v1/agents/me/delegate").length >= 2);
+    fake.grant(fake.delegate!);
+    await until(() => stderr().includes("Paid calls are on"));
+    expect(fake.paths.filter((p) => p === "GET /api/v1/agents/me/delegate/status")).toHaveLength(1);
+    const paid = await client.callTool({ name: "weather", arguments: {} });
+    expect(paid.isError).toBeFalsy();
   });
 
   it("binding: the challenge is checked against a Date-corrected clock (skew 100 s), refused past the clamp (200 s) after one retry", async () => {
@@ -581,9 +605,9 @@ describe("meta", () => {
   });
 
   it("texts", () => {
-    expect(notAllowedText("https://mcp.assay.ai/c/x")).toBe(`Paid calls through this server are off. To allow them, run in a terminal: npx -y @goassay-ai/mcp@${VERSION} allow-paid https://mcp.assay.ai/c/x`);
+    expect(notAllowedText("https://mcp.goassay.ai/c/x")).toBe(`Paid calls through this server are off. To allow them, run in a terminal: npx -y @goassay-ai/mcp@${VERSION} allow-paid https://mcp.goassay.ai/c/x`);
     // A URL with ? or & is quoted, so zsh and bash run it as one word (final review I1).
-    expect(notAllowedText("https://mcp.assay.ai/?tools=a&free=1")).toBe(`Paid calls through this server are off. To allow them, run in a terminal: npx -y @goassay-ai/mcp@${VERSION} allow-paid 'https://mcp.assay.ai/?tools=a&free=1'`);
+    expect(notAllowedText("https://mcp.goassay.ai/?tools=a&free=1")).toBe(`Paid calls through this server are off. To allow them, run in a terminal: npx -y @goassay-ai/mcp@${VERSION} allow-paid 'https://mcp.goassay.ai/?tools=a&free=1'`);
     expect(debtSuffix("http://localhost:4000/")).toBe(" Settle it at http://localhost:4000/funding");
     expect(appendText({ content: [{ type: "image" }, { type: "text", text: "A." }] }, " B")).toEqual({ content: [{ type: "image" }, { type: "text", text: "A. B" }] });
     expect(usdText(250_000n, 6)).toBe("$0.25");

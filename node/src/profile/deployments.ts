@@ -14,6 +14,13 @@ import { canonicalUrl, parseMcpAbsoluteUrl } from "./mcp-url.js";
 /** Dev entries a dev origin may select, in tie-break order (e2e and anvil share an origin). */
 export const DEV_SELECTABLE: readonly Environment[] = ["e2e", "staging", "anvil"];
 
+/**
+ * In dev mode only: names the dev entry when several share the dev origin (e2e and anvil both
+ * use localhost:3200; the first in {@link DEV_SELECTABLE} wins without it). It can only pick
+ * among the built-in entries of an origin that already passed both dev-mode gates.
+ */
+export const DEV_DEPLOYMENT_ENV = "ASSAY_MCP_DEV_DEPLOYMENT";
+
 export const API_KEY_ENV = "ASSAY_API_KEY";
 export const DEV_API_KEY_ENV = "ASSAY_DEV_API_KEY";
 
@@ -84,9 +91,13 @@ export function resolveDeployment({ url, env, devOrigins, warn }: ResolveInputs)
           `A dev origin needs both ASSAY_MCP_DEV_ORIGINS and \`${RUN} dev allow <origin>\`.`,
       );
     }
-    const match = DEV_SELECTABLE.find((e) => originOf(table[e].mcp) === origin);
-    if (!match) throw new OriginError(`refusing ${origin}: no built-in dev deployment uses this origin`);
-    environment = match;
+    const matches = DEV_SELECTABLE.filter((e) => originOf(table[e].mcp) === origin);
+    if (matches.length === 0) throw new OriginError(`refusing ${origin}: no built-in dev deployment uses this origin`);
+    const named = (env[DEV_DEPLOYMENT_ENV] ?? "").trim();
+    if (named !== "" && !matches.includes(named as Environment)) {
+      throw new OriginError(`refusing ${DEV_DEPLOYMENT_ENV}=${named.slice(0, 32)}: ${origin} is used by ${matches.join(", ")} only`);
+    }
+    environment = named !== "" ? (named as Environment) : matches[0]!;
     dev = true;
   }
 

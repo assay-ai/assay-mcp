@@ -1,3 +1,4 @@
+import { RUN } from "../src/version.js";
 import {
   existsSync,
   lstatSync,
@@ -55,7 +56,7 @@ const vectors = JSON.parse(readFileSync(join(ROOT, "vectors/commands.json"), "ut
   names: { cases: (NameInputs & { expect?: string; refusal?: string })[] };
 };
 const V = vectors.V;
-const MCP = "https://mcp.assay.ai";
+const MCP = "https://mcp.goassay.ai";
 const FILE_CLIENTS: ClientId[] = ["cursor", "vscode", "windsurf", "claude-desktop"];
 const CLI_CLIENTS: ClientId[] = ["claude-code", "codex", "gemini"];
 
@@ -165,6 +166,8 @@ function resolveUrl(input: string): ResolvedUrl {
 
 interface Harness {
   deps: InstallDeps;
+  /** The questions `prompt` was asked. */
+  prompts: string[];
   out: string[];
   calls: { bin: string; argv: string[]; cwd: string }[];
   paid: { profile: string; url: string }[];
@@ -177,6 +180,7 @@ function harness(overrides: Partial<InstallDeps> = {}): Harness {
   const out: string[] = [];
   const calls: Harness["calls"] = [];
   const paid: Harness["paid"] = [];
+  const prompts: string[] = [];
   const store = new Map<string, string>();
   const profilesPresent = new Set<string>(["default"]);
   const measured = { L: 20 as number | null };
@@ -188,6 +192,8 @@ function harness(overrides: Partial<InstallDeps> = {}): Harness {
   const profiles: ProfilePort = {
     isValidName: (n) => /^[a-z0-9][a-z0-9-]{0,31}$/.test(n),
     exists: (n) => profilesPresent.has(n),
+    // Like paid-urls.json: every profile starts with `/`.
+    isPaidUrl: (profile, url) => url.pathAndQuery === "/" || paid.some((p) => p.profile === profile && p.url === url.pathAndQuery),
     addPaidUrl: (profile, url) => (paid.push({ profile, url: url.pathAndQuery }), Promise.resolve()),
     longestTool: () => Promise.resolve(measured.L),
   };
@@ -202,12 +208,14 @@ function harness(overrides: Partial<InstallDeps> = {}): Harness {
     isTTY: true,
     onPath: () => false,
     ask: () => Promise.resolve(null),
+    // The typed confirmation: the profile name.
+    prompt: (q) => (prompts.push(q), Promise.resolve("default")),
     print: (t) => void out.push(t),
     version: V,
     productionOrigin: MCP,
     ...overrides,
   };
-  return { deps, out, calls, paid, store, profilesPresent, measured };
+  return { deps, prompts, out, calls, paid, store, profilesPresent, measured };
 }
 
 function userConfig(client: ClientId): string {
@@ -250,7 +258,7 @@ describe("install commands equal vectors/commands.json", () => {
 
   it("a dev origin's / keeps --url; only the production / omits it", () => {
     const base = { V: "1.2.3", name: "assay" };
-    expect(serverEntry("cursor", { ...base, url: "https://mcp.assay.ai/" }).args).toEqual(["-y", "@goassay-ai/mcp@1.2.3", "--name", "assay"]);
+    expect(serverEntry("cursor", { ...base, url: "https://mcp.goassay.ai/" }).args).toEqual(["-y", "@goassay-ai/mcp@1.2.3", "--name", "assay"]);
     expect(serverEntry("cursor", { ...base, url: "http://localhost:3200/" }).args).toEqual(["-y", "@goassay-ai/mcp@1.2.3", "--url", "http://localhost:3200/", "--name", "assay"]);
     expect(serverEntry("vscode", { ...base, url: "http://localhost:3200/" }).args).toContain("--url");
   });
@@ -303,8 +311,8 @@ describe("install commands equal vectors/commands.json", () => {
     expect(() => installCommand("codex", { ...ok, V: "^1.2.3" })).toThrow();
     expect(() => installCommand("codex", { ...ok, V: "latest" })).toThrow();
     expect(() => installCommand("codex", { ...ok, name: "Assay" })).toThrow();
-    expect(() => installCommand("codex", { ...ok, url: "https://user:pw@mcp.assay.ai/" })).toThrow();
-    expect(() => installCommand("codex", { ...ok, url: "https://mcp.assay.ai/'$(id)'" })).toThrow();
+    expect(() => installCommand("codex", { ...ok, url: "https://user:pw@mcp.goassay.ai/" })).toThrow();
+    expect(() => installCommand("codex", { ...ok, url: "https://mcp.goassay.ai/'$(id)'" })).toThrow();
     expect(() => serverEntry("cursor", { ...ok, logFile: "/var/log/assay.log" }, "project")).toThrow();
     expect(() => serverEntry("cursor", { ...ok, logFile: "relative.log" })).toThrow();
   });
@@ -404,8 +412,65 @@ describe("add", () => {
   it("a default name that is taken gets -2", async () => {
     const h = harness();
     expect(await runAdd(["/c/weather", "--client", "cursor"], h.deps)).toBe(0);
-    expect(await runAdd(["/c/weather", "--client", "cursor"], h.deps)).toBe(0);
+    expect(await runAdd(["/my/weather", "--client", "cursor"], h.deps)).toBe(0);
     expect([...entriesOf("cursor").keys()]).toEqual(["assay-weather", "assay-weather-2"]);
+  });
+
+  it.each(CLIENT_IDS)("add again for the same URL and profile is already installed, exit 0 (M4): %s", async (client) => {
+    const h = harness();
+    expect(await runAdd(["/c/weather", "--client", client], h.deps)).toBe(0);
+    const before = [...entriesOf(client).keys()];
+    h.out.length = 0;
+    expect(await runAdd(["/c/weather", "--client", client], h.deps)).toBe(0);
+    expect(h.out.join("")).toBe(`assay-weather → ${MCP}/c/weather is already installed in ${CLIENTS[client].label}. Nothing changed. Pass a new --name to add a second entry.\n`);
+    expect([...entriesOf(client).keys()]).toEqual(before);
+    expect(h.deps.installs.read()).toHaveLength(1);
+    // The same name typed again is no new name either.
+    expect(await runAdd(["/c/weather", "--client", client, "--name", "assay-weather"], h.deps)).toBe(0);
+    expect(h.deps.installs.read()).toHaveLength(1);
+    // A new --name adds a second entry.
+    expect(await runAdd(["/c/weather", "--client", client, "--name", "weather-two"], h.deps)).toBe(0);
+    expect([...entriesOf(client).keys()].sort()).toEqual(["assay-weather", "weather-two"]);
+  });
+
+  it("--force on an existing install installs it again under its own name, never -2 (m5)", async () => {
+    const h = harness();
+    expect(await runAdd(["/c/weather", "--client", "cursor"], h.deps)).toBe(0);
+    h.out.length = 0;
+    expect(await runAdd(["/c/weather", "--client", "cursor", "--force"], h.deps)).toBe(0);
+    expect(h.out.join("")).toContain("Added assay-weather →");
+    expect([...entriesOf("cursor").keys()]).toEqual(["assay-weather"]);
+    expect(h.deps.installs.read()).toHaveLength(1);
+  });
+
+  it("re-add of a user install whose URL is not paid prints the allow hint (m6)", async () => {
+    const h = harness({ prompt: () => Promise.resolve(null) });
+    expect(await runAdd(["/c/weather", "--client", "cursor"], h.deps)).toBe(0);
+    h.out.length = 0;
+    expect(await runAdd(["/c/weather", "--client", "cursor"], h.deps)).toBe(0);
+    expect(h.out.join("")).toContain("is already installed");
+    expect(h.out.join("")).toContain(`Run \`${RUN} allow-paid ${MCP}/c/weather\` in a terminal`);
+    h.paid.push({ profile: "default", url: "/c/weather" });
+    h.out.length = 0;
+    expect(await runAdd(["/c/weather", "--client", "cursor"], h.deps)).toBe(0);
+    expect(h.out.join("")).not.toContain("allow-paid");
+  });
+
+  it("an install removed from the client config by hand is installed again", async () => {
+    const h = harness();
+    expect(await runAdd(["/c/weather", "--client", "cursor"], h.deps)).toBe(0);
+    writeJson(userConfig("cursor"), { mcpServers: {} });
+    expect(await runAdd(["/c/weather", "--client", "cursor"], h.deps)).toBe(0);
+    expect([...entriesOf("cursor").keys()]).toEqual(["assay-weather"]);
+  });
+
+  it("another profile or scope is not the same install", async () => {
+    const h = harness();
+    h.profilesPresent.add("work");
+    expect(await runAdd(["/c/weather", "--client", "cursor"], h.deps)).toBe(0);
+    expect(await runAdd(["/c/weather", "--client", "cursor", "--profile", "work"], h.deps)).toBe(0);
+    expect(await runAdd(["/c/weather", "--client", "cursor", "--scope", "project"], h.deps)).toBe(0);
+    expect(h.deps.installs.read()).toHaveLength(3);
   });
 
   it("names: the default drops to assay for the root, and a typed name that does not fit is refused", async () => {
@@ -430,14 +495,46 @@ describe("add", () => {
     expect(existsSync(userConfig("cursor"))).toBe(false);
   });
 
-  it("user scope on a TTY allows the URL for paid calls and records the install", async () => {
+  it("user scope on a TTY allows the URL for paid calls after the typed profile name, and records the install", async () => {
     const h = harness();
     expect(await runAdd(["/c/weather", "--client", "cursor"], h.deps)).toBe(0);
+    expect(h.prompts).toHaveLength(1);
+    expect(h.prompts[0]).toContain(`Allow paid calls through ${MCP}/c/weather for profile "default"?`);
+    expect(h.prompts[0]).toContain("Type the profile name (default) to confirm");
     expect(h.paid).toEqual([{ profile: "default", url: "/c/weather" }]);
     expect(h.deps.installs.read()).toEqual([
       { client: "cursor", scope: "user", name: "assay-weather", url: `${MCP}/c/weather`, profile: "default", configPath: userConfig("cursor") },
     ]);
     expect(h.out.join("")).toContain(`Added assay-weather → ${MCP}/c/weather. Restart Cursor if it is open.`);
+  });
+
+  it("a plain yes on the TTY does not allow paid calls; the install still happens (M5)", async () => {
+    for (const answer of ["y", "yes", "", null, "Default"]) {
+      const h = harness({ prompt: () => Promise.resolve(answer) });
+      expect(await runAdd(["/c/weather", "--client", "cursor"], h.deps)).toBe(0);
+      expect(h.paid).toEqual([]);
+      expect(h.out.join("")).toContain(`This install did not allow paid calls for ${MCP}/c/weather. Run \`${RUN} allow-paid ${MCP}/c/weather\``);
+      expect(entriesOf("cursor").has("assay-weather")).toBe(true);
+      rmSync(home, { recursive: true, force: true });
+      mkdirSync(home);
+    }
+  });
+
+  it("the root URL, which every profile starts with, asks nothing", async () => {
+    const h = harness();
+    expect(await runAdd(["/", "--client", "cursor"], h.deps)).toBe(0);
+    expect(h.prompts).toEqual([]);
+    expect(h.paid).toEqual([]);
+    expect(h.out.join("")).not.toContain("allow-paid");
+  });
+
+  it("a URL already allowed asks nothing", async () => {
+    const h = harness();
+    h.paid.push({ profile: "default", url: "/c/weather" });
+    expect(await runAdd(["/c/weather", "--client", "cursor"], h.deps)).toBe(0);
+    expect(h.prompts).toEqual([]);
+    expect(h.paid).toEqual([{ profile: "default", url: "/c/weather" }]);
+    expect(h.out.join("")).not.toContain("allow-paid");
   });
 
   it("without a TTY the URL is not allowed for paid calls", async () => {
@@ -506,8 +603,16 @@ describe("add --scope project", () => {
     expect(entry.env === undefined || JSON.stringify(entry.env) === "{}").toBe(true);
     // R-MU-5 / R-MU-13: never allowed for paid calls from here.
     expect(h.paid).toEqual([]);
-    expect(h.out.join("")).toContain("never allows paid calls");
+    expect(h.out.join("")).toContain(`A project install can pay only through URLs your profile already allows (\`/\` is allowed when you sign in); ${MCP}/c/weather stays free-only. Run`);
     expect(h.deps.installs.read()[0]).toMatchObject({ scope: "project", configPath: path });
+  });
+
+  it("a project install of / says it can pay through /, which the profile allows (M2 wording)", async () => {
+    const h = harness();
+    expect(await runAdd(["/", "--client", "cursor", "--scope", "project"], h.deps)).toBe(0);
+    expect(h.out.join("")).toContain(`A project install can pay only through URLs your profile already allows (\`/\` is allowed when you sign in); ${MCP}/ is one of them.`);
+    expect(h.out.join("")).not.toContain("never allows paid calls");
+    expect(h.paid).toEqual([]);
   });
 
   it("project scope with ASSAY_API_KEY set → refused", async () => {
@@ -587,8 +692,8 @@ describe("list", () => {
     h.out.length = 0;
     expect(await runList([], h.deps)).toBe(0);
     const text = h.out.join("");
-    expect(text).toMatch(/assay {2}cursor \(user\) {2}→ https:\/\/mcp\.assay\.ai\/ {2}missing/);
-    expect(text).toMatch(/assay-weather {2}claude-code \(user\) {2}→ https:\/\/mcp\.assay\.ai\/c\/weather {2}ok/);
+    expect(text).toMatch(/assay {2}cursor \(user\) {2}→ https:\/\/mcp\.goassay\.ai\/ {2}missing/);
+    expect(text).toMatch(/assay-weather {2}claude-code \(user\) {2}→ https:\/\/mcp\.goassay\.ai\/c\/weather {2}ok/);
     expect(text).toMatch(/assay-notes {2}vscode \(user\) .* changed/);
   });
 
@@ -608,7 +713,7 @@ describe("remove", () => {
     expect(await runRemove(["assay-weather"], h.deps)).toBe(0);
     expect([...entriesOf(client).keys()]).toEqual(["keep"]);
     expect(h.deps.installs.read().map((r) => r.name)).toEqual(["keep"]);
-    expect(h.out.join("")).toContain("still signed in");
+    expect(h.out.join("")).toContain("This does not sign out");
   });
 
   it("refuses an entry assay-mcp did not write, even under a recorded name", async () => {
@@ -971,6 +1076,7 @@ describe("wired to the URL parser, {dir} files and the profile store", () => {
       isTTY,
       print: (t) => void out.push(t),
       ask: () => Promise.resolve(null),
+      prompt: () => Promise.resolve("default"),
       onPath: () => false,
     });
     return { deps, out, dir };
@@ -988,7 +1094,7 @@ describe("wired to the URL parser, {dir} files and the profile store", () => {
     expect((JSON.parse(readFileSync(installs, "utf8")) as unknown[]).length).toBe(2);
     out.length = 0;
     expect(await runList([], deps)).toBe(0);
-    expect(out.join("")).toMatch(/assay {2}cursor \(user\) {2}→ https:\/\/mcp\.assay\.ai\/c\/weather {2}ok/);
+    expect(out.join("")).toMatch(/assay {2}cursor \(user\) {2}→ https:\/\/mcp\.goassay\.ai\/c\/weather {2}ok/);
     expect(await runRemove(["assay"], deps)).toBe(0);
     expect([...entriesOf("cursor").keys()]).toEqual(["assay-get"]);
     expect(deps.installs.read().map((r) => r.name)).toEqual(["assay-get"]);

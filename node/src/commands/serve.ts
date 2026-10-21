@@ -42,13 +42,21 @@ export interface ServeFlags {
   logFile: string | null;
 }
 
+const KNOWN_FLAGS: ReadonlySet<string> = new Set(["--url", "--profile", "--name", "--no-paid", "--log-level", "--log-file"]);
+
 export function parseServeArgs(args: readonly string[]): ServeFlags | { error: string } {
   const flags: ServeFlags = { url: undefined, profile: "default", name: null, noPaid: false, logLevel: DEFAULT_LOG_LEVEL, logFile: null };
+  const seen = new Set<string>();
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
     const eq = arg.indexOf("=");
     const key = arg.startsWith("--") && eq !== -1 ? arg.slice(0, eq) : arg;
     const inline = arg.startsWith("--") && eq !== -1 ? arg.slice(eq + 1) : undefined;
+    // As `parseFlags` does for every other command: a flag given twice is a usage error.
+    if (KNOWN_FLAGS.has(key)) {
+      if (seen.has(key)) return { error: `${key} is given more than once` };
+      seen.add(key);
+    }
     const value = (): string | null => {
       if (inline !== undefined) return inline;
       const next = args[i + 1];

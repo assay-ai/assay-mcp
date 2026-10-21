@@ -9,7 +9,7 @@ import type { UrlKind } from "./server-name.js";
 
 /** A `--url` after the server URL parser accepted and canonicalised it. */
 export interface ResolvedUrl {
-  /** The canonical absolute URL, e.g. `https://mcp.assay.ai/c/weather`. */
+  /** The canonical absolute URL, e.g. `https://mcp.goassay.ai/c/weather`. */
   url: string;
   /** The canonical path and query, e.g. `/c/weather` (the `paid-urls.json` form). */
   pathAndQuery: string;
@@ -33,7 +33,9 @@ export interface ProfilePort {
   isValidName(name: string): boolean;
   /** True when `profiles/{name}.json` exists. */
   exists(name: string): boolean;
-  /** Adds the URL to `paid-urls.json` under the profile lock (TTY only; the caller checks). */
+  /** True when the URL is already in `paid-urls.json` (the `/` a profile starts with included). */
+  isPaidUrl(profile: string, url: ResolvedUrl): boolean;
+  /** Adds the URL to `paid-urls.json` under the profile lock (TTY only, after the typed confirmation; the caller checks). */
   addPaidUrl(profile: string, url: ResolvedUrl): Promise<void>;
   /** L(u) from `tools/list` on the URL with the profile's token; null when not signed in. */
   longestTool(profile: string, url: ResolvedUrl): Promise<number | null>;

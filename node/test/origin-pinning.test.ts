@@ -49,7 +49,7 @@ describe("resolveDeployment", () => {
     expect(r("/C/Weather/")).toBe(`${PROD_MCP}/c/weather`);
     expect(r(`${PROD_MCP}/%40Acme/Kit@3?free=1&tools=beta,alpha,Alpha`)).toBe(`${PROD_MCP}/@acme/kit@3?tools=alpha,beta&free=1`);
     expect(r(`${PROD_MCP}/?discovery=search`)).toBe(`${PROD_MCP}/`);
-    expect(r("https://MCP.assay.ai:443/c/weather#frag")).toBe(`${PROD_MCP}/c/weather`);
+    expect(r("https://MCP.goassay.ai:443/c/weather#frag")).toBe(`${PROD_MCP}/c/weather`);
     for (const bad of ["/t/x", "/c/weather/../x", "/?free=true", "/c/%2e%2e", "not a url"]) {
       expect(() => resolveDeployment({ url: bad, env: {}, devOrigins: [], warn })).toThrow(OriginError);
     }
@@ -59,11 +59,11 @@ describe("resolveDeployment", () => {
     for (const url of [
       "https://evil.example/",
       "//evil.example/",
-      "http://mcp.assay.ai/",
-      "https://mcp.assay.ai.evil.example/",
-      "https://mcp.assay.ai@evil.example/",
-      "https://user:pass@mcp.assay.ai/",
-      "https://mcp.assay.ai:8443/",
+      "http://mcp.goassay.ai/",
+      "https://mcp.goassay.ai.evil.example/",
+      "https://mcp.goassay.ai@evil.example/",
+      "https://user:pass@mcp.goassay.ai/",
+      "https://mcp.goassay.ai:8443/",
     ]) {
       expect(() => resolveDeployment({ url, env: {}, devOrigins: [], warn }), url).toThrow(OriginError);
     }
@@ -180,6 +180,21 @@ describe("only production reaches the signer outside dev mode", () => {
     expect(d).toMatchObject({ environment: "e2e", dev: true });
     expect(() => assertSignerEnvironment(d)).not.toThrow();
     expect(Object.isFrozen(d)).toBe(true);
+  });
+
+  it("ASSAY_MCP_DEV_DEPLOYMENT picks anvil on the origin it shares with e2e; e2e stays the default (M10)", () => {
+    const base = { ASSAY_MCP_DEV_ORIGINS: DEV };
+    const r = (env: Record<string, string>) => resolveDeployment({ url: `${DEV}/`, env: { ...base, ...env }, devOrigins: [DEV], warn });
+    expect(r({})).toMatchObject({ environment: "e2e", dev: true });
+    expect(r({ ASSAY_MCP_DEV_DEPLOYMENT: "e2e" })).toMatchObject({ environment: "e2e", dev: true });
+    const anvil = r({ ASSAY_MCP_DEV_DEPLOYMENT: "anvil" });
+    expect(anvil).toMatchObject({ environment: "anvil", dev: true });
+    expect(anvil.networks["eip155:46630"]!.rpc).toEqual(["http://127.0.0.1:8547", "http://localhost:8547"]);
+    expect(() => assertSignerEnvironment(anvil)).not.toThrow();
+    for (const bad of ["production", "staging", "nope"]) expect(() => r({ ASSAY_MCP_DEV_DEPLOYMENT: bad }), bad).toThrow(OriginError);
+    // Outside dev mode the name changes nothing: production stays production.
+    expect(resolveDeployment({ env: { ASSAY_MCP_DEV_DEPLOYMENT: "anvil" }, devOrigins: [], warn }).environment).toBe("production");
+    expect(() => resolveDeployment({ url: `${DEV}/`, env: { ASSAY_MCP_DEV_DEPLOYMENT: "anvil" }, devOrigins: [DEV], warn })).toThrow(OriginError);
   });
 
   it("the signer gate accepts only resolveDeployment results, never a look-alike object", () => {

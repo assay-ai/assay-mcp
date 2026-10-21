@@ -6,6 +6,7 @@
  * `paidCalls` is used only when the chain cannot be asked yet (no payer recorded), and is
  * labelled as such. No secret is printed: the payment key appears only as its fingerprint.
  */
+import { DEFAULT_PROFILE } from "../clients/install-command.js";
 import { RUN } from "../version.js";
 import { EXIT_OK } from "../exit-codes.js";
 import { SPEND_WINDOW_SECONDS } from "../guards/guards.js";
@@ -38,7 +39,8 @@ export function thisComputer(platform: NodeJS.Platform): string {
 }
 
 export interface PaidCallsView {
-  status: "NONE" | "ACTIVE" | "EXPIRED" | "REVOKED";
+  /** The API's `paidCalls.status`; `UNBOUND` for `paidCalls: null` (no key bound), `UNKNOWN` when `paidCallsUnknown` is true. */
+  status: "NONE" | "ACTIVE" | "EXPIRED" | "REVOKED" | "UNBOUND" | "UNKNOWN";
 }
 
 /** `GET {API}/agents/me/delegate` → `paidCalls.status` (UX only); null on any failure. */
@@ -56,7 +58,10 @@ async function paidCallsFromApi(deployment: ResolvedDeployment, bearer: string, 
     }
     const text = await readCapped(res, MAX_BODY_BYTES, signal);
     if (text === null) return null;
-    const status = (JSON.parse(text) as { data?: { paidCalls?: { status?: unknown } | null } } | null)?.data?.paidCalls?.status;
+    const data = (JSON.parse(text) as { data?: { paidCalls?: { status?: unknown } | null; paidCallsUnknown?: unknown } } | null)?.data;
+    if (data?.paidCallsUnknown === true) return { status: "UNKNOWN" };
+    if (data?.paidCalls === null && data.paidCallsUnknown === false) return { status: "UNBOUND" };
+    const status = data?.paidCalls?.status;
     return status === "NONE" || status === "ACTIVE" || status === "EXPIRED" || status === "REVOKED" ? { status } : null;
   } catch {
     return null;
@@ -75,13 +80,15 @@ async function paymentKeyLine(
   record: ProfileRecord | null,
   deployment: ResolvedDeployment,
   bearer: string | null,
+  /** A sign-in is stored (OAuth refresh token or API key), even when its access token has expired. */
+  signedIn: boolean,
   decimals: number,
 ): Promise<string> {
   const delegate = record?.delegateAddress ?? null;
   if (delegate === null) return "none yet · made on the first paid call";
   const fp = fingerprint(delegate);
   const network = networkOf(record, deployment);
-  const enable = `run \`${RUN} enable-paid\``;
+  const enable = enablePaidHint(profile);
   if (record?.payer && network !== null) {
     const read = await deps.chain(deployment.environment, profile).readDelegation(network, record.payer, delegate, { fresh: true });
     if (!read.ok) return `${fp} · can't confirm on chain right now`;
@@ -92,8 +99,16 @@ async function paymentKeyLine(
     if (BigInt(d.validUntil) <= BigInt(now)) return `${fp} · expired ${utcDate(d.validUntil)} (read from chain) · ${enable}`;
     return `${fp} · on (read from chain) · ${unitsToUsd(d.delegateMaxVoucherAmount, decimals)} a call · ${unitsToUsd(d.delegateMaxPerWindow, decimals)} per 24 h · until ${utcDate(d.validUntil)}`;
   }
-  const api = bearer === null ? null : await paidCallsFromApi(deployment, bearer, deps.requestTimeoutMs ?? REQUEST_TIMEOUT_MS);
-  if (api === null || api.status === "NONE") return `${fp} · not turned on · ${enable}`;
+  // Read only: no refresh. Without a live token, or without an answer, the key's state is unknown, not "off".
+  if (bearer === null) {
+    return signedIn
+      ? `${fp} · unknown: the stored sign-in has expired (it renews on the next call, or run \`${RUN} login\`)`
+      : `${fp} · unknown while signed out · run \`${RUN} login\``;
+  }
+  const api = await paidCallsFromApi(deployment, bearer, deps.requestTimeoutMs ?? REQUEST_TIMEOUT_MS);
+  if (api === null || api.status === "UNKNOWN") return `${fp} · can't check with Assay right now`;
+  if (api.status === "UNBOUND") return `${fp} · not bound to this sign-in · ${enable}`;
+  if (api.status === "NONE") return `${fp} · not turned on · ${enable}`;
   const word = { ACTIVE: "on", EXPIRED: "expired", REVOKED: "stopped" }[api.status];
   return `${fp} · ${word} (reported by Assay, not yet read from chain)${api.status === "ACTIVE" ? "" : ` · ${enable}`}`;
 }
@@ -145,7 +160,7 @@ export async function statusText(args: readonly string[], deps: ProfileDeps): Pr
     line("Profile", `${profile}  (${origin})`),
     line("Signed in", signedIn),
     line("Agent", record?.agentLabel ?? "unknown until signed in"),
-    line("Payment key", await paymentKeyLine(deps, profile, record, deployment, bearer, decimals)),
+    line("Payment key", await paymentKeyLine(deps, profile, record, deployment, bearer, key !== null || oauth, decimals)),
     line(
       "Local caps",
       `${usd(limits.perCall)} a call · ${usd(limits.perDay)} per 24 h · spent today ${unitsToUsd(spent, decimals)} · confirm above: ${limits.confirmAbove === null ? "off" : usd(limits.confirmAbove)} · providers: ${providers}`,
@@ -167,4 +182,10 @@ export async function runStatus(args: readonly string[], deps: ProfileDeps): Pro
 /** `assay-mcp status`. */
 export function run(args: readonly string[]): Promise<number> {
   return runStatus(args, defaultProfileDeps());
+}
+
+/** The `enable-paid` command to run for `profile`: a named profile must be passed, or it acts on `default`. */
+export function enablePaidHint(profile: string): string {
+  const flag = profile === DEFAULT_PROFILE ? "" : ` --profile ${profile}`;
+  return `run \`${RUN} enable-paid${flag}\``;
 }

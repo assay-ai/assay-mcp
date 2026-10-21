@@ -33,7 +33,7 @@ const PROXY_VARS = ["NODE_USE_ENV_PROXY", "HTTPS_PROXY", "https_proxy", "HTTP_PR
 const PRELOAD_OPTIONS = /(^|\s)(--require|-r|--import|--loader|--experimental-loader)(=|\s|$)/;
 
 export const T13_RISK_TEXT =
-  "A project config (.mcp.json and the like) can set the environment of the servers it starts. assay-mcp refuses certificate-check bypasses and env proxies at start, but NODE_OPTIONS=--require runs code before assay-mcp starts: only your MCP client's approval of project servers stops it. URLs from project configs are free-only until you run allow-paid in a terminal.";
+  "A project config (.mcp.json and the like) can set the environment of the servers it starts. assay-mcp refuses certificate-check bypasses and env proxies at start, but NODE_OPTIONS=--require runs code before assay-mcp starts: only your MCP client's approval of project servers stops it. A project config can pay only through URLs your profile already allows (/ is allowed when you sign in); its other URLs stay free-only until you run allow-paid in a terminal.";
 
 function looksLikeAssay(name: string, entry: unknown): boolean {
   if (/^assay/i.test(name)) return true;
@@ -58,7 +58,7 @@ export function checkProjectEntry(where: string, name: string, entry: unknown): 
         out.push({ level: "problem", text: `${at} sets ${key} in its environment. A project config can use it to change how assay-mcp runs; remove it unless you put it there yourself.` });
       } else if (key === "ASSAY_API_KEY" || key === "ASSAY_DEV_API_KEY") {
         out.push({ level: "problem", text: `${at} carries ${key} in a project file. Keys belong in your own environment, never in a shared config.` });
-      } else if (key === "ASSAY_MCP_DEV_ORIGINS") {
+      } else if (key === "ASSAY_MCP_DEV_ORIGINS" || key === "ASSAY_MCP_DEV_DEPLOYMENT") {
         out.push({ level: "problem", text: `${at} asks for dev mode (${key}). A project config should never do this.` });
       }
     }

@@ -33,7 +33,14 @@ export const BIND_TEXTS = Object.freeze({
   clock: "Paid calls could not be set up: this computer's clock is too far from Assay's. Check the clock, then try again.",
   mismatch: "Paid calls could not be set up: Assay's key check did not match. Nothing was signed.",
   notAccepted: "Paid calls could not be set up: Assay did not accept the payment key. Try again.",
+  alreadyBound:
+    "Paid calls could not be set up: this payment key is still bound to another Assay connection. Run logout, then login, and try again.",
 });
+
+/** The backend's 409 when the key is bound to another live credential (only the bind request can get it). */
+const ALREADY_BOUND_CODE = "ACCOUNT_DELEGATE_ALREADY_BOUND" as const;
+/** `request`'s answer to a 404. */
+const NOT_FOUND = "not-found" as const;
 
 const API_TIMEOUT_MS = 15_000;
 const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
@@ -50,7 +57,9 @@ function accountOn(value: unknown, chainId: number): string | null {
 
 /**
  * `{api}{path}` through the caller's pinned fetch, with the bearer. Non-2xx, an oversized or
- * unparsable body, a timeout and a network error all give `null`. Logs the path prefix and the
+ * unparsable body, a timeout and a network error all give `null`, except a 409
+ * `ACCOUNT_DELEGATE_ALREADY_BOUND` (only the bind request gets it): that throws `BindError` with
+ * its own text, which every caller of `bindDelegateKey` shows. Logs the path prefix and the
  * status only.
  */
 export async function apiRequest(
@@ -62,6 +71,35 @@ export async function apiRequest(
   body?: unknown,
   log: Logger = silentLogger,
 ): Promise<{ body: unknown; date: string | null } | null> {
+  const answer = await request(fetch, apiBase, bearer, method, path, body, log);
+  if (answer === ALREADY_BOUND_CODE) throw new BindError(BIND_TEXTS.alreadyBound);
+  return answer === NOT_FOUND ? null : answer;
+}
+
+/**
+ * A GET like `apiRequest`, except that a 404 answers `"not-found"`, so a caller can tell a route an
+ * older backend does not have from a failure (the backend and the proxy deploy separately).
+ */
+export async function apiGet(
+  fetch: FetchLike,
+  apiBase: string,
+  bearer: string,
+  path: string,
+  log: Logger = silentLogger,
+): Promise<{ body: unknown; date: string | null } | typeof NOT_FOUND | null> {
+  const answer = await request(fetch, apiBase, bearer, "GET", path, undefined, log);
+  return answer === ALREADY_BOUND_CODE ? null : answer;
+}
+
+async function request(
+  fetch: FetchLike,
+  apiBase: string,
+  bearer: string,
+  method: "GET" | "POST",
+  path: string,
+  body: unknown,
+  log: Logger,
+): Promise<{ body: unknown; date: string | null } | typeof ALREADY_BOUND_CODE | typeof NOT_FOUND | null> {
   try {
     const signal = requestSignal(API_TIMEOUT_MS);
     const res = await fetch(`${apiBase.replace(/\/+$/, "")}${path}`, {
@@ -74,9 +112,15 @@ export async function apiRequest(
     });
     const date = res.headers.get("date");
     if (res.status < 200 || res.status > 299) {
-      await res.body?.cancel().catch(() => {});
       log.info("API refused", { path: path.split("/").slice(0, 4).join("/"), status: res.status });
-      return null;
+      if (res.status !== 409) {
+        await res.body?.cancel().catch(() => {});
+        return res.status === 404 ? NOT_FOUND : null;
+      }
+      const text = await readCapped(res, MAX_BODY_BYTES, signal);
+      const refusal: unknown = text === null ? null : JSON.parse(text);
+      const code = isObject(refusal) ? (isObject(refusal.error) ? refusal.error.code : refusal.code) : undefined;
+      return code === ALREADY_BOUND_CODE ? ALREADY_BOUND_CODE : null;
     }
     const text = await readCapped(res, MAX_BODY_BYTES, signal);
     if (text === null) return null;

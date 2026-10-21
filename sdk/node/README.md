@@ -1,6 +1,6 @@
 # @goassay-ai/sdk
 
-Node SDK for [Assay](https://mcp.assay.ai). It calls Assay tools with an API key over Streamable HTTP. Only the built-in origin is reachable (a development origin must be listed in `dev.origins` in code), redirects are an error, and the key is sent to pinned origins only.
+Node SDK for [Assay](https://mcp.goassay.ai). It calls Assay tools with an API key over Streamable HTTP. Only the built-in origin is reachable (a development origin must be listed in `dev.origins` in code), redirects are an error, and the key is sent to pinned origins only.
 
 ```ts
 import { AssayClient, Signers } from "@goassay-ai/sdk";
@@ -8,7 +8,7 @@ import { AssayClient, Signers } from "@goassay-ai/sdk";
 const signer = Signers.fromAccount(kmsAccount); // preferred: a KMS-backed viem Account
 
 const assay = new AssayClient({
-  url: "https://mcp.assay.ai/?tools=get_weather",
+  url: "https://mcp.goassay.ai/?tools=get_weather",
   apiKey: process.env.ASSAY_API_KEY!,
   signer, // omit for free calls only
   maxPerCall: "0.50", // required with a signer
@@ -54,7 +54,7 @@ npm run example -- openai-responses     # needs OPENAI_API_KEY and OPENAI_MODEL
 ```
 
 - Model ids come only from `ANTHROPIC_MODEL` and `OPENAI_MODEL`. The examples pin none: without one they exit with a message.
-- `ASSAY_API_KEY` is the Assay API key (required). `ASSAY_URL` defaults to `https://mcp.assay.ai/`.
+- `ASSAY_API_KEY` is the Assay API key (required). `ASSAY_URL` defaults to `https://mcp.goassay.ai/`.
 - To run against a local stack, set `ASSAY_DEV_ORIGIN` to its origin (it goes to `dev.origins` in code).
 - `ASSAY_EXAMPLE_TEST_KEY` (a throwaway key, test stacks only) switches paid calls on through `Signers.fromPrivateKey`; the examples call `bindDelegate()` for it first, and it still needs the approval at `enablePaidCallsUrl()` once. Real code uses `Signers.fromAccount`.
 - Nothing prints a key. Do not print the environment in CI.

@@ -9,6 +9,7 @@ import { UrlRefused, type ResolvedUrl } from "../clients/ports.js";
 import { SIGNED_OUT_L, SIGN_IN_HINT } from "../clients/server-name.js";
 import { EXIT_FATAL, EXIT_OK, EXIT_USAGE } from "../exit-codes.js";
 import { parseFlags, UsageError, type InstallDeps } from "./context.js";
+import { typedConfirm } from "./profile-context.js";
 
 const API_KEY_ENV = "ASSAY_API_KEY";
 
@@ -74,6 +75,10 @@ function checkOrigin(url: ResolvedUrl, scope: Scope, deps: InstallDeps): void {
   if (!url.dev) throw new UsageError(`${origin} is not the Assay MCP origin`);
 }
 
+function allowHint(url: ResolvedUrl): string {
+  return `Run \`${RUN} allow-paid ${shellQuote(url.url)}\` in a terminal to allow paid calls through it.`;
+}
+
 export async function add(options: AddOptions, deps: InstallDeps): Promise<void> {
   const profile = options.profile ?? DEFAULT_PROFILE;
   if (!deps.profiles.isValidName(profile)) throw new UsageError(`invalid profile name "${profile}"`);
@@ -99,11 +104,25 @@ export async function add(options: AddOptions, deps: InstallDeps): Promise<void>
   if (!client.scopes.includes(options.scope)) throw new UsageError(`${client.label} has no ${options.scope} scope`);
   const target = client.target(options.scope, deps.clientEnv);
 
-  const measured = await deps.profiles.longestTool(profile, url);
-  const L = measured ?? SIGNED_OUT_L;
   const taken = [...client.entries(target, deps.clientEnv).keys()];
 
-  const choice = chooseName({ scope: options.scope, L, slugWords: url.slugWords, taken, ...(options.name !== undefined ? { typed: options.name } : {}) });
+  // Idempotent: the same URL for the same profile already installed in this client and scope
+  // (and still in its config) is reported, not installed again under another name.
+  const existing = deps.installs
+    .read()
+    .find((r) => r.client === client.id && r.scope === options.scope && r.url === url.url && r.profile === profile && r.configPath === target.configPath && taken.includes(r.name));
+  // `--force` always installs again.
+  if (existing !== undefined && !options.force && (options.name === undefined || options.name === existing.name)) {
+    deps.print(`${existing.name} → ${url.url} is already installed in ${client.label}. Nothing changed. Pass a new --name to add a second entry.\n`);
+    if (options.scope === "user" && !deps.profiles.isPaidUrl(profile, url)) deps.print(`${allowHint(url)}\n`);
+    return;
+  }
+
+  const measured = await deps.profiles.longestTool(profile, url);
+  const L = measured ?? SIGNED_OUT_L;
+  // `--force` on an existing install without `--name` replaces that entry rather than adding `-2`.
+  const typed = options.name ?? (options.force ? existing?.name : undefined);
+  const choice = chooseName({ scope: options.scope, L, slugWords: url.slugWords, taken, ...(typed !== undefined ? { typed } : {}) });
   if (!choice.ok) throw new UsageError(`${choice.message}${measured === null ? ` ${SIGN_IN_HINT}` : ""}`);
   const name = choice.name;
   if (options.name !== undefined && taken.includes(name) && !options.force) {
@@ -119,17 +138,30 @@ export async function add(options: AddOptions, deps: InstallDeps): Promise<void>
   // Recorded right after the write, so `list` and `remove` always see what was installed.
   await recordInstall(deps.installs, { client: client.id, scope: options.scope, name, url: url.url, profile, configPath: target.configPath });
 
-  const allowHint = `Run \`${RUN} allow-paid ${shellQuote(url.url)}\` in a terminal to allow paid calls through it.`;
+  const hint = allowHint(url);
   if (options.scope === "user" && deps.isTTY) {
-    try {
-      await deps.profiles.addPaidUrl(profile, url);
-    } catch (err) {
-      deps.print(`Could not allow paid calls for ${url.url} (${(err as Error).message}). ${allowHint}\n`);
+    // The same typed confirmation as `allow-paid`: an agent driving a pseudo-terminal passes the TTY check.
+    if (!deps.profiles.isPaidUrl(profile, url)) {
+      const yes = await typedConfirm(
+        deps,
+        `Allow paid calls through ${url.url} for profile "${profile}"? Tools behind this URL can then spend within your local caps.`,
+        profile,
+      );
+      if (!yes) {
+        deps.print(`This install did not allow paid calls for ${url.url}. ${hint}\n`);
+      } else {
+        try {
+          await deps.profiles.addPaidUrl(profile, url);
+        } catch (err) {
+          deps.print(`Could not allow paid calls for ${url.url} (${(err as Error).message}). ${hint}\n`);
+        }
+      }
     }
   } else if (options.scope === "user") {
-    deps.print(`This install did not allow paid calls for ${url.url}. ${allowHint}\n`);
+    deps.print(`This install did not allow paid calls for ${url.url}. ${hint}\n`);
   } else {
-    deps.print(`A project install never allows paid calls by itself. ${allowHint}\n`);
+    const rule = "A project install can pay only through URLs your profile already allows (`/` is allowed when you sign in)";
+    deps.print(deps.profiles.isPaidUrl(profile, url) ? `${rule}; ${url.url} is one of them.\n` : `${rule}; ${url.url} stays free-only. ${hint}\n`);
   }
   if (options.scope === "project" && client.kind === "file" && hadFile) {
     deps.print(`The previous ${target.configPath} is saved as ${target.configPath}.bak; do not commit it.\n`);

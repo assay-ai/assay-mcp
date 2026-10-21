@@ -578,6 +578,23 @@ describe("tokens (F2, §8.4)", () => {
     expect((err as LockError).code).toBe("LOCK_LOST");
   });
 
+  it.each([400, 401])("invalid_client (%i) on refresh → tokens deleted, signed out, no retry loop", async (status) => {
+    const pair = as.seedGrant();
+    await seedTokens(pair);
+    await withLock(profile(), (lock) => keychain.set(lock, "delegate_key", "0x" + "22".repeat(32)));
+    as.clock = pair.expiresAt;
+    as.forceTokenError = { status, error: "invalid_client" };
+    expect(await refreshUnderLock(ctx(), pair.accessToken)).toBeNull();
+    expect(await keychain.get("refresh_token")).toBeNull();
+    expect(await keychain.getAccessToken()).toBeNull();
+    expect(await keychain.get("delegate_key")).toBe("0x" + "22".repeat(32));
+    expect(await authMode(ctx(), {})).toBe("pre-sign-in");
+    const calls = as.tokenCalls("refresh_token").length;
+    expect(await currentAccess(ctx())).toBeNull();
+    expect(as.tokenCalls("refresh_token")).toHaveLength(calls);
+    as.forceTokenError = null;
+  });
+
   it("503 temporarily_unavailable and network failures keep the tokens", async () => {
     const pair = as.seedGrant();
     await seedTokens(pair);

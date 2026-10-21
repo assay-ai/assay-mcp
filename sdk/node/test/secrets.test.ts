@@ -121,15 +121,15 @@ describe("secrets", () => {
   it("inspect, JSON and String of the client never contain the API key or the private key", async () => {
     const pk = generatePrivateKey();
     const kinds = [
-      new AssayClient({ url: "https://mcp.assay.ai/", apiKey: API_KEY }),
-      new AssayClient({ url: "https://mcp.assay.ai/", apiKey: API_KEY, signer: Signers.fromPrivateKey(pk), maxPerCall: "0.5", maxPerDay: "5" }),
+      new AssayClient({ url: "https://mcp.goassay.ai/", apiKey: API_KEY }),
+      new AssayClient({ url: "https://mcp.goassay.ai/", apiKey: API_KEY, signer: Signers.fromPrivateKey(pk), maxPerCall: "0.5", maxPerDay: "5" }),
     ];
     for (const c of kinds) {
       const texts = [...shown(c), ...shown({ wrapped: c }), ...shown([c]), `${c}`, inspect(c, { showHidden: true, depth: Infinity, getters: true })];
       expectNoSecret(texts, [API_KEY, pk]);
       expect(Object.keys(c)).toEqual([]);
     }
-    expect(JSON.parse(JSON.stringify(kinds[1]))).toEqual({ url: "https://mcp.assay.ai/", signer: { kind: "privateKey", address: privateKeyToAccount(pk).address } });
+    expect(JSON.parse(JSON.stringify(kinds[1]))).toEqual({ url: "https://mcp.goassay.ai/", signer: { kind: "privateKey", address: privateKeyToAccount(pk).address } });
   });
 
   it("the signer's secret is not reachable from the Signer object", () => {

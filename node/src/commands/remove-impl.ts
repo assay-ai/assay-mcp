@@ -63,7 +63,7 @@ export async function remove(name: string, options: RemoveOptions, deps: Install
   }
   await client.uninstall(target, name, deps.clientEnv);
   if (matches.length === 1) await forgetInstall(deps.installs, record);
-  deps.print(`Removed ${name} from ${client.label} (${record.scope}). You are still signed in; \`${RUN} logout\` signs out.\n`);
+  deps.print(`Removed ${name} from ${client.label} (${record.scope}). This does not sign out; \`${RUN} logout\` does.\n`);
 }
 
 export async function runRemove(args: readonly string[], deps: InstallDeps): Promise<number> {

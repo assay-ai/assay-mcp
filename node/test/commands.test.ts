@@ -16,6 +16,7 @@ import { guard } from "./setup/global-guard.js";
 import { fingerprintDir } from "./setup/real-profile.js";
 import { checkProjectEntry, runDoctor, T13_RISK_TEXT } from "../src/commands/doctor.js";
 import { enablePaidLink, runEnablePaid } from "../src/commands/enable-paid.js";
+import { enablePaidHint } from "../src/commands/status.js";
 import { unitsToUsd, usd, utcDate } from "../src/commands/format.js";
 import { runLimits } from "../src/commands/limits.js";
 import { runLogin } from "../src/commands/login.js";
@@ -256,8 +257,8 @@ describe("status", () => {
       lock.assertHeld();
     });
     seedInstalls([
-      { name: "assay", url: "https://mcp.assay.ai/" },
-      { name: "weather", url: "https://mcp.assay.ai/c/weather" },
+      { name: "assay", url: "https://mcp.goassay.ai/" },
+      { name: "weather", url: "https://mcp.goassay.ai/c/weather" },
     ]);
     chainResult = {
       ok: true,
@@ -278,7 +279,7 @@ describe("status", () => {
     expect(stdout).not.toHaveBeenCalled();
     expect(output()).toBe(
       [
-        "Profile     default  (https://mcp.assay.ai)",
+        "Profile     default  (https://mcp.goassay.ai)",
         "Signed in   yes · Assay app on this Mac · credential 3f2a1b9c (OAuth)",
         "Agent       research-bot",
         "Payment key 1A2B 9F3C · on (read from chain) · $0.50 a call · $5 per 24 h · until 2026-11-18",
@@ -288,6 +289,11 @@ describe("status", () => {
         "",
       ].join("\n"),
     );
+  });
+
+  it("names the profile in the enable-paid hint unless it is the default one", () => {
+    expect(enablePaidHint("default")).toBe(`run \`${RUN} enable-paid\``);
+    expect(enablePaidHint("work")).toBe(`run \`${RUN} enable-paid --profile work\``);
   });
 
   it("the payment-key line follows the chain, not the files", async () => {
@@ -307,7 +313,7 @@ describe("status", () => {
   it("signed out, with no profile: defaults and no key", async () => {
     expect(await runStatus([], deps({ platform: "linux" }))).toBe(0);
     const lines = output().split("\n");
-    expect(lines[0]).toBe("Profile     default  (https://mcp.assay.ai)");
+    expect(lines[0]).toBe("Profile     default  (https://mcp.goassay.ai)");
     expect(lines[1]).toBe(`Signed in   no · run \`${RUN} login\``);
     expect(lines[3]).toBe("Payment key none yet · made on the first paid call");
     expect(lines[4]).toBe("Local caps  $0.50 a call · $5 per 24 h · spent today $0 · confirm above: off · providers: any");
@@ -331,6 +337,44 @@ describe("status", () => {
     const text = await statusText([], deps({ env: E2E_ENV }));
     expect(text.split("\n")[3]).toBe("Payment key 1A2B 9F3C · on (reported by Assay, not yet read from chain)");
     expect(seen).toEqual(["http://localhost:3000/api/v1/agents/me/delegate Bearer assay_at_seed"]);
+  });
+
+  it("an expired stored sign-in leaves the key's state unknown, never 'not turned on' (M3)", async () => {
+    await seedProfile("e2e", { delegate: true });
+    addDevOrigin(dir, E2E_MCP);
+    seedSecret("default", "e2e", "refresh_token", "assay_rt_seed");
+    seedSecret("default", "e2e", "access_token", JSON.stringify({ token: "assay_at_seed", expiresAt: NOW - 1 }));
+    const fetch = vi.spyOn(globalThis, "fetch");
+    const keyLine = async () => (await statusText([], deps({ env: E2E_ENV }))).split("\n")[3];
+    expect(await keyLine()).toBe(`Payment key 1A2B 9F3C · unknown: the stored sign-in has expired (it renews on the next call, or run \`${RUN} login\`)`);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("a key with no sign-in, or no answer from Assay, is unknown too", async () => {
+    await seedProfile("e2e", { delegate: true });
+    addDevOrigin(dir, E2E_MCP);
+    const keyLine = async () => (await statusText([], deps({ env: E2E_ENV }))).split("\n")[3];
+    expect(await keyLine()).toBe(`Payment key 1A2B 9F3C · unknown while signed out · run \`${RUN} login\``);
+    seedSecret("default", "e2e", "refresh_token", "assay_rt_seed");
+    seedSecret("default", "e2e", "access_token", JSON.stringify({ token: "assay_at_seed", expiresAt: NOW + 600 }));
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response("", { status: 503 }));
+    expect(await keyLine()).toBe("Payment key 1A2B 9F3C · can't check with Assay right now");
+  });
+
+  it("paidCalls null: not bound when the API is sure, can't check when paidCallsUnknown (m2)", async () => {
+    await seedProfile("e2e", { delegate: true });
+    addDevOrigin(dir, E2E_MCP);
+    seedSecret("default", "e2e", "refresh_token", "assay_rt_seed");
+    seedSecret("default", "e2e", "access_token", JSON.stringify({ token: "assay_at_seed", expiresAt: NOW + 600 }));
+    let data: Record<string, unknown> = {};
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify({ data }), { status: 200, headers: { "content-type": "application/json" } }));
+    const keyLine = async () => (await statusText([], deps({ env: E2E_ENV }))).split("\n")[3];
+    data = { credentialId: CRED, paidCalls: null, paidCallsUnknown: false };
+    expect(await keyLine()).toBe(`Payment key 1A2B 9F3C · not bound to this sign-in · run \`${RUN} enable-paid\``);
+    data = { credentialId: CRED, paidCalls: null, paidCallsUnknown: true };
+    expect(await keyLine()).toBe("Payment key 1A2B 9F3C · can't check with Assay right now");
+    data = { credentialId: CRED, paidCalls: { status: "NONE" }, paidCallsUnknown: false };
+    expect(await keyLine()).toBe(`Payment key 1A2B 9F3C · not turned on · run \`${RUN} enable-paid\``);
   });
 
   it("refuses a dev profile while dev mode is off", async () => {
@@ -474,7 +518,7 @@ describe("login and logout (fake AS)", () => {
     await seedProfile("e2e");
     seedSecret("default", "e2e", "refresh_token", "assay_rt_unknown_to_the_server");
     expect(await runLogout([], deps({ env: E2E_ENV }))).toBe(0);
-    expect(output()).toContain("This signs out all 0 Assay servers on this computer.");
+    expect(output()).not.toContain("Assay servers on this computer");
     expect(output()).not.toContain("payment key was deleted");
     expect(keyring.entries.size).toBe(0);
     expect(readProfile(ref())).toBeNull();
@@ -671,13 +715,13 @@ describe("allow-paid / disallow-paid", () => {
     await seedProfile("production");
     confirmAnswer = true;
     const t = deps({ isTTY: true });
-    expect(await runPaidUrlChange("allow-paid", ["https://mcp.assay.ai/c/weather"], t)).toBe(0);
+    expect(await runPaidUrlChange("allow-paid", ["https://mcp.goassay.ai/c/weather"], t)).toBe(0);
     expect(readPaidUrls(ref())).toEqual(["/", "/c/weather"]);
     expect(await runPaidUrlChange("allow-paid", ["/c/weather"], t)).toBe(0);
     expect(output()).toContain("were already allowed");
     expect(await runPaidUrlChange("disallow-paid", ["/c/weather"], t)).toBe(0);
     expect(readPaidUrls(ref())).toEqual(["/"]);
-    expect(readFileSync(join(dir, profileFile("default", "paid-urls")), "utf8")).not.toContain("mcp.assay.ai");
+    expect(readFileSync(join(dir, profileFile("default", "paid-urls")), "utf8")).not.toContain("mcp.goassay.ai");
     // Asked once: allowing a URL already allowed, and disallowing, ask nothing.
     expect(confirmAsked).toHaveLength(1);
     expect(confirmAsked[0]).toContain('Type the profile name (default)');
@@ -810,14 +854,14 @@ describe("settings (env-proxy opt-in)", () => {
 });
 
 describe("doctor", () => {
-  const pinned = { command: "npx", args: ["-y", "@goassay-ai/mcp@1.2.3", "--url", "https://mcp.assay.ai/c/weather"] };
+  const pinned = { command: "npx", args: ["-y", "@goassay-ai/mcp@1.2.3", "--url", "https://mcp.goassay.ai/c/weather"] };
 
   it("flags env keys other than ASSAY_* on project-scope assay entries", async () => {
     writeFileSync(
       join(cwd, ".mcp.json"),
       JSON.stringify({
         mcpServers: {
-          assay: { ...pinned, env: { NODE_OPTIONS: "--require ./x.js", ASSAY_MCP_DEV_ORIGINS: "http://localhost:3200" } },
+          assay: { ...pinned, env: { NODE_OPTIONS: "--require ./x.js", ASSAY_MCP_DEV_ORIGINS: "http://localhost:3200", ASSAY_MCP_DEV_DEPLOYMENT: "anvil" } },
           "assay-ok": { type: "stdio", ...pinned, env: {} },
           unrelated: { command: "other", env: { NODE_OPTIONS: "--require ./y.js" } },
         },
@@ -830,6 +874,7 @@ describe("doctor", () => {
     const text = output();
     expect(text).toContain('server "assay" sets NODE_OPTIONS in its environment');
     expect(text).toContain('server "assay" asks for dev mode (ASSAY_MCP_DEV_ORIGINS)');
+    expect(text).toContain('server "assay" asks for dev mode (ASSAY_MCP_DEV_DEPLOYMENT)');
     expect(text).toContain('server "assay-ok" has nothing unexpected');
     expect(text).not.toContain('"unrelated"');
     expect(text).toContain('server "assay-x" loads its environment from a file (envFile)');
@@ -953,10 +998,10 @@ describe("Windows .cmd shims (CARRY 2.11)", () => {
   const exists = (p: string) => p === "C:\\Windows\\System32\\cmd.exe";
   it("runs an .exe directly and a .cmd through the absolute cmd.exe with strict quoting", () => {
     expect(invocationFor("C:\\Tools\\claude.exe", ["mcp", "add"], "win32", {}, exists)).toEqual({ file: "C:\\Tools\\claude.exe", args: ["mcp", "add"], windowsVerbatimArguments: false });
-    const inv = invocationFor("C:\\Users\\u\\AppData\\Roaming\\npm\\claude.cmd", ["mcp", "add", "--url", "https://mcp.assay.ai/?tools=a&free=1"], "win32", {}, exists);
+    const inv = invocationFor("C:\\Users\\u\\AppData\\Roaming\\npm\\claude.cmd", ["mcp", "add", "--url", "https://mcp.goassay.ai/?tools=a&free=1"], "win32", {}, exists);
     expect(inv.file).toBe("C:\\Windows\\System32\\cmd.exe");
     expect(inv.windowsVerbatimArguments).toBe(true);
-    expect(inv.args).toEqual(["/d", "/s", "/c", '""C:\\Users\\u\\AppData\\Roaming\\npm\\claude.cmd" "mcp" "add" "--url" "https://mcp.assay.ai/?tools=a&free=1""']);
+    expect(inv.args).toEqual(["/d", "/s", "/c", '""C:\\Users\\u\\AppData\\Roaming\\npm\\claude.cmd" "mcp" "add" "--url" "https://mcp.goassay.ai/?tools=a&free=1""']);
   });
 
   it.each(['a"b', "%PATH%", "!x!", "a^b", "a\nb", "trail\\", "a\u0000b", "$(x)", "a;b", "a|b"])("refuses %j through cmd.exe", (word) => {
@@ -1169,5 +1214,13 @@ describe("global guard (review I2)", () => {
     const { defaultProfileDeps } = await import("../src/commands/profile-context.js");
     expect(defaultProfileDeps().dir).toBe(configDir());
     expect(configDir().startsWith(testHome())).toBe(true);
+  });
+});
+
+describe("signsOutText", () => {
+  it("says nothing when add installed no server, and reads naturally for one", () => {
+    expect(signsOutText(0)).toBeNull();
+    expect(signsOutText(1)).toBe("This signs out the Assay server on this computer.");
+    expect(signsOutText(3)).toBe("This signs out all 3 Assay servers on this computer.");
   });
 });

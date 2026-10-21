@@ -10,7 +10,7 @@ import { usdToAtomic } from "@assay-core/guards/guards.js";
 import { pinnedFetch } from "@assay-core/net/fetch.js";
 import { assertSignerEnvironment, resolveDeployment, type ResolvedDeployment } from "@assay-core/profile/deployments.js";
 import { normaliseOrigin, DEV_ORIGINS_ENV } from "@assay-core/profile/dev-origins.js";
-import { apiRequest, BindError, bindDelegateKey, type ApiCall } from "@assay-core/proxy/delegate-bind.js";
+import { apiRequest, BIND_TEXTS, BindError, bindDelegateKey, type ApiCall } from "@assay-core/proxy/delegate-bind.js";
 import {
   appendText,
   debtSuffix,
@@ -32,6 +32,9 @@ import pkg from "../package.json" with { type: "json" };
 import { PaidCalls } from "./paid.js";
 import { isSigner, resolveSigner, type Signer } from "./signers.js";
 import type { AssayClientOptions, AssayTool, CallResult, DelegateBinding, Refusal } from "./types.js";
+
+const ALREADY_BOUND_TEXT =
+  "Paid calls could not be set up: this payment key is already bound to another Assay agent credential. Use a key of this agent's own, or revoke the other credential.";
 
 const RECEIPT_META = "assay/receipt";
 /** Dollar caps are parsed with the guards' own parser; the built-in asset has 6 decimals. */
@@ -276,7 +279,11 @@ export class AssayClient {
     try {
       await bindDelegateKey({ account, api: (m, p, b) => this.#api(m, p, b), environment: deployment.environment, network, credentialId, now: Date.now });
     } catch (err) {
-      if (err instanceof BindError) throw new AssayConfigError(err.message);
+      if (err instanceof BindError) {
+        // The CLI's text for this refusal names its logout/login; an SDK caller holds its own key.
+        if (err.message === BIND_TEXTS.alreadyBound) throw new AssayConfigError(ALREADY_BOUND_TEXT);
+        throw new AssayConfigError(err.message);
+      }
       throw err;
     }
     this.#credentialId = credentialId;

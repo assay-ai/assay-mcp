@@ -193,6 +193,8 @@ export class FakeAssay {
   beforeChallenge: (() => Promise<void>) | null = null;
   /** Delay before every MCP answer, ms. */
   delayMs = 0;
+  /** `GET /agents/me/delegate/status` exists (false: an older backend, which answers 404). */
+  statusRoute = true;
   /** The bearers this server accepts: the API key, and an OAuth access token a test adds. */
   readonly bearers = new Set<string>([API_KEY]);
   readonly calls: SeenCall[] = [];
@@ -329,6 +331,11 @@ export class FakeAssay {
       if (signer === null || getAddress(signer) !== c.delegate) return this.send(res, 400, { message: "ACCOUNT_DELEGATE_SIGNATURE_INVALID" });
       this.delegate = c.delegate;
       return this.send(res, 201, { data: { credentialId: CREDENTIAL_ID, agentLabel: "agent", delegate: caip(this.bindAnswerDelegate ?? c.delegate), boundAt: new Date().toISOString() } });
+    }
+    if (method === "GET" && path === "/agents/me/delegate/status" && this.statusRoute) {
+      return this.send(res, 200, {
+        data: { credentialId: CREDENTIAL_ID, agentLabel: "agent", bound: this.delegate !== null, delegate: this.delegate ? caip(this.delegate) : null, boundAt: null },
+      });
     }
     if (method === "GET" && path === "/agents/me/delegate") {
       const g = this.delegate ? this.grants.get(this.delegate.toLowerCase()) : undefined;
