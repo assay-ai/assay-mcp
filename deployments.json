@@ -1,7 +1,7 @@
 {
   "production": {
-    "mcp": "https://mcp.assay.ai",
-    "issuer": "https://mcp.assay.ai",
+    "mcp": "https://mcp.goassay.ai",
+    "issuer": "https://mcp.goassay.ai",
     "api": "<API from ops config>",
     "web": "<WEB from ops config>",
     "networks": {
@@ -14,10 +14,10 @@
     }
   },
   "staging": {
-    "mcp": "<staging MCP>",
-    "issuer": "<staging issuer>",
-    "api": "<staging API>",
-    "web": "<staging WEB>",
+    "mcp": "https://mcp-dev.goassay.ai",
+    "issuer": "https://mcp-dev.goassay.ai",
+    "api": "https://api-dev.goassay.ai/api/v1",
+    "web": "https://portal-dev.goassay.ai",
     "networks": {
       "eip155:46630": {
         "escrow": "<staging escrow CAIP-10>",

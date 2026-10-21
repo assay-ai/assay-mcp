@@ -31,8 +31,8 @@ describe("deployments.json", () => {
   });
 
   it("production MCP and issuer are the public host", () => {
-    expect(table.production.mcp).toBe("https://mcp.assay.ai");
-    expect(table.production.issuer).toBe("https://mcp.assay.ai");
+    expect(table.production.mcp).toBe("https://mcp.goassay.ai");
+    expect(table.production.issuer).toBe("https://mcp.goassay.ai");
   });
 
   it("every escrow is CAIP-10 and asset CAIP-19", () => {

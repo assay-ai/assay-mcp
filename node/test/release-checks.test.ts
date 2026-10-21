@@ -151,7 +151,9 @@ describe("check-deployments (release)", () => {
     expect(errors).toContain("production.api is a placeholder: <API from ops config>");
     expect(errors).toContain("production.networks.eip155:46630.rpc[0] is a placeholder: <operator RPC>");
     expect(errors).toContain("staging.networks.eip155:46630.escrow is a placeholder: <staging escrow CAIP-10>");
-    expect(errors).toContain("staging.mcp is a placeholder: <staging MCP>");
+    expect(errors).toContain("staging.networks.eip155:46630.rpc[0] is a placeholder: <staging operator RPC>");
+    // The staging hosts are filled in; only its chain values are still to come.
+    expect(errors.some((e) => /^staging\.(mcp|issuer|api|web) /.test(e))).toBe(false);
   });
 
   it("accepts a filled table with 2 distinct hosts", () => {

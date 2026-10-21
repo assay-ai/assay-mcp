@@ -257,8 +257,8 @@ describe("status", () => {
       lock.assertHeld();
     });
     seedInstalls([
-      { name: "assay", url: "https://mcp.assay.ai/" },
-      { name: "weather", url: "https://mcp.assay.ai/c/weather" },
+      { name: "assay", url: "https://mcp.goassay.ai/" },
+      { name: "weather", url: "https://mcp.goassay.ai/c/weather" },
     ]);
     chainResult = {
       ok: true,
@@ -279,7 +279,7 @@ describe("status", () => {
     expect(stdout).not.toHaveBeenCalled();
     expect(output()).toBe(
       [
-        "Profile     default  (https://mcp.assay.ai)",
+        "Profile     default  (https://mcp.goassay.ai)",
         "Signed in   yes · Assay app on this Mac · credential 3f2a1b9c (OAuth)",
         "Agent       research-bot",
         "Payment key 1A2B 9F3C · on (read from chain) · $0.50 a call · $5 per 24 h · until 2026-11-18",
@@ -313,7 +313,7 @@ describe("status", () => {
   it("signed out, with no profile: defaults and no key", async () => {
     expect(await runStatus([], deps({ platform: "linux" }))).toBe(0);
     const lines = output().split("\n");
-    expect(lines[0]).toBe("Profile     default  (https://mcp.assay.ai)");
+    expect(lines[0]).toBe("Profile     default  (https://mcp.goassay.ai)");
     expect(lines[1]).toBe(`Signed in   no · run \`${RUN} login\``);
     expect(lines[3]).toBe("Payment key none yet · made on the first paid call");
     expect(lines[4]).toBe("Local caps  $0.50 a call · $5 per 24 h · spent today $0 · confirm above: off · providers: any");
@@ -715,13 +715,13 @@ describe("allow-paid / disallow-paid", () => {
     await seedProfile("production");
     confirmAnswer = true;
     const t = deps({ isTTY: true });
-    expect(await runPaidUrlChange("allow-paid", ["https://mcp.assay.ai/c/weather"], t)).toBe(0);
+    expect(await runPaidUrlChange("allow-paid", ["https://mcp.goassay.ai/c/weather"], t)).toBe(0);
     expect(readPaidUrls(ref())).toEqual(["/", "/c/weather"]);
     expect(await runPaidUrlChange("allow-paid", ["/c/weather"], t)).toBe(0);
     expect(output()).toContain("were already allowed");
     expect(await runPaidUrlChange("disallow-paid", ["/c/weather"], t)).toBe(0);
     expect(readPaidUrls(ref())).toEqual(["/"]);
-    expect(readFileSync(join(dir, profileFile("default", "paid-urls")), "utf8")).not.toContain("mcp.assay.ai");
+    expect(readFileSync(join(dir, profileFile("default", "paid-urls")), "utf8")).not.toContain("mcp.goassay.ai");
     // Asked once: allowing a URL already allowed, and disallowing, ask nothing.
     expect(confirmAsked).toHaveLength(1);
     expect(confirmAsked[0]).toContain('Type the profile name (default)');
@@ -854,7 +854,7 @@ describe("settings (env-proxy opt-in)", () => {
 });
 
 describe("doctor", () => {
-  const pinned = { command: "npx", args: ["-y", "@goassay-ai/mcp@1.2.3", "--url", "https://mcp.assay.ai/c/weather"] };
+  const pinned = { command: "npx", args: ["-y", "@goassay-ai/mcp@1.2.3", "--url", "https://mcp.goassay.ai/c/weather"] };
 
   it("flags env keys other than ASSAY_* on project-scope assay entries", async () => {
     writeFileSync(
@@ -998,10 +998,10 @@ describe("Windows .cmd shims (CARRY 2.11)", () => {
   const exists = (p: string) => p === "C:\\Windows\\System32\\cmd.exe";
   it("runs an .exe directly and a .cmd through the absolute cmd.exe with strict quoting", () => {
     expect(invocationFor("C:\\Tools\\claude.exe", ["mcp", "add"], "win32", {}, exists)).toEqual({ file: "C:\\Tools\\claude.exe", args: ["mcp", "add"], windowsVerbatimArguments: false });
-    const inv = invocationFor("C:\\Users\\u\\AppData\\Roaming\\npm\\claude.cmd", ["mcp", "add", "--url", "https://mcp.assay.ai/?tools=a&free=1"], "win32", {}, exists);
+    const inv = invocationFor("C:\\Users\\u\\AppData\\Roaming\\npm\\claude.cmd", ["mcp", "add", "--url", "https://mcp.goassay.ai/?tools=a&free=1"], "win32", {}, exists);
     expect(inv.file).toBe("C:\\Windows\\System32\\cmd.exe");
     expect(inv.windowsVerbatimArguments).toBe(true);
-    expect(inv.args).toEqual(["/d", "/s", "/c", '""C:\\Users\\u\\AppData\\Roaming\\npm\\claude.cmd" "mcp" "add" "--url" "https://mcp.assay.ai/?tools=a&free=1""']);
+    expect(inv.args).toEqual(["/d", "/s", "/c", '""C:\\Users\\u\\AppData\\Roaming\\npm\\claude.cmd" "mcp" "add" "--url" "https://mcp.goassay.ai/?tools=a&free=1""']);
   });
 
   it.each(['a"b', "%PATH%", "!x!", "a^b", "a\nb", "trail\\", "a\u0000b", "$(x)", "a;b", "a|b"])("refuses %j through cmd.exe", (word) => {

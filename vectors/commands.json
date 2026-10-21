@@ -6,7 +6,7 @@
       "client": "claude-code",
       "input": {
         "V": "1.2.3",
-        "url": "https://mcp.assay.ai/",
+        "url": "https://mcp.goassay.ai/",
         "name": "assay"
       },
       "command": "claude mcp add --scope user assay -- npx -y @goassay-ai/mcp@1.2.3 --name assay",
@@ -20,13 +20,13 @@
         ]
       },
       "link": null,
-      "remote": "claude mcp add --transport http --scope user assay https://mcp.assay.ai/"
+      "remote": "claude mcp add --transport http --scope user assay https://mcp.goassay.ai/"
     },
     {
       "client": "codex",
       "input": {
         "V": "1.2.3",
-        "url": "https://mcp.assay.ai/",
+        "url": "https://mcp.goassay.ai/",
         "name": "assay"
       },
       "command": "codex mcp add assay -- npx -y @goassay-ai/mcp@1.2.3 --name assay",
@@ -40,13 +40,13 @@
         ]
       },
       "link": null,
-      "remote": "codex mcp add assay --url https://mcp.assay.ai/"
+      "remote": "codex mcp add assay --url https://mcp.goassay.ai/"
     },
     {
       "client": "cursor",
       "input": {
         "V": "1.2.3",
-        "url": "https://mcp.assay.ai/",
+        "url": "https://mcp.goassay.ai/",
         "name": "assay"
       },
       "command": {
@@ -75,7 +75,7 @@
       "remote": {
         "mcpServers": {
           "assay": {
-            "url": "https://mcp.assay.ai/"
+            "url": "https://mcp.goassay.ai/"
           }
         }
       }
@@ -84,7 +84,7 @@
       "client": "vscode",
       "input": {
         "V": "1.2.3",
-        "url": "https://mcp.assay.ai/",
+        "url": "https://mcp.goassay.ai/",
         "name": "assay"
       },
       "command": "code --add-mcp '{\"name\":\"assay\",\"type\":\"stdio\",\"command\":\"npx\",\"args\":[\"-y\",\"@goassay-ai/mcp@1.2.3\",\"--name\",\"assay\"]}'",
@@ -102,14 +102,14 @@
       "remote": {
         "name": "assay",
         "type": "http",
-        "url": "https://mcp.assay.ai/"
+        "url": "https://mcp.goassay.ai/"
       }
     },
     {
       "client": "windsurf",
       "input": {
         "V": "1.2.3",
-        "url": "https://mcp.assay.ai/",
+        "url": "https://mcp.goassay.ai/",
         "name": "assay"
       },
       "command": {
@@ -138,7 +138,7 @@
       "remote": {
         "mcpServers": {
           "assay": {
-            "serverUrl": "https://mcp.assay.ai/"
+            "serverUrl": "https://mcp.goassay.ai/"
           }
         }
       }
@@ -147,7 +147,7 @@
       "client": "gemini",
       "input": {
         "V": "1.2.3",
-        "url": "https://mcp.assay.ai/",
+        "url": "https://mcp.goassay.ai/",
         "name": "assay"
       },
       "command": "gemini mcp add --scope user assay npx -y @goassay-ai/mcp@1.2.3 --name assay",
@@ -161,13 +161,13 @@
         ]
       },
       "link": null,
-      "remote": "gemini mcp add --transport http --scope user assay https://mcp.assay.ai/"
+      "remote": "gemini mcp add --transport http --scope user assay https://mcp.goassay.ai/"
     },
     {
       "client": "claude-desktop",
       "input": {
         "V": "1.2.3",
-        "url": "https://mcp.assay.ai/",
+        "url": "https://mcp.goassay.ai/",
         "name": "assay"
       },
       "command": {
@@ -199,51 +199,51 @@
       "client": "claude-code",
       "input": {
         "V": "1.2.3",
-        "url": "https://mcp.assay.ai/my/weather",
+        "url": "https://mcp.goassay.ai/my/weather",
         "name": "assay-weather"
       },
-      "command": "claude mcp add --scope user assay-weather -- npx -y @goassay-ai/mcp@1.2.3 --url https://mcp.assay.ai/my/weather --name assay-weather",
+      "command": "claude mcp add --scope user assay-weather -- npx -y @goassay-ai/mcp@1.2.3 --url https://mcp.goassay.ai/my/weather --name assay-weather",
       "entry": {
         "command": "npx",
         "args": [
           "-y",
           "@goassay-ai/mcp@1.2.3",
           "--url",
-          "https://mcp.assay.ai/my/weather",
+          "https://mcp.goassay.ai/my/weather",
           "--name",
           "assay-weather"
         ]
       },
       "link": null,
-      "remote": "claude mcp add --transport http --scope user assay-weather https://mcp.assay.ai/my/weather"
+      "remote": "claude mcp add --transport http --scope user assay-weather https://mcp.goassay.ai/my/weather"
     },
     {
       "client": "codex",
       "input": {
         "V": "1.2.3",
-        "url": "https://mcp.assay.ai/my/weather",
+        "url": "https://mcp.goassay.ai/my/weather",
         "name": "assay-weather"
       },
-      "command": "codex mcp add assay-weather -- npx -y @goassay-ai/mcp@1.2.3 --url https://mcp.assay.ai/my/weather --name assay-weather",
+      "command": "codex mcp add assay-weather -- npx -y @goassay-ai/mcp@1.2.3 --url https://mcp.goassay.ai/my/weather --name assay-weather",
       "entry": {
         "command": "npx",
         "args": [
           "-y",
           "@goassay-ai/mcp@1.2.3",
           "--url",
-          "https://mcp.assay.ai/my/weather",
+          "https://mcp.goassay.ai/my/weather",
           "--name",
           "assay-weather"
         ]
       },
       "link": null,
-      "remote": "codex mcp add assay-weather --url https://mcp.assay.ai/my/weather"
+      "remote": "codex mcp add assay-weather --url https://mcp.goassay.ai/my/weather"
     },
     {
       "client": "cursor",
       "input": {
         "V": "1.2.3",
-        "url": "https://mcp.assay.ai/my/weather",
+        "url": "https://mcp.goassay.ai/my/weather",
         "name": "assay-weather"
       },
       "command": {
@@ -254,7 +254,7 @@
               "-y",
               "@goassay-ai/mcp@1.2.3",
               "--url",
-              "https://mcp.assay.ai/my/weather",
+              "https://mcp.goassay.ai/my/weather",
               "--name",
               "assay-weather"
             ]
@@ -267,16 +267,16 @@
           "-y",
           "@goassay-ai/mcp@1.2.3",
           "--url",
-          "https://mcp.assay.ai/my/weather",
+          "https://mcp.goassay.ai/my/weather",
           "--name",
           "assay-weather"
         ]
       },
-      "link": "cursor://anysphere.cursor-deeplink/mcp/install?name=assay-weather&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkBnb2Fzc2F5LWFpL21jcEAxLjIuMyIsIi0tdXJsIiwiaHR0cHM6Ly9tY3AuYXNzYXkuYWkvbXkvd2VhdGhlciIsIi0tbmFtZSIsImFzc2F5LXdlYXRoZXIiXX0%3D",
+      "link": "cursor://anysphere.cursor-deeplink/mcp/install?name=assay-weather&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkBnb2Fzc2F5LWFpL21jcEAxLjIuMyIsIi0tdXJsIiwiaHR0cHM6Ly9tY3AuZ29hc3NheS5haS9teS93ZWF0aGVyIiwiLS1uYW1lIiwiYXNzYXktd2VhdGhlciJdfQ%3D%3D",
       "remote": {
         "mcpServers": {
           "assay-weather": {
-            "url": "https://mcp.assay.ai/my/weather"
+            "url": "https://mcp.goassay.ai/my/weather"
           }
         }
       }
@@ -285,10 +285,10 @@
       "client": "vscode",
       "input": {
         "V": "1.2.3",
-        "url": "https://mcp.assay.ai/my/weather",
+        "url": "https://mcp.goassay.ai/my/weather",
         "name": "assay-weather"
       },
-      "command": "code --add-mcp '{\"name\":\"assay-weather\",\"type\":\"stdio\",\"command\":\"npx\",\"args\":[\"-y\",\"@goassay-ai/mcp@1.2.3\",\"--url\",\"https://mcp.assay.ai/my/weather\",\"--name\",\"assay-weather\"]}'",
+      "command": "code --add-mcp '{\"name\":\"assay-weather\",\"type\":\"stdio\",\"command\":\"npx\",\"args\":[\"-y\",\"@goassay-ai/mcp@1.2.3\",\"--url\",\"https://mcp.goassay.ai/my/weather\",\"--name\",\"assay-weather\"]}'",
       "entry": {
         "type": "stdio",
         "command": "npx",
@@ -296,23 +296,23 @@
           "-y",
           "@goassay-ai/mcp@1.2.3",
           "--url",
-          "https://mcp.assay.ai/my/weather",
+          "https://mcp.goassay.ai/my/weather",
           "--name",
           "assay-weather"
         ]
       },
-      "link": "vscode:mcp/install?%7B%22name%22%3A%22assay-weather%22%2C%22type%22%3A%22stdio%22%2C%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40goassay-ai%2Fmcp%401.2.3%22%2C%22--url%22%2C%22https%3A%2F%2Fmcp.assay.ai%2Fmy%2Fweather%22%2C%22--name%22%2C%22assay-weather%22%5D%7D",
+      "link": "vscode:mcp/install?%7B%22name%22%3A%22assay-weather%22%2C%22type%22%3A%22stdio%22%2C%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40goassay-ai%2Fmcp%401.2.3%22%2C%22--url%22%2C%22https%3A%2F%2Fmcp.goassay.ai%2Fmy%2Fweather%22%2C%22--name%22%2C%22assay-weather%22%5D%7D",
       "remote": {
         "name": "assay-weather",
         "type": "http",
-        "url": "https://mcp.assay.ai/my/weather"
+        "url": "https://mcp.goassay.ai/my/weather"
       }
     },
     {
       "client": "windsurf",
       "input": {
         "V": "1.2.3",
-        "url": "https://mcp.assay.ai/my/weather",
+        "url": "https://mcp.goassay.ai/my/weather",
         "name": "assay-weather"
       },
       "command": {
@@ -323,7 +323,7 @@
               "-y",
               "@goassay-ai/mcp@1.2.3",
               "--url",
-              "https://mcp.assay.ai/my/weather",
+              "https://mcp.goassay.ai/my/weather",
               "--name",
               "assay-weather"
             ]
@@ -336,7 +336,7 @@
           "-y",
           "@goassay-ai/mcp@1.2.3",
           "--url",
-          "https://mcp.assay.ai/my/weather",
+          "https://mcp.goassay.ai/my/weather",
           "--name",
           "assay-weather"
         ]
@@ -345,7 +345,7 @@
       "remote": {
         "mcpServers": {
           "assay-weather": {
-            "serverUrl": "https://mcp.assay.ai/my/weather"
+            "serverUrl": "https://mcp.goassay.ai/my/weather"
           }
         }
       }
@@ -354,29 +354,29 @@
       "client": "gemini",
       "input": {
         "V": "1.2.3",
-        "url": "https://mcp.assay.ai/my/weather",
+        "url": "https://mcp.goassay.ai/my/weather",
         "name": "assay-weather"
       },
-      "command": "gemini mcp add --scope user assay-weather npx -y @goassay-ai/mcp@1.2.3 --url https://mcp.assay.ai/my/weather --name assay-weather",
+      "command": "gemini mcp add --scope user assay-weather npx -y @goassay-ai/mcp@1.2.3 --url https://mcp.goassay.ai/my/weather --name assay-weather",
       "entry": {
         "command": "npx",
         "args": [
           "-y",
           "@goassay-ai/mcp@1.2.3",
           "--url",
-          "https://mcp.assay.ai/my/weather",
+          "https://mcp.goassay.ai/my/weather",
           "--name",
           "assay-weather"
         ]
       },
       "link": null,
-      "remote": "gemini mcp add --transport http --scope user assay-weather https://mcp.assay.ai/my/weather"
+      "remote": "gemini mcp add --transport http --scope user assay-weather https://mcp.goassay.ai/my/weather"
     },
     {
       "client": "claude-desktop",
       "input": {
         "V": "1.2.3",
-        "url": "https://mcp.assay.ai/my/weather",
+        "url": "https://mcp.goassay.ai/my/weather",
         "name": "assay-weather"
       },
       "command": {
@@ -387,7 +387,7 @@
               "-y",
               "@goassay-ai/mcp@1.2.3",
               "--url",
-              "https://mcp.assay.ai/my/weather",
+              "https://mcp.goassay.ai/my/weather",
               "--name",
               "assay-weather"
             ]
@@ -400,7 +400,7 @@
           "-y",
           "@goassay-ai/mcp@1.2.3",
           "--url",
-          "https://mcp.assay.ai/my/weather",
+          "https://mcp.goassay.ai/my/weather",
           "--name",
           "assay-weather"
         ]
@@ -412,51 +412,51 @@
       "client": "claude-code",
       "input": {
         "V": "1.2.3",
-        "url": "https://mcp.assay.ai/@acme/weather-kit@3",
+        "url": "https://mcp.goassay.ai/@acme/weather-kit@3",
         "name": "assay-weather-kit"
       },
-      "command": "claude mcp add --scope user assay-weather-kit -- npx -y @goassay-ai/mcp@1.2.3 --url https://mcp.assay.ai/@acme/weather-kit@3 --name assay-weather-kit",
+      "command": "claude mcp add --scope user assay-weather-kit -- npx -y @goassay-ai/mcp@1.2.3 --url https://mcp.goassay.ai/@acme/weather-kit@3 --name assay-weather-kit",
       "entry": {
         "command": "npx",
         "args": [
           "-y",
           "@goassay-ai/mcp@1.2.3",
           "--url",
-          "https://mcp.assay.ai/@acme/weather-kit@3",
+          "https://mcp.goassay.ai/@acme/weather-kit@3",
           "--name",
           "assay-weather-kit"
         ]
       },
       "link": null,
-      "remote": "claude mcp add --transport http --scope user assay-weather-kit https://mcp.assay.ai/@acme/weather-kit@3"
+      "remote": "claude mcp add --transport http --scope user assay-weather-kit https://mcp.goassay.ai/@acme/weather-kit@3"
     },
     {
       "client": "codex",
       "input": {
         "V": "1.2.3",
-        "url": "https://mcp.assay.ai/@acme/weather-kit@3",
+        "url": "https://mcp.goassay.ai/@acme/weather-kit@3",
         "name": "assay-weather-kit"
       },
-      "command": "codex mcp add assay-weather-kit -- npx -y @goassay-ai/mcp@1.2.3 --url https://mcp.assay.ai/@acme/weather-kit@3 --name assay-weather-kit",
+      "command": "codex mcp add assay-weather-kit -- npx -y @goassay-ai/mcp@1.2.3 --url https://mcp.goassay.ai/@acme/weather-kit@3 --name assay-weather-kit",
       "entry": {
         "command": "npx",
         "args": [
           "-y",
           "@goassay-ai/mcp@1.2.3",
           "--url",
-          "https://mcp.assay.ai/@acme/weather-kit@3",
+          "https://mcp.goassay.ai/@acme/weather-kit@3",
           "--name",
           "assay-weather-kit"
         ]
       },
       "link": null,
-      "remote": "codex mcp add assay-weather-kit --url https://mcp.assay.ai/@acme/weather-kit@3"
+      "remote": "codex mcp add assay-weather-kit --url https://mcp.goassay.ai/@acme/weather-kit@3"
     },
     {
       "client": "cursor",
       "input": {
         "V": "1.2.3",
-        "url": "https://mcp.assay.ai/@acme/weather-kit@3",
+        "url": "https://mcp.goassay.ai/@acme/weather-kit@3",
         "name": "assay-weather-kit"
       },
       "command": {
@@ -467,7 +467,7 @@
               "-y",
               "@goassay-ai/mcp@1.2.3",
               "--url",
-              "https://mcp.assay.ai/@acme/weather-kit@3",
+              "https://mcp.goassay.ai/@acme/weather-kit@3",
               "--name",
               "assay-weather-kit"
             ]
@@ -480,16 +480,16 @@
           "-y",
           "@goassay-ai/mcp@1.2.3",
           "--url",
-          "https://mcp.assay.ai/@acme/weather-kit@3",
+          "https://mcp.goassay.ai/@acme/weather-kit@3",
           "--name",
           "assay-weather-kit"
         ]
       },
-      "link": "cursor://anysphere.cursor-deeplink/mcp/install?name=assay-weather-kit&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkBnb2Fzc2F5LWFpL21jcEAxLjIuMyIsIi0tdXJsIiwiaHR0cHM6Ly9tY3AuYXNzYXkuYWkvQGFjbWUvd2VhdGhlci1raXRAMyIsIi0tbmFtZSIsImFzc2F5LXdlYXRoZXIta2l0Il19",
+      "link": "cursor://anysphere.cursor-deeplink/mcp/install?name=assay-weather-kit&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkBnb2Fzc2F5LWFpL21jcEAxLjIuMyIsIi0tdXJsIiwiaHR0cHM6Ly9tY3AuZ29hc3NheS5haS9AYWNtZS93ZWF0aGVyLWtpdEAzIiwiLS1uYW1lIiwiYXNzYXktd2VhdGhlci1raXQiXX0%3D",
       "remote": {
         "mcpServers": {
           "assay-weather-kit": {
-            "url": "https://mcp.assay.ai/@acme/weather-kit@3"
+            "url": "https://mcp.goassay.ai/@acme/weather-kit@3"
           }
         }
       }
@@ -498,10 +498,10 @@
       "client": "vscode",
       "input": {
         "V": "1.2.3",
-        "url": "https://mcp.assay.ai/@acme/weather-kit@3",
+        "url": "https://mcp.goassay.ai/@acme/weather-kit@3",
         "name": "assay-weather-kit"
       },
-      "command": "code --add-mcp '{\"name\":\"assay-weather-kit\",\"type\":\"stdio\",\"command\":\"npx\",\"args\":[\"-y\",\"@goassay-ai/mcp@1.2.3\",\"--url\",\"https://mcp.assay.ai/@acme/weather-kit@3\",\"--name\",\"assay-weather-kit\"]}'",
+      "command": "code --add-mcp '{\"name\":\"assay-weather-kit\",\"type\":\"stdio\",\"command\":\"npx\",\"args\":[\"-y\",\"@goassay-ai/mcp@1.2.3\",\"--url\",\"https://mcp.goassay.ai/@acme/weather-kit@3\",\"--name\",\"assay-weather-kit\"]}'",
       "entry": {
         "type": "stdio",
         "command": "npx",
@@ -509,23 +509,23 @@
           "-y",
           "@goassay-ai/mcp@1.2.3",
           "--url",
-          "https://mcp.assay.ai/@acme/weather-kit@3",
+          "https://mcp.goassay.ai/@acme/weather-kit@3",
           "--name",
           "assay-weather-kit"
         ]
       },
-      "link": "vscode:mcp/install?%7B%22name%22%3A%22assay-weather-kit%22%2C%22type%22%3A%22stdio%22%2C%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40goassay-ai%2Fmcp%401.2.3%22%2C%22--url%22%2C%22https%3A%2F%2Fmcp.assay.ai%2F%40acme%2Fweather-kit%403%22%2C%22--name%22%2C%22assay-weather-kit%22%5D%7D",
+      "link": "vscode:mcp/install?%7B%22name%22%3A%22assay-weather-kit%22%2C%22type%22%3A%22stdio%22%2C%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40goassay-ai%2Fmcp%401.2.3%22%2C%22--url%22%2C%22https%3A%2F%2Fmcp.goassay.ai%2F%40acme%2Fweather-kit%403%22%2C%22--name%22%2C%22assay-weather-kit%22%5D%7D",
       "remote": {
         "name": "assay-weather-kit",
         "type": "http",
-        "url": "https://mcp.assay.ai/@acme/weather-kit@3"
+        "url": "https://mcp.goassay.ai/@acme/weather-kit@3"
       }
     },
     {
       "client": "windsurf",
       "input": {
         "V": "1.2.3",
-        "url": "https://mcp.assay.ai/@acme/weather-kit@3",
+        "url": "https://mcp.goassay.ai/@acme/weather-kit@3",
         "name": "assay-weather-kit"
       },
       "command": {
@@ -536,7 +536,7 @@
               "-y",
               "@goassay-ai/mcp@1.2.3",
               "--url",
-              "https://mcp.assay.ai/@acme/weather-kit@3",
+              "https://mcp.goassay.ai/@acme/weather-kit@3",
               "--name",
               "assay-weather-kit"
             ]
@@ -549,7 +549,7 @@
           "-y",
           "@goassay-ai/mcp@1.2.3",
           "--url",
-          "https://mcp.assay.ai/@acme/weather-kit@3",
+          "https://mcp.goassay.ai/@acme/weather-kit@3",
           "--name",
           "assay-weather-kit"
         ]
@@ -558,7 +558,7 @@
       "remote": {
         "mcpServers": {
           "assay-weather-kit": {
-            "serverUrl": "https://mcp.assay.ai/@acme/weather-kit@3"
+            "serverUrl": "https://mcp.goassay.ai/@acme/weather-kit@3"
           }
         }
       }
@@ -567,29 +567,29 @@
       "client": "gemini",
       "input": {
         "V": "1.2.3",
-        "url": "https://mcp.assay.ai/@acme/weather-kit@3",
+        "url": "https://mcp.goassay.ai/@acme/weather-kit@3",
         "name": "assay-weather-kit"
       },
-      "command": "gemini mcp add --scope user assay-weather-kit npx -y @goassay-ai/mcp@1.2.3 --url https://mcp.assay.ai/@acme/weather-kit@3 --name assay-weather-kit",
+      "command": "gemini mcp add --scope user assay-weather-kit npx -y @goassay-ai/mcp@1.2.3 --url https://mcp.goassay.ai/@acme/weather-kit@3 --name assay-weather-kit",
       "entry": {
         "command": "npx",
         "args": [
           "-y",
           "@goassay-ai/mcp@1.2.3",
           "--url",
-          "https://mcp.assay.ai/@acme/weather-kit@3",
+          "https://mcp.goassay.ai/@acme/weather-kit@3",
           "--name",
           "assay-weather-kit"
         ]
       },
       "link": null,
-      "remote": "gemini mcp add --transport http --scope user assay-weather-kit https://mcp.assay.ai/@acme/weather-kit@3"
+      "remote": "gemini mcp add --transport http --scope user assay-weather-kit https://mcp.goassay.ai/@acme/weather-kit@3"
     },
     {
       "client": "claude-desktop",
       "input": {
         "V": "1.2.3",
-        "url": "https://mcp.assay.ai/@acme/weather-kit@3",
+        "url": "https://mcp.goassay.ai/@acme/weather-kit@3",
         "name": "assay-weather-kit"
       },
       "command": {
@@ -600,7 +600,7 @@
               "-y",
               "@goassay-ai/mcp@1.2.3",
               "--url",
-              "https://mcp.assay.ai/@acme/weather-kit@3",
+              "https://mcp.goassay.ai/@acme/weather-kit@3",
               "--name",
               "assay-weather-kit"
             ]
@@ -613,7 +613,7 @@
           "-y",
           "@goassay-ai/mcp@1.2.3",
           "--url",
-          "https://mcp.assay.ai/@acme/weather-kit@3",
+          "https://mcp.goassay.ai/@acme/weather-kit@3",
           "--name",
           "assay-weather-kit"
         ]
@@ -625,51 +625,51 @@
       "client": "claude-code",
       "input": {
         "V": "1.2.3",
-        "url": "https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1",
+        "url": "https://mcp.goassay.ai/?tools=get_weather,get_forecast&free=1",
         "name": "assay-get"
       },
-      "command": "claude mcp add --scope user assay-get -- npx -y @goassay-ai/mcp@1.2.3 --url 'https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1' --name assay-get",
+      "command": "claude mcp add --scope user assay-get -- npx -y @goassay-ai/mcp@1.2.3 --url 'https://mcp.goassay.ai/?tools=get_weather,get_forecast&free=1' --name assay-get",
       "entry": {
         "command": "npx",
         "args": [
           "-y",
           "@goassay-ai/mcp@1.2.3",
           "--url",
-          "https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1",
+          "https://mcp.goassay.ai/?tools=get_weather,get_forecast&free=1",
           "--name",
           "assay-get"
         ]
       },
       "link": null,
-      "remote": "claude mcp add --transport http --scope user assay-get 'https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1'"
+      "remote": "claude mcp add --transport http --scope user assay-get 'https://mcp.goassay.ai/?tools=get_weather,get_forecast&free=1'"
     },
     {
       "client": "codex",
       "input": {
         "V": "1.2.3",
-        "url": "https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1",
+        "url": "https://mcp.goassay.ai/?tools=get_weather,get_forecast&free=1",
         "name": "assay-get"
       },
-      "command": "codex mcp add assay-get -- npx -y @goassay-ai/mcp@1.2.3 --url 'https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1' --name assay-get",
+      "command": "codex mcp add assay-get -- npx -y @goassay-ai/mcp@1.2.3 --url 'https://mcp.goassay.ai/?tools=get_weather,get_forecast&free=1' --name assay-get",
       "entry": {
         "command": "npx",
         "args": [
           "-y",
           "@goassay-ai/mcp@1.2.3",
           "--url",
-          "https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1",
+          "https://mcp.goassay.ai/?tools=get_weather,get_forecast&free=1",
           "--name",
           "assay-get"
         ]
       },
       "link": null,
-      "remote": "codex mcp add assay-get --url 'https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1'"
+      "remote": "codex mcp add assay-get --url 'https://mcp.goassay.ai/?tools=get_weather,get_forecast&free=1'"
     },
     {
       "client": "cursor",
       "input": {
         "V": "1.2.3",
-        "url": "https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1",
+        "url": "https://mcp.goassay.ai/?tools=get_weather,get_forecast&free=1",
         "name": "assay-get"
       },
       "command": {
@@ -680,7 +680,7 @@
               "-y",
               "@goassay-ai/mcp@1.2.3",
               "--url",
-              "https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1",
+              "https://mcp.goassay.ai/?tools=get_weather,get_forecast&free=1",
               "--name",
               "assay-get"
             ]
@@ -693,16 +693,16 @@
           "-y",
           "@goassay-ai/mcp@1.2.3",
           "--url",
-          "https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1",
+          "https://mcp.goassay.ai/?tools=get_weather,get_forecast&free=1",
           "--name",
           "assay-get"
         ]
       },
-      "link": "cursor://anysphere.cursor-deeplink/mcp/install?name=assay-get&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkBnb2Fzc2F5LWFpL21jcEAxLjIuMyIsIi0tdXJsIiwiaHR0cHM6Ly9tY3AuYXNzYXkuYWkvP3Rvb2xzPWdldF93ZWF0aGVyLGdldF9mb3JlY2FzdCZmcmVlPTEiLCItLW5hbWUiLCJhc3NheS1nZXQiXX0%3D",
+      "link": "cursor://anysphere.cursor-deeplink/mcp/install?name=assay-get&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkBnb2Fzc2F5LWFpL21jcEAxLjIuMyIsIi0tdXJsIiwiaHR0cHM6Ly9tY3AuZ29hc3NheS5haS8%2FdG9vbHM9Z2V0X3dlYXRoZXIsZ2V0X2ZvcmVjYXN0JmZyZWU9MSIsIi0tbmFtZSIsImFzc2F5LWdldCJdfQ%3D%3D",
       "remote": {
         "mcpServers": {
           "assay-get": {
-            "url": "https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1"
+            "url": "https://mcp.goassay.ai/?tools=get_weather,get_forecast&free=1"
           }
         }
       }
@@ -711,10 +711,10 @@
       "client": "vscode",
       "input": {
         "V": "1.2.3",
-        "url": "https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1",
+        "url": "https://mcp.goassay.ai/?tools=get_weather,get_forecast&free=1",
         "name": "assay-get"
       },
-      "command": "code --add-mcp '{\"name\":\"assay-get\",\"type\":\"stdio\",\"command\":\"npx\",\"args\":[\"-y\",\"@goassay-ai/mcp@1.2.3\",\"--url\",\"https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1\",\"--name\",\"assay-get\"]}'",
+      "command": "code --add-mcp '{\"name\":\"assay-get\",\"type\":\"stdio\",\"command\":\"npx\",\"args\":[\"-y\",\"@goassay-ai/mcp@1.2.3\",\"--url\",\"https://mcp.goassay.ai/?tools=get_weather,get_forecast&free=1\",\"--name\",\"assay-get\"]}'",
       "entry": {
         "type": "stdio",
         "command": "npx",
@@ -722,23 +722,23 @@
           "-y",
           "@goassay-ai/mcp@1.2.3",
           "--url",
-          "https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1",
+          "https://mcp.goassay.ai/?tools=get_weather,get_forecast&free=1",
           "--name",
           "assay-get"
         ]
       },
-      "link": "vscode:mcp/install?%7B%22name%22%3A%22assay-get%22%2C%22type%22%3A%22stdio%22%2C%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40goassay-ai%2Fmcp%401.2.3%22%2C%22--url%22%2C%22https%3A%2F%2Fmcp.assay.ai%2F%3Ftools%3Dget_weather%2Cget_forecast%26free%3D1%22%2C%22--name%22%2C%22assay-get%22%5D%7D",
+      "link": "vscode:mcp/install?%7B%22name%22%3A%22assay-get%22%2C%22type%22%3A%22stdio%22%2C%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22%40goassay-ai%2Fmcp%401.2.3%22%2C%22--url%22%2C%22https%3A%2F%2Fmcp.goassay.ai%2F%3Ftools%3Dget_weather%2Cget_forecast%26free%3D1%22%2C%22--name%22%2C%22assay-get%22%5D%7D",
       "remote": {
         "name": "assay-get",
         "type": "http",
-        "url": "https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1"
+        "url": "https://mcp.goassay.ai/?tools=get_weather,get_forecast&free=1"
       }
     },
     {
       "client": "windsurf",
       "input": {
         "V": "1.2.3",
-        "url": "https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1",
+        "url": "https://mcp.goassay.ai/?tools=get_weather,get_forecast&free=1",
         "name": "assay-get"
       },
       "command": {
@@ -749,7 +749,7 @@
               "-y",
               "@goassay-ai/mcp@1.2.3",
               "--url",
-              "https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1",
+              "https://mcp.goassay.ai/?tools=get_weather,get_forecast&free=1",
               "--name",
               "assay-get"
             ]
@@ -762,7 +762,7 @@
           "-y",
           "@goassay-ai/mcp@1.2.3",
           "--url",
-          "https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1",
+          "https://mcp.goassay.ai/?tools=get_weather,get_forecast&free=1",
           "--name",
           "assay-get"
         ]
@@ -771,7 +771,7 @@
       "remote": {
         "mcpServers": {
           "assay-get": {
-            "serverUrl": "https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1"
+            "serverUrl": "https://mcp.goassay.ai/?tools=get_weather,get_forecast&free=1"
           }
         }
       }
@@ -780,29 +780,29 @@
       "client": "gemini",
       "input": {
         "V": "1.2.3",
-        "url": "https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1",
+        "url": "https://mcp.goassay.ai/?tools=get_weather,get_forecast&free=1",
         "name": "assay-get"
       },
-      "command": "gemini mcp add --scope user assay-get npx -y @goassay-ai/mcp@1.2.3 --url 'https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1' --name assay-get",
+      "command": "gemini mcp add --scope user assay-get npx -y @goassay-ai/mcp@1.2.3 --url 'https://mcp.goassay.ai/?tools=get_weather,get_forecast&free=1' --name assay-get",
       "entry": {
         "command": "npx",
         "args": [
           "-y",
           "@goassay-ai/mcp@1.2.3",
           "--url",
-          "https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1",
+          "https://mcp.goassay.ai/?tools=get_weather,get_forecast&free=1",
           "--name",
           "assay-get"
         ]
       },
       "link": null,
-      "remote": "gemini mcp add --transport http --scope user assay-get 'https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1'"
+      "remote": "gemini mcp add --transport http --scope user assay-get 'https://mcp.goassay.ai/?tools=get_weather,get_forecast&free=1'"
     },
     {
       "client": "claude-desktop",
       "input": {
         "V": "1.2.3",
-        "url": "https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1",
+        "url": "https://mcp.goassay.ai/?tools=get_weather,get_forecast&free=1",
         "name": "assay-get"
       },
       "command": {
@@ -813,7 +813,7 @@
               "-y",
               "@goassay-ai/mcp@1.2.3",
               "--url",
-              "https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1",
+              "https://mcp.goassay.ai/?tools=get_weather,get_forecast&free=1",
               "--name",
               "assay-get"
             ]
@@ -826,7 +826,7 @@
           "-y",
           "@goassay-ai/mcp@1.2.3",
           "--url",
-          "https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1",
+          "https://mcp.goassay.ai/?tools=get_weather,get_forecast&free=1",
           "--name",
           "assay-get"
         ]
@@ -841,53 +841,53 @@
       {
         "input": {
           "V": "1.2.3",
-          "url": "https://mcp.assay.ai/",
+          "url": "https://mcp.goassay.ai/",
           "name": "assay"
         },
         "args": [
           "-y",
           "@goassay-ai/mcp@1.2.3",
           "--url",
-          "https://mcp.assay.ai/"
+          "https://mcp.goassay.ai/"
         ]
       },
       {
         "input": {
           "V": "1.2.3",
-          "url": "https://mcp.assay.ai/my/weather",
+          "url": "https://mcp.goassay.ai/my/weather",
           "name": "assay-weather"
         },
         "args": [
           "-y",
           "@goassay-ai/mcp@1.2.3",
           "--url",
-          "https://mcp.assay.ai/my/weather"
+          "https://mcp.goassay.ai/my/weather"
         ]
       },
       {
         "input": {
           "V": "1.2.3",
-          "url": "https://mcp.assay.ai/@acme/weather-kit@3",
+          "url": "https://mcp.goassay.ai/@acme/weather-kit@3",
           "name": "assay-weather-kit"
         },
         "args": [
           "-y",
           "@goassay-ai/mcp@1.2.3",
           "--url",
-          "https://mcp.assay.ai/@acme/weather-kit@3"
+          "https://mcp.goassay.ai/@acme/weather-kit@3"
         ]
       },
       {
         "input": {
           "V": "1.2.3",
-          "url": "https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1",
+          "url": "https://mcp.goassay.ai/?tools=get_weather,get_forecast&free=1",
           "name": "assay-get"
         },
         "args": [
           "-y",
           "@goassay-ai/mcp@1.2.3",
           "--url",
-          "https://mcp.assay.ai/?tools=get_weather,get_forecast&free=1"
+          "https://mcp.goassay.ai/?tools=get_weather,get_forecast&free=1"
         ]
       }
     ]
@@ -904,14 +904,14 @@
       {
         "client": "cursor",
         "V": "1.2.3",
-        "url": "https://mcp.assay.ai/@acme/weather-kit@3",
-        "command": "npx -y @goassay-ai/mcp@1.2.3 add https://mcp.assay.ai/@acme/weather-kit@3 --client cursor"
+        "url": "https://mcp.goassay.ai/@acme/weather-kit@3",
+        "command": "npx -y @goassay-ai/mcp@1.2.3 add https://mcp.goassay.ai/@acme/weather-kit@3 --client cursor"
       },
       {
         "client": "codex",
         "V": "1.2.3",
-        "url": "https://mcp.assay.ai/?tools=get_weather&free=1",
-        "command": "npx -y @goassay-ai/mcp@1.2.3 add 'https://mcp.assay.ai/?tools=get_weather&free=1' --client codex"
+        "url": "https://mcp.goassay.ai/?tools=get_weather&free=1",
+        "command": "npx -y @goassay-ai/mcp@1.2.3 add 'https://mcp.goassay.ai/?tools=get_weather&free=1' --client codex"
       }
     ]
   },
@@ -941,7 +941,7 @@
             "-y",
             "@goassay-ai/mcp@1.2.3",
             "--url",
-            "https://mcp.assay.ai/c/weather",
+            "https://mcp.goassay.ai/c/weather",
             "--name",
             "assay-weather"
           ]
@@ -956,7 +956,7 @@
             "-y",
             "@goassay-ai/mcp@1.2.3",
             "--url",
-            "https://mcp.assay.ai/",
+            "https://mcp.goassay.ai/",
             "--profile",
             "work"
           ]
@@ -1050,7 +1050,7 @@
         "name": "remote http entry",
         "entry": {
           "type": "http",
-          "url": "https://mcp.assay.ai/"
+          "url": "https://mcp.goassay.ai/"
         },
         "ours": false
       },
@@ -1086,36 +1086,36 @@
     "note": "shellQuote: a word outside [A-Za-z0-9_./:@,=+%-] is wrapped in single quotes; every printed command must give the URL back as one identical word in sh, bash and zsh.",
     "cases": [
       {
-        "word": "https://mcp.assay.ai/c/$(id)",
-        "quoted": "'https://mcp.assay.ai/c/$(id)'"
+        "word": "https://mcp.goassay.ai/c/$(id)",
+        "quoted": "'https://mcp.goassay.ai/c/$(id)'"
       },
       {
-        "word": "https://mcp.assay.ai/c/a;b",
-        "quoted": "'https://mcp.assay.ai/c/a;b'"
+        "word": "https://mcp.goassay.ai/c/a;b",
+        "quoted": "'https://mcp.goassay.ai/c/a;b'"
       },
       {
-        "word": "https://mcp.assay.ai/?a=1&b=2",
-        "quoted": "'https://mcp.assay.ai/?a=1&b=2'"
+        "word": "https://mcp.goassay.ai/?a=1&b=2",
+        "quoted": "'https://mcp.goassay.ai/?a=1&b=2'"
       },
       {
-        "word": "https://mcp.assay.ai/c/!x",
-        "quoted": "'https://mcp.assay.ai/c/!x'"
+        "word": "https://mcp.goassay.ai/c/!x",
+        "quoted": "'https://mcp.goassay.ai/c/!x'"
       },
       {
-        "word": "https://mcp.assay.ai/c/*",
-        "quoted": "'https://mcp.assay.ai/c/*'"
+        "word": "https://mcp.goassay.ai/c/*",
+        "quoted": "'https://mcp.goassay.ai/c/*'"
       },
       {
-        "word": "https://mcp.assay.ai/c/(x)",
-        "quoted": "'https://mcp.assay.ai/c/(x)'"
+        "word": "https://mcp.goassay.ai/c/(x)",
+        "quoted": "'https://mcp.goassay.ai/c/(x)'"
       },
       {
-        "word": "https://mcp.assay.ai/c/a$b",
-        "quoted": "'https://mcp.assay.ai/c/a$b'"
+        "word": "https://mcp.goassay.ai/c/a$b",
+        "quoted": "'https://mcp.goassay.ai/c/a$b'"
       },
       {
-        "word": "https://mcp.assay.ai/c/plain-path_1.2@3",
-        "quoted": "https://mcp.assay.ai/c/plain-path_1.2@3"
+        "word": "https://mcp.goassay.ai/c/plain-path_1.2@3",
+        "quoted": "https://mcp.goassay.ai/c/plain-path_1.2@3"
       }
     ]
   },

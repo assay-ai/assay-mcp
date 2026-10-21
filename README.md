@@ -1,6 +1,6 @@
 # assay-mcp
 
-`assay-mcp` is a local MCP server (stdio) that connects your AI app to [Assay](https://mcp.assay.ai). It runs on your computer, keeps your agent's payment key in the OS keychain, and signs each payment itself within limits you set in a terminal. Assay's servers never hold a key that can sign a payment.
+`assay-mcp` is a local MCP server (stdio) that connects your AI app to [Assay](https://mcp.goassay.ai). It runs on your computer, keeps your agent's payment key in the OS keychain, and signs each payment itself within limits you set in a terminal. Assay's servers never hold a key that can sign a payment.
 
 npm package: **`@goassay-ai/mcp`**. The binary is `assay-mcp`.
 
@@ -44,7 +44,7 @@ Node.js 20 or newer is required.
 
 ### Free-only remote connection
 
-Hosted apps (claude.ai, ChatGPT and Claude Desktop connectors) connect to `https://mcp.assay.ai/?free=1` with OAuth. They can use free tools only. Paid calls need `assay-mcp` on your computer.
+Hosted apps (claude.ai, ChatGPT and Claude Desktop connectors) connect to `https://mcp.goassay.ai/?free=1` with OAuth. They can use free tools only. Paid calls need `assay-mcp` on your computer.
 
 ## How it works
 

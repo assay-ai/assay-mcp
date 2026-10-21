@@ -13,7 +13,7 @@ export function requireEnv(name: string): string {
 /**
  * The client the examples share.
  * - `ASSAY_API_KEY`: required.
- * - `ASSAY_URL`: default `https://mcp.assay.ai/`.
+ * - `ASSAY_URL`: default `https://mcp.goassay.ai/`.
  * - `ASSAY_DEV_ORIGIN`: a development origin (for example the local stack); it goes to `dev.origins`.
  * - `ASSAY_EXAMPLE_TEST_KEY`: a throwaway payment key for a test stack. It turns paid calls on
  *   through `Signers.fromPrivateKey`, which is for tests only: in production use `Signers.fromAccount`.
@@ -23,7 +23,7 @@ export function clientFromEnv(): AssayClient {
   const testKey = process.env.ASSAY_EXAMPLE_TEST_KEY?.trim();
   const devOrigin = process.env.ASSAY_DEV_ORIGIN?.trim();
   return new AssayClient({
-    url: process.env.ASSAY_URL?.trim() || "https://mcp.assay.ai/",
+    url: process.env.ASSAY_URL?.trim() || "https://mcp.goassay.ai/",
     apiKey: requireEnv("ASSAY_API_KEY"),
     ...(devOrigin ? { dev: { origins: [devOrigin] } } : {}),
     ...(testKey ? { signer: Signers.fromPrivateKey(testKey as `0x${string}`), maxPerCall: "0.50", maxPerDay: "5" } : {}),

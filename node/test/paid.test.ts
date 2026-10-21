@@ -605,9 +605,9 @@ describe("meta", () => {
   });
 
   it("texts", () => {
-    expect(notAllowedText("https://mcp.assay.ai/c/x")).toBe(`Paid calls through this server are off. To allow them, run in a terminal: npx -y @goassay-ai/mcp@${VERSION} allow-paid https://mcp.assay.ai/c/x`);
+    expect(notAllowedText("https://mcp.goassay.ai/c/x")).toBe(`Paid calls through this server are off. To allow them, run in a terminal: npx -y @goassay-ai/mcp@${VERSION} allow-paid https://mcp.goassay.ai/c/x`);
     // A URL with ? or & is quoted, so zsh and bash run it as one word (final review I1).
-    expect(notAllowedText("https://mcp.assay.ai/?tools=a&free=1")).toBe(`Paid calls through this server are off. To allow them, run in a terminal: npx -y @goassay-ai/mcp@${VERSION} allow-paid 'https://mcp.assay.ai/?tools=a&free=1'`);
+    expect(notAllowedText("https://mcp.goassay.ai/?tools=a&free=1")).toBe(`Paid calls through this server are off. To allow them, run in a terminal: npx -y @goassay-ai/mcp@${VERSION} allow-paid 'https://mcp.goassay.ai/?tools=a&free=1'`);
     expect(debtSuffix("http://localhost:4000/")).toBe(" Settle it at http://localhost:4000/funding");
     expect(appendText({ content: [{ type: "image" }, { type: "text", text: "A." }] }, " B")).toEqual({ content: [{ type: "image" }, { type: "text", text: "A. B" }] });
     expect(usdText(250_000n, 6)).toBe("$0.25");

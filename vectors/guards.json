@@ -58,9 +58,9 @@
     },
     "signed": [],
     "confirmation": null,
-    "canonicalUrl": "https://mcp.assay.ai/",
+    "canonicalUrl": "https://mcp.goassay.ai/",
     "paidUrls": [
-      "https://mcp.assay.ai/"
+      "https://mcp.goassay.ai/"
     ],
     "nowSeconds": 1785999800
   },
@@ -2928,7 +2928,7 @@
           "path": [
             "canonicalUrl"
           ],
-          "value": "https://mcp.assay.ai/c/weather"
+          "value": "https://mcp.goassay.ai/c/weather"
         },
         {
           "op": "set",
@@ -2936,8 +2936,8 @@
             "paidUrls"
           ],
           "value": [
-            "https://mcp.assay.ai/",
-            "https://mcp.assay.ai/c/weather"
+            "https://mcp.goassay.ai/",
+            "https://mcp.goassay.ai/c/weather"
           ]
         }
       ],
@@ -2954,7 +2954,7 @@
           "path": [
             "canonicalUrl"
           ],
-          "value": "https://mcp.assay.ai/c/weather"
+          "value": "https://mcp.goassay.ai/c/weather"
         }
       ],
       "expect": {
