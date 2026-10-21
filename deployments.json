@@ -2,8 +2,8 @@
   "production": {
     "mcp": "https://mcp.goassay.ai",
     "issuer": "https://mcp.goassay.ai",
-    "api": "<API from ops config>",
-    "web": "<WEB from ops config>",
+    "api": "https://api.goassay.ai/api/v1",
+    "web": "https://portal.goassay.ai",
     "networks": {
       "eip155:46630": {
         "escrow": "eip155:46630:0x1eDb0E45747cfEf778bDB4f4418319efc0DD814f",
