@@ -102,7 +102,7 @@ describe("profile files", () => {
 
   it("stores paid URLs as canonical paths only and refuses hosts", async () => {
     expect(canonicalPaidUrl("/")).toBe("/");
-    expect(canonicalPaidUrl("https://mcp.assay.ai/")).toBeNull();
+    expect(canonicalPaidUrl("https://mcp.goassay.ai/")).toBeNull();
     expect(canonicalPaidUrl("//evil.example/")).toBeNull();
     expect(canonicalPaidUrl("/oauth/x")).toBeNull();
     await withLock(profile, (lock) => {
@@ -152,12 +152,12 @@ describe("profile files", () => {
   });
 
   it("paidUrlKey keeps the query and checks the origin", () => {
-    const mcp = "https://mcp.assay.ai";
-    expect(paidUrlKey({ mcp, url: "https://mcp.assay.ai/" })).toBe("/");
-    expect(paidUrlKey({ mcp, url: "https://mcp.assay.ai/c/weather?free=1" })).toBe("/c/weather?free=1");
-    expect(paidUrlKey({ mcp, url: "https://mcp.assay.ai/c/weather" })).toBe("/c/weather");
+    const mcp = "https://mcp.goassay.ai";
+    expect(paidUrlKey({ mcp, url: "https://mcp.goassay.ai/" })).toBe("/");
+    expect(paidUrlKey({ mcp, url: "https://mcp.goassay.ai/c/weather?free=1" })).toBe("/c/weather?free=1");
+    expect(paidUrlKey({ mcp, url: "https://mcp.goassay.ai/c/weather" })).toBe("/c/weather");
     expect(() => paidUrlKey({ mcp, url: "https://evil.example/c/weather" })).toThrow(ProfileStateError);
-    expect(() => paidUrlKey({ mcp, url: "https://mcp.assay.ai.evil.example/" })).toThrow(ProfileStateError);
+    expect(() => paidUrlKey({ mcp, url: "https://mcp.goassay.ai.evil.example/" })).toThrow(ProfileStateError);
   });
 
   it("writes only under the lock of the same profile", async () => {

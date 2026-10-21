@@ -49,7 +49,7 @@ describe("resolveDeployment", () => {
     expect(r("/C/Weather/")).toBe(`${PROD_MCP}/c/weather`);
     expect(r(`${PROD_MCP}/%40Acme/Kit@3?free=1&tools=beta,alpha,Alpha`)).toBe(`${PROD_MCP}/@acme/kit@3?tools=alpha,beta&free=1`);
     expect(r(`${PROD_MCP}/?discovery=search`)).toBe(`${PROD_MCP}/`);
-    expect(r("https://MCP.assay.ai:443/c/weather#frag")).toBe(`${PROD_MCP}/c/weather`);
+    expect(r("https://MCP.goassay.ai:443/c/weather#frag")).toBe(`${PROD_MCP}/c/weather`);
     for (const bad of ["/t/x", "/c/weather/../x", "/?free=true", "/c/%2e%2e", "not a url"]) {
       expect(() => resolveDeployment({ url: bad, env: {}, devOrigins: [], warn })).toThrow(OriginError);
     }
@@ -59,11 +59,11 @@ describe("resolveDeployment", () => {
     for (const url of [
       "https://evil.example/",
       "//evil.example/",
-      "http://mcp.assay.ai/",
-      "https://mcp.assay.ai.evil.example/",
-      "https://mcp.assay.ai@evil.example/",
-      "https://user:pass@mcp.assay.ai/",
-      "https://mcp.assay.ai:8443/",
+      "http://mcp.goassay.ai/",
+      "https://mcp.goassay.ai.evil.example/",
+      "https://mcp.goassay.ai@evil.example/",
+      "https://user:pass@mcp.goassay.ai/",
+      "https://mcp.goassay.ai:8443/",
     ]) {
       expect(() => resolveDeployment({ url, env: {}, devOrigins: [], warn }), url).toThrow(OriginError);
     }

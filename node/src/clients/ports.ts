@@ -9,7 +9,7 @@ import type { UrlKind } from "./server-name.js";
 
 /** A `--url` after the server URL parser accepted and canonicalised it. */
 export interface ResolvedUrl {
-  /** The canonical absolute URL, e.g. `https://mcp.assay.ai/c/weather`. */
+  /** The canonical absolute URL, e.g. `https://mcp.goassay.ai/c/weather`. */
   url: string;
   /** The canonical path and query, e.g. `/c/weather` (the `paid-urls.json` form). */
   pathAndQuery: string;

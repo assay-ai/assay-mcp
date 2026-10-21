@@ -1,6 +1,6 @@
 # @goassay-ai/mcp
 
-`assay-mcp` is a local MCP server (stdio) for [Assay](https://mcp.assay.ai). It keeps your agent's payment key in the OS keychain and signs each payment itself within limits you set in a terminal.
+`assay-mcp` is a local MCP server (stdio) for [Assay](https://mcp.goassay.ai). It keeps your agent's payment key in the OS keychain and signs each payment itself within limits you set in a terminal.
 
 Install it in Claude Code with an exact version:
 

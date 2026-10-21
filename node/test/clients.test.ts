@@ -56,7 +56,7 @@ const vectors = JSON.parse(readFileSync(join(ROOT, "vectors/commands.json"), "ut
   names: { cases: (NameInputs & { expect?: string; refusal?: string })[] };
 };
 const V = vectors.V;
-const MCP = "https://mcp.assay.ai";
+const MCP = "https://mcp.goassay.ai";
 const FILE_CLIENTS: ClientId[] = ["cursor", "vscode", "windsurf", "claude-desktop"];
 const CLI_CLIENTS: ClientId[] = ["claude-code", "codex", "gemini"];
 
@@ -258,7 +258,7 @@ describe("install commands equal vectors/commands.json", () => {
 
   it("a dev origin's / keeps --url; only the production / omits it", () => {
     const base = { V: "1.2.3", name: "assay" };
-    expect(serverEntry("cursor", { ...base, url: "https://mcp.assay.ai/" }).args).toEqual(["-y", "@goassay-ai/mcp@1.2.3", "--name", "assay"]);
+    expect(serverEntry("cursor", { ...base, url: "https://mcp.goassay.ai/" }).args).toEqual(["-y", "@goassay-ai/mcp@1.2.3", "--name", "assay"]);
     expect(serverEntry("cursor", { ...base, url: "http://localhost:3200/" }).args).toEqual(["-y", "@goassay-ai/mcp@1.2.3", "--url", "http://localhost:3200/", "--name", "assay"]);
     expect(serverEntry("vscode", { ...base, url: "http://localhost:3200/" }).args).toContain("--url");
   });
@@ -311,8 +311,8 @@ describe("install commands equal vectors/commands.json", () => {
     expect(() => installCommand("codex", { ...ok, V: "^1.2.3" })).toThrow();
     expect(() => installCommand("codex", { ...ok, V: "latest" })).toThrow();
     expect(() => installCommand("codex", { ...ok, name: "Assay" })).toThrow();
-    expect(() => installCommand("codex", { ...ok, url: "https://user:pw@mcp.assay.ai/" })).toThrow();
-    expect(() => installCommand("codex", { ...ok, url: "https://mcp.assay.ai/'$(id)'" })).toThrow();
+    expect(() => installCommand("codex", { ...ok, url: "https://user:pw@mcp.goassay.ai/" })).toThrow();
+    expect(() => installCommand("codex", { ...ok, url: "https://mcp.goassay.ai/'$(id)'" })).toThrow();
     expect(() => serverEntry("cursor", { ...ok, logFile: "/var/log/assay.log" }, "project")).toThrow();
     expect(() => serverEntry("cursor", { ...ok, logFile: "relative.log" })).toThrow();
   });
@@ -692,8 +692,8 @@ describe("list", () => {
     h.out.length = 0;
     expect(await runList([], h.deps)).toBe(0);
     const text = h.out.join("");
-    expect(text).toMatch(/assay {2}cursor \(user\) {2}→ https:\/\/mcp\.assay\.ai\/ {2}missing/);
-    expect(text).toMatch(/assay-weather {2}claude-code \(user\) {2}→ https:\/\/mcp\.assay\.ai\/c\/weather {2}ok/);
+    expect(text).toMatch(/assay {2}cursor \(user\) {2}→ https:\/\/mcp\.goassay\.ai\/ {2}missing/);
+    expect(text).toMatch(/assay-weather {2}claude-code \(user\) {2}→ https:\/\/mcp\.goassay\.ai\/c\/weather {2}ok/);
     expect(text).toMatch(/assay-notes {2}vscode \(user\) .* changed/);
   });
 
@@ -1094,7 +1094,7 @@ describe("wired to the URL parser, {dir} files and the profile store", () => {
     expect((JSON.parse(readFileSync(installs, "utf8")) as unknown[]).length).toBe(2);
     out.length = 0;
     expect(await runList([], deps)).toBe(0);
-    expect(out.join("")).toMatch(/assay {2}cursor \(user\) {2}→ https:\/\/mcp\.assay\.ai\/c\/weather {2}ok/);
+    expect(out.join("")).toMatch(/assay {2}cursor \(user\) {2}→ https:\/\/mcp\.goassay\.ai\/c\/weather {2}ok/);
     expect(await runRemove(["assay"], deps)).toBe(0);
     expect([...entriesOf("cursor").keys()]).toEqual(["assay-get"]);
     expect(deps.installs.read().map((r) => r.name)).toEqual(["assay-get"]);

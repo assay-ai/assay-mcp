@@ -2,7 +2,7 @@ import type { Signer } from "./signers.js";
 
 /** Options of {@link AssayClient}. */
 export interface AssayClientOptions {
-  /** The Assay MCP URL, e.g. `https://mcp.assay.ai/?tools=get_weather`. Production unless `dev.origins` lists its origin. */
+  /** The Assay MCP URL, e.g. `https://mcp.goassay.ai/?tools=get_weather`. Production unless `dev.origins` lists its origin. */
   url: string;
   /** The API key. Required: it is the only way the SDK authenticates (R-SDK-2). */
   apiKey: string;

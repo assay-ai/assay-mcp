@@ -93,13 +93,13 @@ describe("construction", () => {
 
   it("apiKey missing → throws", () => {
     // @ts-expect-error apiKey is required
-    expect(() => new AssayClient({ url: "https://mcp.assay.ai/" })).toThrow(/apiKey is required/);
-    expect(() => new AssayClient({ url: "https://mcp.assay.ai/", apiKey: "  " })).toThrow(/apiKey is required/);
+    expect(() => new AssayClient({ url: "https://mcp.goassay.ai/" })).toThrow(/apiKey is required/);
+    expect(() => new AssayClient({ url: "https://mcp.goassay.ai/", apiKey: "  " })).toThrow(/apiKey is required/);
     // A control byte never reaches a request (whose error would echo the key), and the refusal never shows it.
     for (const bad of ["assay_sk_live_SECRET\u0000x", "assay_sk_live_SECRET\u001fx", "assay_sk_live_SECRETé"]) {
       let message = "";
       try {
-        new AssayClient({ url: "https://mcp.assay.ai/", apiKey: bad });
+        new AssayClient({ url: "https://mcp.goassay.ai/", apiKey: bad });
       } catch (e) {
         message = String((e as Error).message);
       }
@@ -108,7 +108,7 @@ describe("construction", () => {
   });
 
   it("the production origin needs no dev.origins", () => {
-    expect(() => new AssayClient({ url: "https://mcp.assay.ai/?tools=get_weather", apiKey: KEY })).not.toThrow();
+    expect(() => new AssayClient({ url: "https://mcp.goassay.ai/?tools=get_weather", apiKey: KEY })).not.toThrow();
   });
 });
 
@@ -162,8 +162,8 @@ describe("free calls", () => {
 
   it("a signer needs maxPerCall and maxPerDay", () => {
     const signer = Signers.fromPrivateKey(generatePrivateKey());
-    expect(() => new AssayClient({ url: "https://mcp.assay.ai/", apiKey: KEY, signer })).toThrow(/maxPerCall/);
-    expect(() => new AssayClient({ url: "https://mcp.assay.ai/", apiKey: KEY, signer, maxPerCall: "0.50" })).toThrow(/maxPerDay/);
-    expect(() => new AssayClient({ url: "https://mcp.assay.ai/", apiKey: KEY, signer, maxPerCall: "0.50", maxPerDay: "5" })).not.toThrow();
+    expect(() => new AssayClient({ url: "https://mcp.goassay.ai/", apiKey: KEY, signer })).toThrow(/maxPerCall/);
+    expect(() => new AssayClient({ url: "https://mcp.goassay.ai/", apiKey: KEY, signer, maxPerCall: "0.50" })).toThrow(/maxPerDay/);
+    expect(() => new AssayClient({ url: "https://mcp.goassay.ai/", apiKey: KEY, signer, maxPerCall: "0.50", maxPerDay: "5" })).not.toThrow();
   });
 });
