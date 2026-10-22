@@ -78,9 +78,9 @@ describe("guards.json", () => {
     }
   });
 
-  it("uses the built-in production network, the default limits and a $5 day", () => {
-    const prod = builtInDeployments().production;
-    expect(base.network).toEqual(builtInNetwork(prod, "eip155:46630"));
+  it("uses the built-in e2e network (the dev escrow), the default limits and a $5 day", () => {
+    const e2e = builtInDeployments().e2e;
+    expect(base.network).toEqual(builtInNetwork(e2e, "eip155:46630"));
     expect(base.limits).toEqual(DEFAULT_LIMITS);
   });
 });
@@ -209,8 +209,8 @@ describe("guardAndBuild (M1)", () => {
     Object.entries(base).filter(([k]) => k !== "network"),
   ) as Omit<GuardContext, "network">;
 
-  it("signs exactly the guarded values with the built-in production network", () => {
-    const r = guardAndBuild(ctx, base.nowSeconds, "production");
+  it("signs exactly the guarded values with the built-in e2e network", () => {
+    const r = guardAndBuild(ctx, base.nowSeconds, "e2e");
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     const req = base.requirement as { amount: { amount: string }; seq: string; payer: string; provider: string };
@@ -228,30 +228,31 @@ describe("guardAndBuild (M1)", () => {
     (_, c) => {
       const full = apply(base, c.changes);
       const rest = Object.fromEntries(Object.entries(full).filter(([k]) => k !== "network")) as Omit<GuardContext, "network">;
-      const r = guardAndBuild(rest, full.nowSeconds, "production");
+      const r = guardAndBuild(rest, full.nowSeconds, "e2e");
       expect(r.ok).toBe(true);
     },
   );
 
   it("refuses an issuedAt the signer would refuse before running the guards", () => {
     const withPrompt = { ...ctx, limits: { ...ctx.limits, confirmAbove: "0.05" } };
-    expect(() => guardAndBuild(withPrompt, 0, "production")).toThrow(/issuedAt/);
-    expect(() => guardAndBuild(withPrompt, 1.5, "production")).toThrow(/issuedAt/);
+    expect(() => guardAndBuild(withPrompt, 0, "e2e")).toThrow(/issuedAt/);
+    expect(() => guardAndBuild(withPrompt, 1.5, "e2e")).toThrow(/issuedAt/);
   });
 
   it("returns the guard refusal and builds nothing", () => {
-    const r = guardAndBuild(apply(ctx, find("seq 2^53").changes), base.nowSeconds, "production");
+    const r = guardAndBuild(apply(ctx, find("seq 2^53").changes), base.nowSeconds, "e2e");
     expect(r).toMatchObject({ ok: false, guard: "G9" });
   });
 
   it("checks the requirement against the built-in entry of the environment it signs for", () => {
-    // The staging entry's escrow is still a placeholder, so nothing can be paid there.
-    expect(guardAndBuild(ctx, base.nowSeconds, "staging")).toMatchObject({ ok: false, guard: "G2", code: "G2_PAY_TO" });
+    // The vectors pay the dev escrow: staging shares it, production has its own and refuses.
+    expect(guardAndBuild(ctx, base.nowSeconds, "production")).toMatchObject({ ok: false, guard: "G2", code: "G2_PAY_TO" });
+    expect(guardAndBuild(ctx, base.nowSeconds, "staging")).toMatchObject({ ok: true });
   });
 
   it("works on a frozen copy and leaves the caller's requirement alone", () => {
     const mine = structuredClone(ctx);
-    guardAndBuild(mine, base.nowSeconds, "production");
+    guardAndBuild(mine, base.nowSeconds, "e2e");
     expect(Object.isFrozen(mine.requirement)).toBe(false);
     expect(mine).toEqual(ctx);
   });

@@ -311,7 +311,7 @@ describe("pinnedFetch", () => {
     const d = e2e();
     for (const url of [
       "https://evil.example/",
-      prod.web, // a placeholder in production: not a URL
+      prod.web, // another environment's host
       e2eRaw.web, // {WEB} is opened in a browser, never fetched
       "http://localhost:3201/",
       "http://u:p@localhost:3200/",
@@ -320,7 +320,8 @@ describe("pinnedFetch", () => {
     }
     // Another environment's hosts are not this deployment's.
     await expect(pinnedFetch(prod, `${e2eRaw.mcp}/`)).rejects.toThrow(PinnedFetchError);
-    await expect(pinnedFetch(prod, rpcUrl)).rejects.toThrow(PinnedFetchError);
+    // (e2e and production share the public testnet RPC host, so use the anvil one.)
+    await expect(pinnedFetch(prod, table.anvil.networks["eip155:46630"]!.rpc[0]!)).rejects.toThrow(PinnedFetchError);
     expect(spy).not.toHaveBeenCalled();
   });
 

@@ -146,12 +146,19 @@ describe("check-deployments (release)", () => {
     return t;
   };
 
-  it("refuses the committed placeholders, in every entry", () => {
-    const errors = checkReleaseDeployments(table);
+  it("accepts the committed table: no placeholders, distinct escrows, 2 production RPC hosts", () => {
+    expect(checkReleaseDeployments(table)).toEqual([]);
+  });
+
+  it("refuses placeholders, in every entry", () => {
+    const t = structuredClone(table);
+    t.production.networks["eip155:46630"]!.rpc = ["<operator RPC>", "<public RPC>"];
+    t.staging.networks["eip155:46630"]!.escrow = "<staging escrow CAIP-10>";
+    t.staging.networks["eip155:46630"]!.rpc = ["<staging operator RPC>", "<staging public RPC>"];
+    const errors = checkReleaseDeployments(t);
     expect(errors).toContain("production.networks.eip155:46630.rpc[0] is a placeholder: <operator RPC>");
     expect(errors).toContain("staging.networks.eip155:46630.escrow is a placeholder: <staging escrow CAIP-10>");
     expect(errors).toContain("staging.networks.eip155:46630.rpc[0] is a placeholder: <staging operator RPC>");
-    // The hosts are filled in everywhere; only the chain values are still to come.
     expect(errors.some((e) => /^(production|staging)\.(mcp|issuer|api|web) /.test(e))).toBe(false);
   });
 

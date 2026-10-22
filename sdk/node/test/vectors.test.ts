@@ -57,7 +57,8 @@ function typed(t: Record<string, unknown>): never {
   return { ...t, message } as never;
 }
 
-const PRODUCTION: Environment = "production";
+/** The vectors are signed for the dev escrow, so they run against the e2e entry (production has its own escrow). */
+const VECTOR_ENV: Environment = "e2e";
 const base = guardVectors.base as unknown as GuardContext;
 
 /**
@@ -69,7 +70,7 @@ const base = guardVectors.base as unknown as GuardContext;
 function sdkGuards(ctx: GuardContext) {
   const { network, ...rest } = ctx;
   if (network === null) rest.requirement = { ...(rest.requirement as Record<string, unknown>), network: "eip155:1" };
-  const r = guardVoucher(rest, ctx.nowSeconds, PRODUCTION);
+  const r = guardVoucher(rest, ctx.nowSeconds, VECTOR_ENV);
   return r.ok ? { ok: true } : { ok: false, guard: r.guard, code: r.code, reason: r.reason };
 }
 
@@ -102,16 +103,16 @@ describe("vouchers.json through the SDK signer", () => {
   afterAll(() => expect(builtInCases).toBe(2));
   const signer = Signers.fromPrivateKey(voucherVectors.testKey.privateKey as Hex);
   it.each(voucherVectors.cases.map((c) => [c.name, c] as const))("%s", async (_, c) => {
-    const account = await resolveSigner(signer, PRODUCTION);
+    const account = await resolveSigner(signer, VECTOR_ENV);
     expect(account.address).toBe(voucherVectors.testKey.address);
     const data = typed(c.typedData as Record<string, unknown>);
     expect(hashTypedData(data)).toBe(c.digest);
     expect(await account.signTypedData(data)).toBe(c.signature);
     // Cases on the built-in escrow: the voucher the SDK's path builds is exactly the vector's.
     const net = c.network as { caip2: string; escrow: string };
-    if (builtInDeployments().production.networks[net.caip2]?.escrow === net.escrow) {
+    if (builtInDeployments()[VECTOR_ENV].networks[net.caip2]?.escrow === net.escrow) {
       builtInCases++;
-      const built = buildVoucher(c.requirement as unknown as VoucherRequirement, c.issuedAt, PRODUCTION);
+      const built = buildVoucher(c.requirement as unknown as VoucherRequirement, c.issuedAt, VECTOR_ENV);
       expect(hashTypedData(built.typedData)).toBe(c.digest);
       expect(built.wire).toEqual(c.wire);
     }
@@ -142,7 +143,7 @@ describe("binding.json through the shared binding flow and the SDK signer", () =
 
   it.each(bindingVectors.valid.map((c) => [c.name, c] as const))("valid %s", async (_, c) => {
     const signer = Signers.fromPrivateKey(bindingVectors.testKey.privateKey as Hex);
-    const account = await resolveSigner(signer, PRODUCTION);
+    const account = await resolveSigner(signer, VECTOR_ENV);
     const data = checkBindingChallenge(c.challenge, { ...ctx, environment: ctx.environment as Environment });
     expect(hashTypedData(data)).toBe(c.digest);
     expect(await account.signTypedData(data)).toBe(c.signature);
