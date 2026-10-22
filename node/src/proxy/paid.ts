@@ -19,7 +19,7 @@ import { openThroughGate } from "./browser-gate.js";
 import { apiGet, apiRequest, BindError, bindDelegateKey, type BindResult } from "./delegate-bind.js";
 import { DELEGATE_STATUS_PATH, startEnablePoll } from "./enable-poll.js";
 import { CONFIRMATION_TTL_MS, type CallRegistry, type ForwardedCall } from "./calls.js";
-import type { FetchLike } from "./forwarder.js";
+import { scopeMissingText, toolScopeMissingOf, type FetchLike } from "./forwarder.js";
 import {
   appendText,
   debtSuffix,
@@ -51,6 +51,8 @@ import type { JsonRpcResponse } from "./protocol.js";
  * - quotes in `get_tool` and `search_tools` results go to the G3 cache (the proxy fills it from
  *   `tools/list` itself);
  * - `PAYMENT_DEBT_OUTSTANDING`: the answer, with " Settle it at {WEB}/funding";
+ * - `AUTH_SCOPE_MISSING` (a free-only key on a paid tool, before or after a voucher): the scope
+ *   text ("This key cannot pay. ..." for `payments`); nothing is signed, re-signed or resent;
  * - `PAYMENT_REQUIRED` with `--no-paid`: the answer unchanged;
  * - this URL not in `paid-urls.json`: the allow-paid text;
  * - no payment key bound here, or no active grant on chain for it: under the profile lock, a key
@@ -180,6 +182,8 @@ export class PaidPath {
     if (!("result" in response)) return response;
     const result = response.result;
     this.observeMetaTool(call, result);
+    const scoped = this.scopeRefused(response);
+    if (scoped !== null) return scoped;
     const state = paymentState(result);
     if (state.kind === "debt") return { ...response, result: appendText(result, debtSuffix(this.o.deployment.web)) };
     if (state.kind !== "payment-required" || this.o.noPaid) return response;
@@ -199,6 +203,15 @@ export class PaidPath {
     } else if (call.tool === SEARCH_TOOLS) {
       this.o.quotes.setAll(quotesFromSearch(result));
     }
+  }
+
+  /** An `AUTH_SCOPE_MISSING` tool refusal with the proxy's scope text; `null` for any other answer. */
+  private scopeRefused(response: JsonRpcResponse): JsonRpcResponse | null {
+    if (!("result" in response)) return null;
+    const missing = toolScopeMissingOf(response.result);
+    if (missing === undefined) return null;
+    this.log.info("scope missing", { scope: missing.scope ?? "unnamed" });
+    return { ...response, result: errorResult(scopeMissingText(missing.scope), response.result) };
   }
 
   private refused(response: JsonRpcResponse, result: Record<string, unknown>, r: Refusal): JsonRpcResponse {
@@ -339,7 +352,8 @@ export class PaidPath {
         if (after.kind === "error" && after.code === DELEGATE_INACTIVE_CODE && payer !== null) {
           this.o.chain.invalidate(payer, localAddress, network.id);
         }
-        return answer;
+        // A key that may not pay is refused even with the voucher: say so, and sign nothing more.
+        return this.scopeRefused(answer) ?? answer;
       }
       if (step.code === "G7_CONFIRMATION_REQUIRED" && pass === 0) {
         const asked = await this.confirm(call, requirement, forwardedCall, network);
@@ -450,6 +464,8 @@ export class PaidPath {
 
   private onPlainAnswer(answer: JsonRpcResponse): JsonRpcResponse {
     if (!("result" in answer)) return answer;
+    const scoped = this.scopeRefused(answer);
+    if (scoped !== null) return scoped;
     return paymentState(answer.result).kind === "debt" ? { ...answer, result: appendText(answer.result, debtSuffix(this.o.deployment.web)) } : answer;
   }
 

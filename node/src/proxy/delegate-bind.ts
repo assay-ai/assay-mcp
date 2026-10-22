@@ -28,6 +28,13 @@ export class BindError extends Error {
   override readonly name = "BindError";
 }
 
+/**
+ * Another payment key won a first bind of the same credential at the same moment (409
+ * `ACCOUNT_DELEGATE_BIND_CONFLICT`): nothing was bound. `bindDelegateKey` binds once more with a
+ * fresh challenge, which leaves this key waiting for the payer's approval.
+ */
+export class BindConflictError extends BindError {}
+
 export const BIND_TEXTS = Object.freeze({
   noAnswer: "Paid calls could not be set up: Assay did not answer. Try again.",
   clock: "Paid calls could not be set up: this computer's clock is too far from Assay's. Check the clock, then try again.",
@@ -35,6 +42,8 @@ export const BIND_TEXTS = Object.freeze({
   notAccepted: "Paid calls could not be set up: Assay did not accept the payment key. Try again.",
   alreadyBound:
     "Paid calls could not be set up: this payment key is already bound, or waiting for approval, on another Assay key. Revoke that key in the Assay portal, or run logout, then login, and try again.",
+  bindConflict:
+    "Paid calls could not be set up: another payment key was bound to this Assay key at the same moment. Try again: this key will then wait for the payer's approval.",
 });
 
 /** What `POST /agents/me/delegate` did with the key: bound it, or left it waiting for the payer. */
@@ -47,6 +56,8 @@ export interface BindResult {
 
 /** The backend's 409 when the key is bound to another live credential (only the bind request can get it). */
 const ALREADY_BOUND_CODE = "ACCOUNT_DELEGATE_ALREADY_BOUND" as const;
+/** The backend's 409 when another key won a first bind of this credential at the same moment. */
+const BIND_CONFLICT_CODE = "ACCOUNT_DELEGATE_BIND_CONFLICT" as const;
 /** `request`'s answer to a 404. */
 const NOT_FOUND = "not-found" as const;
 /** `request`'s answer to a 403 `AUTH_SCOPE_MISSING`: the scope the key lacks, if the body named one. */
@@ -74,9 +85,10 @@ function accountOn(value: unknown, chainId: number): string | null {
 /**
  * `{api}{path}` through the caller's pinned fetch, with the bearer. Non-2xx, an oversized or
  * unparsable body, a timeout and a network error all give `null`, except a 409
- * `ACCOUNT_DELEGATE_ALREADY_BOUND` (only the bind request gets it) and a 403 `AUTH_SCOPE_MISSING`
- * (a key without the scope, e.g. a free-only key without `payments`): those throw `BindError`
- * with their own text, which every caller of `bindDelegateKey` shows. Logs the path prefix and
+ * `ACCOUNT_DELEGATE_ALREADY_BOUND` or `ACCOUNT_DELEGATE_BIND_CONFLICT` (only the bind request gets
+ * them) and a 403 `AUTH_SCOPE_MISSING` (a key without the scope, e.g. a free-only key without
+ * `payments`): those throw `BindError` (`BindConflictError` for the race) with their own text,
+ * which every caller of `bindDelegateKey` shows. Logs the path prefix and
  * the status only.
  */
 export async function apiRequest(
@@ -90,6 +102,7 @@ export async function apiRequest(
 ): Promise<{ body: unknown; date: string | null } | null> {
   const answer = await request(fetch, apiBase, bearer, method, path, body, log);
   if (answer === ALREADY_BOUND_CODE) throw new BindError(BIND_TEXTS.alreadyBound);
+  if (answer === BIND_CONFLICT_CODE) throw new BindConflictError(BIND_TEXTS.bindConflict);
   if (isScopeMissing(answer)) throw new BindError(scopeMissingText(answer.scopeMissing));
   return answer === NOT_FOUND ? null : answer;
 }
@@ -106,7 +119,7 @@ export async function apiGet(
   log: Logger = silentLogger,
 ): Promise<{ body: unknown; date: string | null } | typeof NOT_FOUND | null> {
   const answer = await request(fetch, apiBase, bearer, "GET", path, undefined, log);
-  return answer === ALREADY_BOUND_CODE || isScopeMissing(answer) ? null : answer;
+  return answer === ALREADY_BOUND_CODE || answer === BIND_CONFLICT_CODE || isScopeMissing(answer) ? null : answer;
 }
 
 async function request(
@@ -117,7 +130,9 @@ async function request(
   path: string,
   body: unknown,
   log: Logger,
-): Promise<{ body: unknown; date: string | null } | typeof ALREADY_BOUND_CODE | ScopeMissing | typeof NOT_FOUND | null> {
+): Promise<
+  { body: unknown; date: string | null } | typeof ALREADY_BOUND_CODE | typeof BIND_CONFLICT_CODE | ScopeMissing | typeof NOT_FOUND | null
+> {
   try {
     const signal = requestSignal(API_TIMEOUT_MS);
     const res = await fetch(`${apiBase.replace(/\/+$/, "")}${path}`, {
@@ -138,7 +153,7 @@ async function request(
       const text = await readCapped(res, MAX_BODY_BYTES, signal);
       const refusal: unknown = text === null ? null : JSON.parse(text);
       const code = refusalCodeOf(refusal);
-      if (res.status === 409) return code === ALREADY_BOUND_CODE ? ALREADY_BOUND_CODE : null;
+      if (res.status === 409) return code === ALREADY_BOUND_CODE || code === BIND_CONFLICT_CODE ? code : null;
       return code === SCOPE_MISSING_CODE ? { scopeMissing: requiredScopeOf(refusal) } : null;
     }
     const text = await readCapped(res, MAX_BODY_BYTES, signal);
@@ -166,13 +181,18 @@ export interface BindInputs {
  * answer's `Date` header (clamped to ±120 s); a challenge refused on its expiry is retried once
  * with a fresh one. Nothing is signed unless every challenge field passed. The answer must say
  * `ACTIVE` with `delegate` this key, or `PENDING_APPROVAL` with `pendingDelegate` this key
- * (another key stays bound until the payer approves this one). Throws `BindError`.
+ * (another key stays bound until the payer approves this one). A 409
+ * `ACCOUNT_DELEGATE_BIND_CONFLICT` (another key won a first bind at the same moment; nothing was
+ * bound) is bound once more with a fresh challenge, which leaves this key `PENDING_APPROVAL`; a
+ * second conflict throws `BindConflictError`. Throws `BindError`.
  */
 export async function bindDelegateKey(o: BindInputs): Promise<BindResult> {
   const log = o.log ?? silentLogger;
   const chainId = Number(o.network.slice("eip155:".length));
   const address = getAddress(o.account.address);
-  for (let attempt = 0; attempt < 2; attempt++) {
+  let clockRetried = false;
+  let conflictRetried = false;
+  for (;;) {
     const challenge = await o.api("POST", "/agents/me/delegate/challenge", { delegate: address });
     if (challenge === null) throw new BindError(BIND_TEXTS.noAnswer);
     const local = o.now() / 1000;
@@ -184,7 +204,10 @@ export async function bindDelegateKey(o: BindInputs): Promise<BindResult> {
     } catch (err) {
       if (err instanceof SignerRefusal && err.field === "message.expiresAt") {
         // Clock: retried once with a fresh challenge, then refused (no widening of the window).
-        if (attempt === 0) continue;
+        if (!clockRetried) {
+          clockRetried = true;
+          continue;
+        }
         throw new BindError(BIND_TEXTS.clock);
       }
       log.warn("binding challenge refused", { field: err instanceof SignerRefusal ? err.field : "unknown" });
@@ -193,7 +216,18 @@ export async function bindDelegateKey(o: BindInputs): Promise<BindResult> {
     const challengeId = isObject(data) ? data.challengeId : undefined;
     if (typeof challengeId !== "string" || !UUID_RE.test(challengeId)) throw new BindError(BIND_TEXTS.mismatch);
     const signature = await o.account.signTypedData(typedData);
-    const bound = await o.api("POST", "/agents/me/delegate", { challengeId, signature });
+    let bound: Awaited<ReturnType<ApiCall>>;
+    try {
+      bound = await o.api("POST", "/agents/me/delegate", { challengeId, signature });
+    } catch (err) {
+      // Lost a first-bind race: nothing was bound. Once more, with a fresh challenge: the key then waits as pending.
+      if (err instanceof BindConflictError && !conflictRetried) {
+        conflictRetried = true;
+        log.info("payment key bind raced another; binding again");
+        continue;
+      }
+      throw err;
+    }
     const boundData = bound !== null && isObject(bound.body) ? bound.body.data : undefined;
     if (!isObject(boundData)) throw new BindError(BIND_TEXTS.notAccepted);
     const approvalUrl = typeof boundData.approvalUrl === "string" ? boundData.approvalUrl : null;
@@ -204,5 +238,4 @@ export async function bindDelegateKey(o: BindInputs): Promise<BindResult> {
     }
     throw new BindError(BIND_TEXTS.notAccepted);
   }
-  throw new BindError(BIND_TEXTS.clock);
 }

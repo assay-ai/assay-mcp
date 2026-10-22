@@ -388,6 +388,21 @@ export function requiredScopeOf(body: unknown): string | null {
   return nested ?? scopeIn(body);
 }
 
+/**
+ * A `tools/call` result refused with `_meta["assay/error"]` `AUTH_SCOPE_MISSING` (e.g. a free-only
+ * key on a paid tool, refused `payments` with or without a voucher): the scope it names, read from
+ * `assay/error.requiredScope` (where a tool refusal carries it) or `assay/error.details`, only when
+ * it has the shape of a scope. `undefined` when the result is not such a refusal.
+ */
+export function toolScopeMissingOf(result: unknown): { scope: string | null } | undefined {
+  const asObject = (v: unknown): Record<string, unknown> | null => (typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null);
+  const meta = asObject(asObject(result)?._meta);
+  const error = asObject(meta?.["assay/error"]);
+  if (error === null || error.code !== SCOPE_MISSING_CODE) return undefined;
+  const named = (v: unknown) => (typeof v === "string" && SCOPE_RE.test(v) ? v : null);
+  return { scope: named(error.requiredScope) ?? named(asObject(error.details)?.requiredScope) ?? requiredScopeOf(error) };
+}
+
 /** The text for `AUTH_SCOPE_MISSING`: a key without `payments` cannot pay; any other names the scope. */
 export function scopeMissingText(scope: string | null): string {
   if (scope === PAYMENTS_SCOPE) return "This key cannot pay. Create a key with paid calls on.";

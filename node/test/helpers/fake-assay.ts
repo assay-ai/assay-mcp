@@ -202,6 +202,21 @@ export class FakeAssay {
   pendingRebind = false;
   /** The bind request answers 409 `ACCOUNT_DELEGATE_ALREADY_BOUND` (the key is held by another live credential). */
   alreadyBound = false;
+  /**
+   * This many bind requests answer 409 `ACCOUNT_DELEGATE_BIND_CONFLICT` (another key won a first
+   * bind at the same moment): `raceWinner` becomes the delegate, nothing of this key is bound.
+   */
+  bindConflicts = 0;
+  /** The key that won the first-bind race (bare checksummed address). */
+  raceWinner: string | null = null;
+  /**
+   * The backend's paid-path scope check (M2): a key without `payments` on the paid tool gets a
+   * tool result `AUTH_SCOPE_MISSING` naming `payments`, before any requirement, with or without a
+   * voucher. False: the older behaviour (the requirement, then the delegate routes refuse).
+   */
+  paidPathScope = false;
+  /** The signed retry (with a voucher) is refused `AUTH_SCOPE_MISSING` (payments): the key lost the scope meanwhile. */
+  voucherScopeMissing = false;
   /** The key waiting for approval (bare checksummed address), or `null`. */
   pendingDelegate: string | null = null;
   /** The origin of `approvalUrl` in the bind and status answers (the backend's `WEB_APP_URL`), or `null` for none. */
@@ -347,6 +362,11 @@ export class FakeAssay {
         signer = null;
       }
       if (signer === null || getAddress(signer) !== c.delegate) return this.send(res, 400, { message: "ACCOUNT_DELEGATE_SIGNATURE_INVALID" });
+      if (this.bindConflicts > 0) {
+        this.bindConflicts--;
+        if (this.raceWinner !== null) this.delegate = getAddress(this.raceWinner);
+        return this.send(res, 409, { success: false, error: { code: "ACCOUNT_DELEGATE_BIND_CONFLICT", message: "bound at the same moment", statusCode: 409 } });
+      }
       if (this.alreadyBound) {
         return this.send(res, 409, { success: false, error: { code: "ACCOUNT_DELEGATE_ALREADY_BOUND", message: "already bound", statusCode: 409 } });
       }
@@ -453,6 +473,10 @@ export class FakeAssay {
     if (name !== "weather") return { content: [{ type: "text", text: JSON.stringify({ name, arguments: args }) }] };
 
     const voucher = meta["assay/voucher"];
+    if ((this.paidPathScope && !this.scopes.includes("payments")) || (this.voucherScopeMissing && voucher !== undefined)) {
+      const text = "This key does not have the payments scope. Create a key with that scope to use this";
+      return { isError: true, content: [{ type: "text", text }], _meta: { "assay/error": { requiredScope: "payments", code: "AUTH_SCOPE_MISSING", retryable: false } } };
+    }
     if (voucher !== undefined && !this.repeatPaymentRequired) return this.settle(voucher, meta, name, args);
     return this.paymentRequired(name, args);
   }

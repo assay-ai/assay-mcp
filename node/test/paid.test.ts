@@ -441,6 +441,62 @@ describe("paid path (SDK client → proxy → fake Assay)", () => {
     expect(fake.opened).toEqual([]);
   });
 
+  it("a first-bind race (409 ACCOUNT_DELEGATE_BIND_CONFLICT) → bound once more, the key waits for approval", async () => {
+    const WINNER = privateKeyToAccount(generatePrivateKey()).address;
+    await seedProfile(false);
+    fake.delegate = null;
+    fake.bindConflicts = 1;
+    fake.raceWinner = WINNER;
+    fake.pendingRebind = true;
+    const { client } = await connect();
+    const r = await client.callTool({ name: "weather", arguments: {} });
+    expect(r.isError).toBe(true);
+    const address = readProfile(profile())!.delegateAddress!;
+    expect(fake.challenges).toEqual([address, address]);
+    expect(fake.delegate).toBe(WINNER);
+    expect(fake.pendingDelegate).toBe(address);
+    const link = `${WEB}/agents/enable-paid?credential=${CREDENTIAL_ID}#key=${address}`;
+    expect(textOf(r)).toContain(`Open ${link} to turn them on`);
+    expect(fake.accepted).toHaveLength(0);
+  });
+
+  it("a second bind conflict in a row → its own text, no link", async () => {
+    await seedProfile(false);
+    fake.bindConflicts = 2;
+    const { client } = await connect();
+    const r = await client.callTool({ name: "weather", arguments: {} });
+    expect(textOf(r)).toBe(
+      "Paid calls could not be set up: another payment key was bound to this Assay key at the same moment. Try again: this key will then wait for the payer's approval.",
+    );
+    expect(fake.challenges).toHaveLength(2);
+    expect(fake.opened).toEqual([]);
+  });
+
+  it("the paid path refuses a free-only key (AUTH_SCOPE_MISSING payments) → \"This key cannot pay\", nothing bound or signed", async () => {
+    await seedProfile(false);
+    fake.scopes = ["tools:call", "activity:read"];
+    fake.paidPathScope = true;
+    const { client } = await connect();
+    const r = await client.callTool({ name: "weather", arguments: {} });
+    expect(r.isError).toBe(true);
+    expect(textOf(r)).toBe("This key cannot pay. Create a key with paid calls on.");
+    expect((metaOf(r)["assay/error"] as { code: string }).code).toBe("AUTH_SCOPE_MISSING");
+    expect(weatherCalls()).toHaveLength(1);
+    expect(fake.challenges).toEqual([]);
+    expect(fake.opened).toEqual([]);
+  });
+
+  it("AUTH_SCOPE_MISSING (payments) on the signed retry → \"This key cannot pay\", signed once, not resent", async () => {
+    await enabled();
+    const { client } = await connect();
+    await client.listTools();
+    fake.voucherScopeMissing = true;
+    const r = await client.callTool({ name: "weather", arguments: {} });
+    expect(textOf(r)).toBe("This key cannot pay. Create a key with paid calls on.");
+    expect(weatherCalls().map((c) => c.meta["assay/voucher"] !== undefined)).toEqual([false, true]);
+    expect(fake.accepted).toHaveLength(0);
+  });
+
   it("a free-only key (no payments scope) → \"This key cannot pay\", no key bound, no link", async () => {
     await seedProfile(false);
     fake.scopes = ["tools:call", "activity:read"];

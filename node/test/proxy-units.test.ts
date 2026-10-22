@@ -4,12 +4,12 @@ import { parseServeArgs } from "../src/commands/serve.js";
 import { AliasTable } from "../src/proxy/aliases.js";
 import { CallRegistry, CONFIRMATION_TTL_MS, TOMBSTONE_MS } from "../src/proxy/calls.js";
 import { checkEnvironment } from "../src/proxy/environment.js";
-import { Forwarder, reasonOf, refusalMessage, requiredScopeOf, scopeMissingText } from "../src/proxy/forwarder.js";
+import { Forwarder, reasonOf, refusalMessage, requiredScopeOf, scopeMissingText, toolScopeMissingOf } from "../src/proxy/forwarder.js";
 import { enablePaidLink, serverApprovalLink } from "../src/proxy/meta.js";
 import { answerSignedOut, appName, loginCommand, SIGN_IN_AGAIN_DESCRIPTION, SIGN_IN_DESCRIPTION, SignInController, signInEndedText } from "../src/proxy/presignin.js";
 import { classify, negotiateVersion, SUPPORTED_PROTOCOL_VERSIONS } from "../src/proxy/protocol.js";
 import { LineSplitter } from "../src/proxy/stdio.js";
-import { apiGet, apiRequest, BIND_TEXTS, BindError } from "../src/proxy/delegate-bind.js";
+import { apiGet, apiRequest, BIND_TEXTS, BindConflictError, BindError } from "../src/proxy/delegate-bind.js";
 import { createLogger } from "../src/log/logger.js";
 import { PinnedFetchError } from "../src/net/fetch.js";
 
@@ -255,6 +255,15 @@ describe("delegate binding API refusals (M9)", () => {
     expect(BIND_TEXTS.alreadyBound).toMatch(/already bound, or waiting for approval, on another Assay key\. Revoke that key in the Assay portal, or run logout, then login/);
   });
 
+  it("a first-bind race (409 ACCOUNT_DELEGATE_BIND_CONFLICT) is a BindConflictError with its own text; apiGet never throws it", async () => {
+    const raced = answer(409, { success: false, error: { code: "ACCOUNT_DELEGATE_BIND_CONFLICT", message: "raced", statusCode: 409 } });
+    await expect(call(raced)).rejects.toBeInstanceOf(BindConflictError);
+    await expect(call(raced)).rejects.toThrow(BIND_TEXTS.bindConflict);
+    expect(BIND_TEXTS.bindConflict).toMatch(/at the same moment\. Try again: this key will then wait for the payer's approval\./);
+    const get = (fetch: () => Promise<Response>) => apiGet(fetch, "http://localhost:3000/api/v1", "assay_at_x", "/agents/me/delegate/status");
+    expect(await get(raced)).toBeNull();
+  });
+
   it("a key without a scope gets the scope text (403 AUTH_SCOPE_MISSING); a free-only key cannot pay", async () => {
     const missing = (scope: unknown) => answer(403, { success: false, error: { code: "AUTH_SCOPE_MISSING", message: "x", statusCode: 403, context: { requiredScope: scope } } });
     await expect(call(missing("payments"))).rejects.toThrow(new BindError("This key cannot pay. Create a key with paid calls on."));
@@ -296,6 +305,16 @@ describe("AUTH_SCOPE_MISSING texts", () => {
     expect(scopeMissingText("payments")).toBe("This key cannot pay. Create a key with paid calls on.");
     expect(scopeMissingText("reports:write")).toBe("This key is missing the reports:write permission.");
     expect(scopeMissingText(null)).toBe("This key is missing a permission this needs.");
+  });
+
+  it("a tool result refused AUTH_SCOPE_MISSING names its scope on assay/error (or its details), only when shaped like one", () => {
+    const refused = (error: Record<string, unknown>) => ({ isError: true, content: [{ type: "text", text: "x" }], _meta: { "assay/error": error } });
+    expect(toolScopeMissingOf(refused({ requiredScope: "payments", code: "AUTH_SCOPE_MISSING", retryable: false }))).toEqual({ scope: "payments" });
+    expect(toolScopeMissingOf(refused({ code: "AUTH_SCOPE_MISSING", details: { requiredScope: "payments" } }))).toEqual({ scope: "payments" });
+    expect(toolScopeMissingOf(refused({ code: "AUTH_SCOPE_MISSING", requiredScope: "<b>x</b>" }))).toEqual({ scope: null });
+    expect(toolScopeMissingOf(refused({ code: "PAYMENT_REQUIRED", requiredScope: "payments" }))).toBeUndefined();
+    expect(toolScopeMissingOf({ content: [] })).toBeUndefined();
+    expect(toolScopeMissingOf(null)).toBeUndefined();
   });
 
   it("the MCP host's plain HTTP 403 before JSON-RPC becomes the scope text", async () => {
