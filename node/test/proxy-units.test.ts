@@ -4,7 +4,7 @@ import { parseServeArgs } from "../src/commands/serve.js";
 import { AliasTable } from "../src/proxy/aliases.js";
 import { CallRegistry, CONFIRMATION_TTL_MS, TOMBSTONE_MS } from "../src/proxy/calls.js";
 import { checkEnvironment } from "../src/proxy/environment.js";
-import { Forwarder, reasonOf, refusalMessage, requiredScopeOf, scopeMissingText, toolScopeMissingOf } from "../src/proxy/forwarder.js";
+import { Forwarder, knownRefusalText, reasonOf, refusalMessage, requiredScopeOf, scopeMissingText, toolScopeMissingOf } from "../src/proxy/forwarder.js";
 import { enablePaidLink, serverApprovalLink } from "../src/proxy/meta.js";
 import { answerSignedOut, appName, loginCommand, SIGN_IN_AGAIN_DESCRIPTION, SIGN_IN_DESCRIPTION, SignInController, signInEndedText } from "../src/proxy/presignin.js";
 import { classify, negotiateVersion, SUPPORTED_PROTOCOL_VERSIONS } from "../src/proxy/protocol.js";
@@ -303,6 +303,7 @@ describe("AUTH_SCOPE_MISSING texts", () => {
     expect(requiredScopeOf({ error: { context: null } })).toBeNull();
     expect(requiredScopeOf("text")).toBeNull();
     expect(scopeMissingText("payments")).toBe("This key cannot pay. Create a key with paid calls on.");
+    expect(scopeMissingText("tools:call")).toBe("This key cannot call tools. Create a key with the Agent preset.");
     expect(scopeMissingText("reports:write")).toBe("This key is missing the reports:write permission.");
     expect(scopeMissingText(null)).toBe("This key is missing a permission this needs.");
   });
@@ -319,12 +320,62 @@ describe("AUTH_SCOPE_MISSING texts", () => {
 
   it("the MCP host's plain HTTP 403 before JSON-RPC becomes the scope text", async () => {
     const body = { success: false, error: { code: "AUTH_SCOPE_MISSING", message: "no", statusCode: 403, context: { requiredScope: "tools:call" } } };
-    expect(refusalMessage(403, "AUTH_SCOPE_MISSING", body)).toBe("This key is missing the tools:call permission.");
+    expect(refusalMessage(403, "AUTH_SCOPE_MISSING", body)).toBe("This key cannot call tools. Create a key with the Agent preset.");
     expect(refusalMessage(403, "ACCOUNT_BLOCKED", body)).toBe("Assay refused the request (HTTP 403): this account is blocked (ACCOUNT_BLOCKED).");
     const fetch = async () => new Response(JSON.stringify(body), { status: 403, headers: { "content-type": "application/json" } });
     const f = new Forwarder({ url: "http://localhost:3200/", fetch, queueWaitMs: 100 });
     const outcome = await f.send({ id: 7, body: JSON.stringify({ jsonrpc: "2.0", id: 7, method: "tools/list" }), bearer: "t", version: "2025-06-18" });
-    expect(outcome).toMatchObject({ kind: "response", response: { id: 7, error: { message: "This key is missing the tools:call permission." } } });
+    expect(outcome).toMatchObject({ kind: "response", response: { id: 7, error: { message: "This key cannot call tools. Create a key with the Agent preset." } } });
+  });
+});
+
+describe("handshake refusals (M1)", () => {
+  const TOKEN = "assay_at_secret-bearer-value";
+  const LINK = "/u/k3y9q2m4n8p1r5t7v0w6x3z2";
+  const json = (status: number, body: unknown) => async () => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+  const handshake = async (fetch: () => Promise<Response>) => {
+    const f = new Forwarder({ url: `http://localhost:3200${LINK}`, fetch, queueWaitMs: 100 });
+    return f.initialize(TOKEN, "2025-06-18");
+  };
+  const refused = (code: string, context?: Record<string, unknown>) => ({ success: false, error: { code, message: `No MCP server at ${LINK}`, ...(context ? { context } : {}) } });
+
+  it("an MCP URL that does not exist says so, and what to do", async () => {
+    const outcome = await handshake(json(404, refused("MCP_URL_NOT_FOUND")));
+    expect(outcome).toEqual({ kind: "error", code: -32000, message: "This MCP URL does not exist. Check the URL, or copy it again from Assay." });
+    expect(refusalMessage(404, "MCP_URL_NOT_FOUND", refused("MCP_URL_NOT_FOUND"))).toBe("This MCP URL does not exist. Check the URL, or copy it again from Assay.");
+  });
+
+  it("a key without tools:call or payments says which, and what to do", async () => {
+    expect(await handshake(json(403, refused("AUTH_SCOPE_MISSING", { requiredScope: "tools:call" })))).toMatchObject({
+      kind: "error",
+      message: "This key cannot call tools. Create a key with the Agent preset.",
+    });
+    expect(await handshake(json(403, refused("AUTH_SCOPE_MISSING", { requiredScope: "payments" })))).toMatchObject({
+      kind: "error",
+      message: "This key cannot pay. Create a key with paid calls on.",
+    });
+    expect(await handshake(json(403, refused("AUTH_AGENT_SUSPENDED")))).toMatchObject({ message: "Assay refused the request: this agent is suspended (AUTH_AGENT_SUSPENDED)." });
+  });
+
+  it("anything unknown stays generic, with the HTTP status and a code-shaped code only", async () => {
+    const generic = (message: string) => ({ kind: "error", code: -32000, message });
+    expect(await handshake(json(403, refused("SOMETHING_NEW")))).toEqual(generic("Assay refused the handshake (HTTP 403, SOMETHING_NEW)."));
+    expect(await handshake(json(500, { message: "boom" }))).toEqual(generic("Assay refused the handshake (HTTP 500)."));
+    expect(await handshake(json(403, { error: { code: "not a code", message: TOKEN } }))).toEqual(generic("Assay refused the handshake (HTTP 403)."));
+    expect(await handshake(async () => new Response("no", { status: 502 }))).toEqual(generic("Assay refused the handshake (HTTP 502)."));
+    // A JSON-RPC error from the server: its own text is never shown.
+    expect(await handshake(json(200, { jsonrpc: "2.0", id: "assay-mcp-initialize", error: { code: -32600, message: `bad ${TOKEN}` } }))).toEqual(generic("Assay refused the handshake."));
+    expect(knownRefusalText(null)).toBeNull();
+    expect(knownRefusalText("SOMETHING_NEW")).toBeNull();
+  });
+
+  it("never echoes the bearer or the link's token", async () => {
+    for (const body of [refused("MCP_URL_NOT_FOUND"), refused("AUTH_SCOPE_MISSING", { requiredScope: LINK }), refused("SOMETHING_NEW")]) {
+      const outcome = await handshake(json(404, body));
+      const text = JSON.stringify(outcome);
+      expect(text).not.toContain("k3y9q2m4n8p1r5t7v0w6x3z2");
+      expect(text).not.toContain(TOKEN);
+    }
   });
 });
 
