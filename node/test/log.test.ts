@@ -139,11 +139,11 @@ describe("logger", () => {
   it('logs "\\u001b[31m" escaped', () => {
     const lines: string[] = [];
     const log = createLogger({ level: "debug", stderr: (l) => lines.push(l) });
-    log.warn("colour \u001b[31m red", { v: "a\u001b[31mb", nl: "x\ny\rz", sep: "p q" });
+    log.warn("colour \u001b[31m red", { v: "a\u001b[31mb", nl: "x\ny\rz", sep: "p\u2028q" });
     const out = lines.join("");
     expect(out).not.toContain("\u001b");
     expect(out).not.toContain("\r");
-    expect(out).not.toContain(" ");
+    expect(out).not.toContain("\u2028");
     expect(out.trimEnd().split("\n")).toHaveLength(1);
     expect(out).toContain("colour \\u001b[31m red");
     expect(out).toContain("v=a\\u001b[31mb");
