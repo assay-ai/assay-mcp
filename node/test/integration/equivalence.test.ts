@@ -660,7 +660,7 @@ describe.runIf(enabled)("equivalence through the proxy: OAuth (B) = API key (A) 
                UPDATE agents SET primary_account_id = NULL, chain_id = NULL WHERE id = ${agentSql()};`,
         () => `UPDATE agents a SET primary_account_id = s.primary_account_id, chain_id = s.chain_id FROM eq_saved_wallet s WHERE a.id = s.id; DROP TABLE eq_saved_wallet;`,
       ],
-      ["organization blocked", "AUTH_ORGANIZATION_SUSPENDED", () => blockSql("ORGANIZATION"), () => unblockSql],
+      ["organization blocked", "ACCOUNT_BLOCKED", () => blockSql("ORGANIZATION"), () => unblockSql],
       ["wallet blocked", "ACCOUNT_BLOCKED", () => blockSql("WALLET"), () => unblockSql],
     ];
 
