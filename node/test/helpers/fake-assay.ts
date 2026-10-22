@@ -185,7 +185,7 @@ export class FakeAssay {
   skewSeconds = 0;
   /** The payer the session names (a test can switch it). */
   payer = PAYER;
-  /** The bind answer names this delegate instead of the one bound (a misbehaving server). */
+  /** The bind answer names this delegate (or pending key) instead of the one bound (a misbehaving server). */
   bindAnswerDelegate: string | null = null;
   /** `payTo` sent in requirements instead of the network's escrow. */
   payToOverride: string | null = null;
@@ -195,6 +195,19 @@ export class FakeAssay {
   delayMs = 0;
   /** `GET /agents/me/delegate/status` exists (false: an older backend, which answers 404). */
   statusRoute = true;
+  /**
+   * Binding a key while another is bound leaves it pending (`PENDING_APPROVAL`, the backend's
+   * rebinding) until `approvePending()`; false: the new key replaces the old one at once.
+   */
+  pendingRebind = false;
+  /** The bind request answers 409 `ACCOUNT_DELEGATE_ALREADY_BOUND` (the key is held by another live credential). */
+  alreadyBound = false;
+  /** The key waiting for approval (bare checksummed address), or `null`. */
+  pendingDelegate: string | null = null;
+  /** The origin of `approvalUrl` in the bind and status answers (the backend's `WEB_APP_URL`), or `null` for none. */
+  approvalOrigin: string | null = null;
+  /** The scopes of every bearer (the backend's agent key scopes). */
+  scopes: readonly string[] = ["tools:call", "payments", "activity:read"];
   /** The bearers this server accepts: the API key, and an OAuth access token a test adds. */
   readonly bearers = new Set<string>([API_KEY]);
   readonly calls: SeenCall[] = [];
@@ -276,6 +289,11 @@ export class FakeAssay {
     this.paths.push(`${req.method} ${path}`);
     const bearer = /^Bearer (\S+)$/.exec(req.headers.authorization ?? "")?.[1] ?? "";
     if (!this.bearers.has(bearer)) return this.send(res, 401, { statusCode: 401, message: "MCP_CREDENTIAL_INVALID" });
+    // The backend's scope check: the MCP host needs `tools:call`, the delegate routes `payments`.
+    const needed = path.startsWith("/api/v1/agents/me/delegate") ? "payments" : path.startsWith("/api/v1/") ? null : "tools:call";
+    if (needed !== null && !this.scopes.includes(needed)) {
+      return this.send(res, 403, { success: false, error: { code: "AUTH_SCOPE_MISSING", message: `This key does not have the ${needed} scope.`, statusCode: 403, context: { requiredScope: needed } } });
+    }
     if (path.startsWith("/api/v1/")) return this.api(req.method ?? "GET", path.slice("/api/v1".length), json, res);
     if (typeof json.method !== "string" || json.id === undefined) {
       res.writeHead(202).end();
@@ -329,23 +347,29 @@ export class FakeAssay {
         signer = null;
       }
       if (signer === null || getAddress(signer) !== c.delegate) return this.send(res, 400, { message: "ACCOUNT_DELEGATE_SIGNATURE_INVALID" });
+      if (this.alreadyBound) {
+        return this.send(res, 409, { success: false, error: { code: "ACCOUNT_DELEGATE_ALREADY_BOUND", message: "already bound", statusCode: 409 } });
+      }
+      const replacing = this.delegate !== null && this.delegate !== c.delegate;
+      if (this.pendingRebind && replacing) {
+        this.pendingDelegate = c.delegate;
+        const answer = this.binding();
+        return this.send(res, 201, { data: { ...answer, ...(this.bindAnswerDelegate ? { pendingDelegate: caip(this.bindAnswerDelegate) } : {}), status: "PENDING_APPROVAL" } });
+      }
       this.delegate = c.delegate;
-      return this.send(res, 201, { data: { credentialId: CREDENTIAL_ID, agentLabel: "agent", delegate: caip(this.bindAnswerDelegate ?? c.delegate), boundAt: new Date().toISOString() } });
+      this.pendingDelegate = null;
+      const answer = this.binding();
+      return this.send(res, 201, { data: { ...answer, delegate: caip(this.bindAnswerDelegate ?? c.delegate), boundAt: new Date().toISOString(), status: "ACTIVE" } });
     }
     if (method === "GET" && path === "/agents/me/delegate/status" && this.statusRoute) {
-      return this.send(res, 200, {
-        data: { credentialId: CREDENTIAL_ID, agentLabel: "agent", bound: this.delegate !== null, delegate: this.delegate ? caip(this.delegate) : null, boundAt: null },
-      });
+      return this.send(res, 200, { data: { ...this.binding(), bound: this.delegate !== null } });
     }
     if (method === "GET" && path === "/agents/me/delegate") {
       const g = this.delegate ? this.grants.get(this.delegate.toLowerCase()) : undefined;
       const active = g !== undefined && !g.revoked && g.validUntil > BigInt(this.nowSeconds());
       return this.send(res, 200, {
         data: {
-          credentialId: CREDENTIAL_ID,
-          agentLabel: "agent",
-          delegate: this.delegate ? caip(this.delegate) : null,
-          boundAt: null,
+          ...this.binding(),
           paidCalls: this.delegate
             ? active
               ? { status: "ACTIVE", maxVoucherAmount: String(g!.maxVoucherAmount), maxPerWindow: String(g!.maxPerWindow), spentInWindow: "0", validUntil: new Date(Number(g!.validUntil) * 1000).toISOString() }
@@ -358,6 +382,28 @@ export class FakeAssay {
   }
 
   // ---- MCP ----------------------------------------------------------------------------------
+
+  /** The binding as every delegate route answers it (`AgentDelegateBindingDto`). */
+  private binding(): Record<string, unknown> {
+    const caip = (a: string) => `${this.network.id}:${getAddress(a)}`;
+    const toApprove = this.pendingDelegate ?? this.delegate;
+    return {
+      credentialId: CREDENTIAL_ID,
+      agentLabel: "agent",
+      delegate: this.delegate ? caip(this.delegate) : null,
+      boundAt: null,
+      pendingDelegate: this.pendingDelegate ? caip(this.pendingDelegate) : null,
+      pendingSince: this.pendingDelegate ? new Date().toISOString() : null,
+      approvalUrl: this.approvalOrigin && toApprove ? `${this.approvalOrigin}/agents/enable-paid?credential=${CREDENTIAL_ID}#key=${toApprove}` : null,
+    };
+  }
+
+  /** The payer approved the pending key on chain: the backend promotes it to `delegate`. */
+  approvePending(): void {
+    if (this.pendingDelegate === null) return;
+    this.delegate = this.pendingDelegate;
+    this.pendingDelegate = null;
+  }
 
   priceObject(): Record<string, unknown> {
     const max = this.maxAmount ?? this.price;

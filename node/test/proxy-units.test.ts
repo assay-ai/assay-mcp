@@ -4,7 +4,8 @@ import { parseServeArgs } from "../src/commands/serve.js";
 import { AliasTable } from "../src/proxy/aliases.js";
 import { CallRegistry, CONFIRMATION_TTL_MS, TOMBSTONE_MS } from "../src/proxy/calls.js";
 import { checkEnvironment } from "../src/proxy/environment.js";
-import { Forwarder, reasonOf } from "../src/proxy/forwarder.js";
+import { Forwarder, reasonOf, refusalMessage, requiredScopeOf, scopeMissingText } from "../src/proxy/forwarder.js";
+import { enablePaidLink, serverApprovalLink } from "../src/proxy/meta.js";
 import { answerSignedOut, appName, loginCommand, SIGN_IN_AGAIN_DESCRIPTION, SIGN_IN_DESCRIPTION, SignInController, signInEndedText } from "../src/proxy/presignin.js";
 import { classify, negotiateVersion, SUPPORTED_PROTOCOL_VERSIONS } from "../src/proxy/protocol.js";
 import { LineSplitter } from "../src/proxy/stdio.js";
@@ -251,7 +252,20 @@ describe("delegate binding API refusals (M9)", () => {
     const refused = answer(409, { success: false, error: { code: "ACCOUNT_DELEGATE_ALREADY_BOUND", message: "already bound" } });
     await expect(call(refused)).rejects.toBeInstanceOf(BindError);
     await expect(call(refused)).rejects.toThrow(BIND_TEXTS.alreadyBound);
-    expect(BIND_TEXTS.alreadyBound).toMatch(/still bound to another Assay connection\. Run logout, then login/);
+    expect(BIND_TEXTS.alreadyBound).toMatch(/already bound, or waiting for approval, on another Assay key\. Revoke that key in the Assay portal, or run logout, then login/);
+  });
+
+  it("a key without a scope gets the scope text (403 AUTH_SCOPE_MISSING); a free-only key cannot pay", async () => {
+    const missing = (scope: unknown) => answer(403, { success: false, error: { code: "AUTH_SCOPE_MISSING", message: "x", statusCode: 403, context: { requiredScope: scope } } });
+    await expect(call(missing("payments"))).rejects.toThrow(new BindError("This key cannot pay. Create a key with paid calls on."));
+    await expect(call(missing("activity:read"))).rejects.toThrow("This key is missing the activity:read permission.");
+    // A scope that is not shaped like one is never echoed.
+    await expect(call(missing("<b>pay</b>"))).rejects.toThrow("This key is missing a permission this needs.");
+    await expect(call(answer(403, { error: { code: "AUTH_SCOPE_MISSING" } }))).rejects.toThrow("This key is missing a permission this needs.");
+    // Any other 403 stays a generic failure; the poll's GET never throws.
+    expect(await call(answer(403, { error: { code: "AUTH_HUMAN_SESSION_REQUIRED" } }))).toBeNull();
+    const get = (fetch: () => Promise<Response>) => apiGet(fetch, "http://localhost:3000/api/v1", "assay_at_x", "/agents/me/delegate/status");
+    expect(await get(missing("payments"))).toBeNull();
   });
 
   it("any other refusal stays a generic failure", async () => {
@@ -269,6 +283,52 @@ describe("delegate binding API refusals (M9)", () => {
     expect(await get(() => Promise.reject(new Error("down")))).toBeNull();
     expect(await get(answer(200, { data: { bound: true } }))).toMatchObject({ body: { data: { bound: true } } });
     expect(await call(answer(404, {}))).toBeNull();
+  });
+});
+
+describe("AUTH_SCOPE_MISSING texts", () => {
+  it("requiredScope from the envelope (error.context) or the top level, only when shaped like a scope", () => {
+    expect(requiredScopeOf({ success: false, error: { code: "AUTH_SCOPE_MISSING", context: { requiredScope: "tools:call" } } })).toBe("tools:call");
+    expect(requiredScopeOf({ code: "AUTH_SCOPE_MISSING", context: { requiredScope: "payments" } })).toBe("payments");
+    expect(requiredScopeOf({ error: { context: { requiredScope: "Tools Call!" } } })).toBeNull();
+    expect(requiredScopeOf({ error: { context: null } })).toBeNull();
+    expect(requiredScopeOf("text")).toBeNull();
+    expect(scopeMissingText("payments")).toBe("This key cannot pay. Create a key with paid calls on.");
+    expect(scopeMissingText("reports:write")).toBe("This key is missing the reports:write permission.");
+    expect(scopeMissingText(null)).toBe("This key is missing a permission this needs.");
+  });
+
+  it("the MCP host's plain HTTP 403 before JSON-RPC becomes the scope text", async () => {
+    const body = { success: false, error: { code: "AUTH_SCOPE_MISSING", message: "no", statusCode: 403, context: { requiredScope: "tools:call" } } };
+    expect(refusalMessage(403, "AUTH_SCOPE_MISSING", body)).toBe("This key is missing the tools:call permission.");
+    expect(refusalMessage(403, "ACCOUNT_BLOCKED", body)).toBe("Assay refused the request (HTTP 403): this account is blocked (ACCOUNT_BLOCKED).");
+    const fetch = async () => new Response(JSON.stringify(body), { status: 403, headers: { "content-type": "application/json" } });
+    const f = new Forwarder({ url: "http://localhost:3200/", fetch, queueWaitMs: 100 });
+    const outcome = await f.send({ id: 7, body: JSON.stringify({ jsonrpc: "2.0", id: 7, method: "tools/list" }), bearer: "t", version: "2025-06-18" });
+    expect(outcome).toMatchObject({ kind: "response", response: { id: 7, error: { message: "This key is missing the tools:call permission." } } });
+  });
+});
+
+describe("server approvalUrl (pending payment-key rebinding)", () => {
+  const WEB = "https://portal.goassay.ai";
+  const KEY = "0x5555555555555555555555555555555555555555";
+  const CRED = "7b0c1d2e-3f40-4a5b-8c6d-7e8f9a0b1c2d";
+  const url = (origin: string, key = KEY) => `${origin}/agents/enable-paid?credential=${CRED}#key=${key}`;
+
+  it("used only on the configured web origin and only for this key", () => {
+    expect(serverApprovalLink(WEB, url(WEB), KEY)).toBe(url(WEB));
+    expect(serverApprovalLink(WEB, url(WEB, KEY.toLowerCase()), KEY)).toBe(url(WEB, KEY.toLowerCase()));
+    expect(serverApprovalLink(WEB, null, KEY)).toBeNull();
+    expect(serverApprovalLink(WEB, url("https://portal.goassay.ai.evil.example"), KEY)).toBeNull();
+    expect(serverApprovalLink(WEB, url("http://portal.goassay.ai"), KEY)).toBeNull();
+    expect(serverApprovalLink(WEB, url("https://app.goassay.ai"), KEY)).toBeNull();
+    expect(serverApprovalLink(WEB, url("https://user:pw@portal.goassay.ai"), KEY)).toBeNull();
+    expect(serverApprovalLink(WEB, url(WEB, "0x6666666666666666666666666666666666666666"), KEY)).toBeNull();
+    expect(serverApprovalLink(WEB, `${WEB}/agents/enable-paid?credential=${CRED}`, KEY)).toBeNull();
+    expect(serverApprovalLink(WEB, "javascript:alert(1)", KEY)).toBeNull();
+    expect(serverApprovalLink(WEB, "not a url", KEY)).toBeNull();
+    // The fallback the caller builds itself.
+    expect(enablePaidLink(WEB, CRED, KEY)).toBe(url(WEB));
   });
 });
 
