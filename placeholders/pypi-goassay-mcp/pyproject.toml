@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "goassay-mcp"
+version = "0.0.1"
+description = "Placeholder. The Assay MCP proxy is @goassay-ai/mcp on npm."
+readme = "README.md"
+license-files = ["LICENSE"]
+requires-python = ">=3.9"
+dependencies = []
+classifiers = ["Development Status :: 1 - Planning"]
+
+[project.urls]
+Repository = "https://github.com/assay-ai/assay-mcp"
+
+[tool.hatch.build.targets.wheel]
+bypass-selection = true
+
+[tool.hatch.build.targets.sdist]
+include = ["README.md", "LICENSE", "pyproject.toml"]

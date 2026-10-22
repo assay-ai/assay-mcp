@@ -5,3 +5,5 @@ These packages reserve npm names that look like `@goassay-ai/mcp`: `goassay-mcp`
 They are published by hand, once, by the npm organisation owner. The release workflow never publishes them.
 
 `bootstrap-goassay-ai-mcp` is an empty `@goassay-ai/mcp@0.0.0-bootstrap.0`, published by hand once (with `--tag bootstrap`) so npm trusted publishing can be configured for the real package, then deprecated.
+
+`pypi-goassay-mcp` reserves the PyPI name `goassay-mcp` for a future Python version of the proxy. Like the npm placeholders, it has no code and no dependencies, and its README points to `@goassay-ai/mcp` and to the Python SDK `goassay`. The PyPI organisation owner uploads it by hand, once: `uv build` in the folder, then `uvx twine upload dist/*`. No release workflow publishes it.
