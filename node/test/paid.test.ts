@@ -376,6 +376,147 @@ describe("paid path (SDK client → proxy → fake Assay)", () => {
     expect(readProfile(profile())!.delegateAddress).toBeNull();
   });
 
+  it("rebinding: PENDING_APPROVAL for this key → the server's approvalUrl, and the wait lasts until Assay names this key as delegate", async () => {
+    const OLD_KEY = privateKeyToAccount(generatePrivateKey()).address;
+    const address = (await seedProfile(true))!;
+    fake.delegate = OLD_KEY; // another key stays bound to the credential
+    fake.grant(OLD_KEY);
+    fake.pendingRebind = true;
+    fake.approvalOrigin = WEB;
+    const { client, stderr } = await connect({ extraEnv: { TEST_POLL_MS: "100" } });
+    const r = await client.callTool({ name: "weather", arguments: {} });
+    expect(r.isError).toBe(true);
+    expect(fake.pendingDelegate).toBe(address);
+    expect(fake.delegate).toBe(OLD_KEY);
+    const link = `${WEB}/agents/enable-paid?credential=${CREDENTIAL_ID}#key=${address}`;
+    expect(textOf(r)).toContain(`Open ${link} to turn them on`);
+    expect(textOf(r)).toContain(fingerprint(address));
+    expect(fake.opened).toEqual([link]);
+    expect(fake.accepted).toHaveLength(0);
+    expect(readProfile(profile())!.delegateAddress).toBe(address);
+
+    // The payer approves the new key on chain; Assay has not promoted it yet: the wait goes on.
+    fake.grant(address);
+    const fullReads = () => fake.paths.filter((p) => p === "GET /api/v1/agents/me/delegate").length;
+    await until(() => fullReads() >= 2);
+    expect(stderr()).not.toContain("Paid calls are on");
+    fake.approvePending();
+    await until(() => stderr().includes("Paid calls are on"));
+    const paid = await client.callTool({ name: "weather", arguments: {} });
+    expect(paid.isError).toBeFalsy();
+    expect(fake.accepted).toHaveLength(1);
+  });
+
+  it("an approvalUrl on another origin than the configured web app is not opened: the local link is", async () => {
+    await seedProfile(false);
+    fake.approvalOrigin = "http://evil.example";
+    const { client } = await connect();
+    const r = await client.callTool({ name: "weather", arguments: {} });
+    const link = `${WEB}/agents/enable-paid?credential=${CREDENTIAL_ID}#key=${fake.delegate!}`;
+    expect(textOf(r)).toContain(`Open ${link} to turn them on`);
+    expect(textOf(r)).not.toContain("evil.example");
+    expect(fake.opened).toEqual([link]);
+  });
+
+  it("a pending answer naming another key → an error, no link, no browser", async () => {
+    const OLD_KEY = privateKeyToAccount(generatePrivateKey()).address;
+    await seedProfile(true);
+    fake.delegate = OLD_KEY;
+    fake.pendingRebind = true;
+    fake.bindAnswerDelegate = OTHER_PAYER; // the pending answer names another key
+    const { client } = await connect();
+    const r = await client.callTool({ name: "weather", arguments: {} });
+    expect(textOf(r)).toBe("Paid calls could not be set up: Assay did not accept the payment key. Try again.");
+    expect(fake.opened).toEqual([]);
+  });
+
+  it("a key bound or pending on another live credential (409) → its own text, no link", async () => {
+    await seedProfile(false);
+    const { client } = await connect();
+    fake.alreadyBound = true;
+    const r = await client.callTool({ name: "weather", arguments: {} });
+    expect(textOf(r)).toBe(
+      "Paid calls could not be set up: this payment key is already bound, or waiting for approval, on another Assay key. Revoke that key in the Assay portal, or run logout, then login, and try again.",
+    );
+    expect(fake.opened).toEqual([]);
+  });
+
+  it("a first-bind race (409 ACCOUNT_DELEGATE_BIND_CONFLICT) → bound once more, the key waits for approval", async () => {
+    const WINNER = privateKeyToAccount(generatePrivateKey()).address;
+    await seedProfile(false);
+    fake.delegate = null;
+    fake.bindConflicts = 1;
+    fake.raceWinner = WINNER;
+    fake.pendingRebind = true;
+    const { client } = await connect();
+    const r = await client.callTool({ name: "weather", arguments: {} });
+    expect(r.isError).toBe(true);
+    const address = readProfile(profile())!.delegateAddress!;
+    expect(fake.challenges).toEqual([address, address]);
+    expect(fake.delegate).toBe(WINNER);
+    expect(fake.pendingDelegate).toBe(address);
+    const link = `${WEB}/agents/enable-paid?credential=${CREDENTIAL_ID}#key=${address}`;
+    expect(textOf(r)).toContain(`Open ${link} to turn them on`);
+    expect(fake.accepted).toHaveLength(0);
+  });
+
+  it("a second bind conflict in a row → its own text, no link", async () => {
+    await seedProfile(false);
+    fake.bindConflicts = 2;
+    const { client } = await connect();
+    const r = await client.callTool({ name: "weather", arguments: {} });
+    expect(textOf(r)).toBe(
+      "Paid calls could not be set up: another payment key was bound to this Assay key at the same moment. Try again: this key will then wait for the payer's approval.",
+    );
+    expect(fake.challenges).toHaveLength(2);
+    expect(fake.opened).toEqual([]);
+  });
+
+  it("the paid path refuses a free-only key (AUTH_SCOPE_MISSING payments) → \"This key cannot pay\", nothing bound or signed", async () => {
+    await seedProfile(false);
+    fake.scopes = ["tools:call", "activity:read"];
+    fake.paidPathScope = true;
+    const { client } = await connect();
+    const r = await client.callTool({ name: "weather", arguments: {} });
+    expect(r.isError).toBe(true);
+    expect(textOf(r)).toBe("This key cannot pay. Create a key with paid calls on.");
+    expect((metaOf(r)["assay/error"] as { code: string }).code).toBe("AUTH_SCOPE_MISSING");
+    expect(weatherCalls()).toHaveLength(1);
+    expect(fake.challenges).toEqual([]);
+    expect(fake.opened).toEqual([]);
+  });
+
+  it("AUTH_SCOPE_MISSING (payments) on the signed retry → \"This key cannot pay\", signed once, not resent", async () => {
+    await enabled();
+    const { client } = await connect();
+    await client.listTools();
+    fake.voucherScopeMissing = true;
+    const r = await client.callTool({ name: "weather", arguments: {} });
+    expect(textOf(r)).toBe("This key cannot pay. Create a key with paid calls on.");
+    expect(weatherCalls().map((c) => c.meta["assay/voucher"] !== undefined)).toEqual([false, true]);
+    expect(fake.accepted).toHaveLength(0);
+  });
+
+  it("a free-only key (no payments scope) → \"This key cannot pay\", no key bound, no link", async () => {
+    await seedProfile(false);
+    fake.scopes = ["tools:call", "activity:read"];
+    const { client } = await connect();
+    const r = await client.callTool({ name: "weather", arguments: {} });
+    expect(r.isError).toBe(true);
+    expect(textOf(r)).toBe("This key cannot pay. Create a key with paid calls on.");
+    expect(fake.delegate).toBeNull();
+    expect(fake.opened).toEqual([]);
+    // Free calls still work.
+    expect((await client.callTool({ name: "echo", arguments: {} })).isError).toBeFalsy();
+  });
+
+  it("a free-only key without a recorded credential gets the same text, not \"try again\"", async () => {
+    fake.scopes = ["tools:call"];
+    const { client } = await connect();
+    const r = await client.callTool({ name: "weather", arguments: {} });
+    expect(textOf(r)).toBe("This key cannot pay. Create a key with paid calls on.");
+  });
+
   for (const [what, payTo] of [
     ["another escrow", `${NET_ID}:0x1111111111111111111111111111111111111111`],
     ["the escrow on another chain", `eip155:1:${BUILT_IN.escrow.split(":")[2]}`],

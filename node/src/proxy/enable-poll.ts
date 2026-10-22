@@ -14,7 +14,9 @@ import type { Logger } from "../log/logger.js";
  * - each tick after that: a fresh chain read (`readDelegation(..., { fresh: true })`) and no
  *   backend request;
  * - once the chain shows a live grant: one `GET /agents/me/delegate`, whose `paidCalls` must say
- *   ACTIVE for this key.
+ *   ACTIVE for this key, and whose `delegate` must be this key. A key bound while another one was
+ *   (`PENDING_APPROVAL`: the old key stays `delegate`, this one `pendingDelegate`) keeps the wait
+ *   going until Assay promotes it, which it does when the payer's approval lands on chain.
  * Every 5 s for the first 2 minutes, then every 15 s (each read is five requests per RPC, and the
  * listed RPCs include a public one), for up to 15 minutes in all. One wait per process.
  */
@@ -114,7 +116,9 @@ export function startEnablePoll(o: EnablePollInputs): { stop: () => void } {
       } else if (answer !== null || probes >= MAX_PROBES) {
         // For the log only: the final `GET /agents/me/delegate` is what decides.
         const data = dataOf(answer);
-        if (answer !== null && !(isObject(data) && data.bound === true && namesLocal(data.delegate))) {
+        if (answer !== null && isObject(data) && namesLocal(data.pendingDelegate)) {
+          o.log.info("this payment key waits for the payer's approval; another key stays bound until then");
+        } else if (answer !== null && !(isObject(data) && data.bound === true && namesLocal(data.delegate))) {
           o.log.info("the credential's binding does not name this payment key");
         }
         mode = "chain";

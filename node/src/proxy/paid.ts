@@ -16,10 +16,10 @@ import { createProfile, paidUrlKey, readLimits, readPaidUrls, readProfileFor, re
 import { issuedAt } from "../signer/clock.js";
 import { generate } from "../signer/keygen.js";
 import { openThroughGate } from "./browser-gate.js";
-import { apiGet, apiRequest, BindError, bindDelegateKey } from "./delegate-bind.js";
-import { startEnablePoll } from "./enable-poll.js";
+import { apiGet, apiRequest, BindError, bindDelegateKey, type BindResult } from "./delegate-bind.js";
+import { DELEGATE_STATUS_PATH, startEnablePoll } from "./enable-poll.js";
 import { CONFIRMATION_TTL_MS, type CallRegistry, type ForwardedCall } from "./calls.js";
-import type { FetchLike } from "./forwarder.js";
+import { scopeMissingText, toolScopeMissingOf, type FetchLike } from "./forwarder.js";
 import {
   appendText,
   debtSuffix,
@@ -35,6 +35,7 @@ import {
   quoteFromGetTool,
   quotesFromSearch,
   refusedText,
+  serverApprovalLink,
   REFUSED_META,
   SEARCH_TOOLS,
   voucherEnvelope,
@@ -50,6 +51,8 @@ import type { JsonRpcResponse } from "./protocol.js";
  * - quotes in `get_tool` and `search_tools` results go to the G3 cache (the proxy fills it from
  *   `tools/list` itself);
  * - `PAYMENT_DEBT_OUTSTANDING`: the answer, with " Settle it at {WEB}/funding";
+ * - `AUTH_SCOPE_MISSING` (a free-only key on a paid tool, before or after a voucher): the scope
+ *   text ("This key cannot pay. ..." for `payments`); nothing is signed, re-signed or resent;
  * - `PAYMENT_REQUIRED` with `--no-paid`: the answer unchanged;
  * - this URL not in `paid-urls.json`: the allow-paid text;
  * - no payment key bound here, or no active grant on chain for it: under the profile lock, a key
@@ -179,6 +182,8 @@ export class PaidPath {
     if (!("result" in response)) return response;
     const result = response.result;
     this.observeMetaTool(call, result);
+    const scoped = this.scopeRefused(response);
+    if (scoped !== null) return scoped;
     const state = paymentState(result);
     if (state.kind === "debt") return { ...response, result: appendText(result, debtSuffix(this.o.deployment.web)) };
     if (state.kind !== "payment-required" || this.o.noPaid) return response;
@@ -198,6 +203,15 @@ export class PaidPath {
     } else if (call.tool === SEARCH_TOOLS) {
       this.o.quotes.setAll(quotesFromSearch(result));
     }
+  }
+
+  /** An `AUTH_SCOPE_MISSING` tool refusal with the proxy's scope text; `null` for any other answer. */
+  private scopeRefused(response: JsonRpcResponse): JsonRpcResponse | null {
+    if (!("result" in response)) return null;
+    const missing = toolScopeMissingOf(response.result);
+    if (missing === undefined) return null;
+    this.log.info("scope missing", { scope: missing.scope ?? "unnamed" });
+    return { ...response, result: errorResult(scopeMissingText(missing.scope), response.result) };
   }
 
   private refused(response: JsonRpcResponse, result: Record<string, unknown>, r: Refusal): JsonRpcResponse {
@@ -338,7 +352,8 @@ export class PaidPath {
         if (after.kind === "error" && after.code === DELEGATE_INACTIVE_CODE && payer !== null) {
           this.o.chain.invalidate(payer, localAddress, network.id);
         }
-        return answer;
+        // A key that may not pay is refused even with the voucher: say so, and sign nothing more.
+        return this.scopeRefused(answer) ?? answer;
       }
       if (step.code === "G7_CONFIRMATION_REQUIRED" && pass === 0) {
         const asked = await this.confirm(call, requirement, forwardedCall, network);
@@ -410,13 +425,22 @@ export class PaidPath {
     reasked: boolean,
   ): Promise<JsonRpcResponse> {
     const credentialId = await this.credentialId();
-    if (credentialId === null) throw new SetupError("Paid calls could not be set up yet: this app's Assay sign-in is not confirmed. Try again in a minute.");
-    const address = bind ? await this.bind(network, credentialId) : (await this.localKey())?.address ?? null;
+    if (credentialId === null) {
+      // A key without `payments` cannot read its binding either: say so rather than "try again".
+      await this.api("GET", DELEGATE_STATUS_PATH).catch((err: unknown) => {
+        throw err instanceof BindError ? new SetupError(err.message) : err;
+      });
+      throw new SetupError("Paid calls could not be set up yet: this app's Assay sign-in is not confirmed. Try again in a minute.");
+    }
+    const bound = bind ? await this.bind(network, credentialId) : null;
+    const address = bound !== null ? bound.address : (await this.localKey())?.address ?? null;
     if (address === null) throw new SetupError("Paid calls could not be set up: the payment key could not be read. Try again.");
+    // Another key stays bound until the payer approves this one (rebinding): nothing to ask again.
+    const pending = bound?.status === "PENDING_APPROVAL";
 
     // F5 step 3: an existing key bound to a new credential keeps its on-chain grant, so the call
     // is asked again (unsigned) for a requirement that names the bound key.
-    if (bind && !reasked && payer !== null) {
+    if (bind && !pending && !reasked && payer !== null) {
       const chain = toGuardChain(await this.o.chain.readDelegation(network.id, payer, address), address);
       const live = chain !== null && chain.active && BigInt(chain.validUntil) > BigInt(Math.floor(this.now() / 1000));
       if (!live) this.o.chain.invalidate(payer, address, network.id);
@@ -429,7 +453,8 @@ export class PaidPath {
       }
     }
 
-    const link = enablePaidLink(this.o.deployment.web, credentialId, address);
+    // The server's link only on the configured web origin, and only for this key; else our own.
+    const link = serverApprovalLink(this.o.deployment.web, bound?.approvalUrl ?? null, address) ?? enablePaidLink(this.o.deployment.web, credentialId, address);
     if (link === null) throw new SetupError("Paid calls cannot be turned on from this app for this Assay deployment.");
     const opened = await openThroughGate(this.o.profile, link, this.o.openBrowser, { ...this.o.lockOptions, now: this.now });
     if (!opened) this.o.stderr(`assay-mcp: to turn on paid calls, open ${link}\n`);
@@ -439,6 +464,8 @@ export class PaidPath {
 
   private onPlainAnswer(answer: JsonRpcResponse): JsonRpcResponse {
     if (!("result" in answer)) return answer;
+    const scoped = this.scopeRefused(answer);
+    if (scoped !== null) return scoped;
     return paymentState(answer.result).kind === "debt" ? { ...answer, result: appendText(answer.result, debtSuffix(this.o.deployment.web)) } : answer;
   }
 
@@ -454,9 +481,11 @@ export class PaidPath {
    *   key, the binding is redone once. The keychain is the single source of truth: no side record
    *   is kept, so any number of windows binding at once do not invalidate each other.
    * The clock is corrected from the challenge answer's `Date` header (clamped to ±120 s); a
-   * challenge refused on its expiry is retried once with a fresh one. Returns the bound address.
+   * challenge refused on its expiry is retried once with a fresh one. Returns the bound address
+   * and the server's answer: `PENDING_APPROVAL` when another key stays bound until the payer
+   * approves this one (the key is recorded all the same: it is the one this computer signs with).
    */
-  private async bind(network: BuiltInNetwork, credentialId: string): Promise<string> {
+  private async bind(network: BuiltInNetwork, credentialId: string): Promise<BindResult & { address: string }> {
     const { profile, keychain } = this.o;
     for (let round = 0; round < 2; round++) {
       const bearer = await this.host.bearer();
@@ -481,7 +510,7 @@ export class PaidPath {
         this.o.lockOptions,
       );
 
-      await this.bindOnServer(account, network, credentialId, bearer);
+      const answer = await this.bindOnServer(account, network, credentialId, bearer);
 
       const outcome = await withLock(
         profile,
@@ -498,8 +527,8 @@ export class PaidPath {
       );
       if (outcome === "signed-out") throw new SetupError(SIGNED_OUT_DURING_BIND);
       if (outcome === "recorded") {
-        this.log.info("payment key bound", { credential: credentialId.slice(0, 8) });
-        return account.address;
+        this.log.info(answer.status === "ACTIVE" ? "payment key bound" : "payment key waits for approval", { credential: credentialId.slice(0, 8) });
+        return { ...answer, address: account.address };
       }
       this.log.warn("payment key changed during the binding; binding again");
     }
@@ -507,9 +536,9 @@ export class PaidPath {
   }
 
   /** The challenge, its field-by-field check, the signature and the bind request (no lock held). */
-  private async bindOnServer(account: PrivateKeyAccount, network: BuiltInNetwork, credentialId: string, bearer: string): Promise<void> {
+  private async bindOnServer(account: PrivateKeyAccount, network: BuiltInNetwork, credentialId: string, bearer: string): Promise<BindResult> {
     try {
-      await bindDelegateKey({
+      return await bindDelegateKey({
         account,
         api: (method, path, body) => this.api(method, path, body, bearer),
         environment: this.o.deployment.environment,
