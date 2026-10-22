@@ -747,6 +747,9 @@ describe("meta", () => {
 
   it("texts", () => {
     expect(notAllowedText("https://mcp.goassay.ai/c/x")).toBe(`Paid calls through this server are off. To allow them, run in a terminal: npx -y @goassay-ai/mcp@${VERSION} allow-paid https://mcp.goassay.ai/c/x`);
+    // A named profile is passed on, or the command acts on the default one (M1 run).
+    expect(notAllowedText("https://mcp.goassay.ai/c/x", "work")).toBe(`Paid calls through this server are off. To allow them, run in a terminal: npx -y @goassay-ai/mcp@${VERSION} allow-paid https://mcp.goassay.ai/c/x --profile work`);
+    expect(notAllowedText("https://mcp.goassay.ai/c/x", "default")).toBe(notAllowedText("https://mcp.goassay.ai/c/x"));
     // A URL with ? or & is quoted, so zsh and bash run it as one word (final review I1).
     expect(notAllowedText("https://mcp.goassay.ai/?tools=a&free=1")).toBe(`Paid calls through this server are off. To allow them, run in a terminal: npx -y @goassay-ai/mcp@${VERSION} allow-paid 'https://mcp.goassay.ai/?tools=a&free=1'`);
     expect(debtSuffix("http://localhost:4000/")).toBe(" Settle it at http://localhost:4000/funding");

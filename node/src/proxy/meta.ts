@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { getAddress, isAddress } from "viem";
-import { shellQuote } from "../clients/install-command.js";
+import { DEFAULT_PROFILE, shellQuote } from "../clients/install-command.js";
 import { VERSION } from "../version.js";
 
 /**
@@ -133,9 +133,10 @@ export function appendText(result: Record<string, unknown>, suffix: string): Rec
   return { ...result, content };
 }
 
-/** §7.7 step 5. */
-export function notAllowedText(url: string): string {
-  return `Paid calls through this server are off. To allow them, run in a terminal: npx -y @goassay-ai/mcp@${VERSION} allow-paid ${shellQuote(url)}`;
+/** §7.7 step 5. `--profile` is named when the proxy runs under another profile than the default. */
+export function notAllowedText(url: string, profile: string = DEFAULT_PROFILE): string {
+  const flag = profile === DEFAULT_PROFILE ? "" : ` --profile ${shellQuote(profile)}`;
+  return `Paid calls through this server are off. To allow them, run in a terminal: npx -y @goassay-ai/mcp@${VERSION} allow-paid ${shellQuote(url)}${flag}`;
 }
 
 /** The payment key as people compare it: its last 8 hex digits, upper case, in two groups (`1A2B 9F3C`). */
