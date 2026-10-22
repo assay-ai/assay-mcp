@@ -357,13 +357,14 @@ describe("handshake refusals (M1)", () => {
     expect(await handshake(json(403, refused("AUTH_AGENT_SUSPENDED")))).toMatchObject({ message: "Assay refused the request: this agent is suspended (AUTH_AGENT_SUSPENDED)." });
   });
 
-  it("anything unknown stays the generic text", async () => {
-    const generic = { kind: "error", code: -32000, message: "Assay refused the handshake." };
-    expect(await handshake(json(403, refused("SOMETHING_NEW")))).toEqual(generic);
-    expect(await handshake(json(500, { message: "boom" }))).toEqual(generic);
-    expect(await handshake(async () => new Response("no", { status: 502 }))).toEqual(generic);
+  it("anything unknown stays generic, with the HTTP status and a code-shaped code only", async () => {
+    const generic = (message: string) => ({ kind: "error", code: -32000, message });
+    expect(await handshake(json(403, refused("SOMETHING_NEW")))).toEqual(generic("Assay refused the handshake (HTTP 403, SOMETHING_NEW)."));
+    expect(await handshake(json(500, { message: "boom" }))).toEqual(generic("Assay refused the handshake (HTTP 500)."));
+    expect(await handshake(json(403, { error: { code: "not a code", message: TOKEN } }))).toEqual(generic("Assay refused the handshake (HTTP 403)."));
+    expect(await handshake(async () => new Response("no", { status: 502 }))).toEqual(generic("Assay refused the handshake (HTTP 502)."));
     // A JSON-RPC error from the server: its own text is never shown.
-    expect(await handshake(json(200, { jsonrpc: "2.0", id: "assay-mcp-initialize", error: { code: -32600, message: `bad ${TOKEN}` } }))).toEqual(generic);
+    expect(await handshake(json(200, { jsonrpc: "2.0", id: "assay-mcp-initialize", error: { code: -32600, message: `bad ${TOKEN}` } }))).toEqual(generic("Assay refused the handshake."));
     expect(knownRefusalText(null)).toBeNull();
     expect(knownRefusalText("SOMETHING_NEW")).toBeNull();
   });

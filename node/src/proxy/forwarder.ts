@@ -48,11 +48,17 @@ const SESSION_ID_RE = /^[\x21-\x7e]{1,256}$/;
 export type FetchLike = (url: string, init: PinnedInit) => Promise<Response>;
 
 export type Outcome =
-  /** `refusal`: the plain-language reason of an HTTP refusal whose code is known. */
-  | { kind: "response"; response: JsonRpcResponse; refusal?: string }
+  /** `refused`: an HTTP refusal, with its status, its code (checked shape) and, for a known code, its text. */
+  | { kind: "response"; response: JsonRpcResponse; refused?: Refused }
   | { kind: "accepted" }
   | { kind: "unauthorized" }
   | { kind: "error"; code: number; message: string };
+
+export interface Refused {
+  readonly status: number;
+  readonly code: string | null;
+  readonly text: string | null;
+}
 
 export interface ForwarderOptions {
   /** The canonical MCP URL (`ResolvedDeployment.url`). */
@@ -175,7 +181,7 @@ export class Forwarder {
     });
     if (init.kind !== "response") return init.kind === "accepted" ? { kind: "error", code: SERVER_ERROR, message: "Assay did not answer the handshake." } : init;
     // A known refusal (no such MCP URL, a key without a scope, …) says why; anything else stays generic.
-    if ("error" in init.response) return { kind: "error", code: SERVER_ERROR, message: init.refusal ?? "Assay refused the handshake." };
+    if ("error" in init.response) return { kind: "error", code: SERVER_ERROR, message: handshakeRefusalText(init.refused) };
     const done = await this.send({ id: null, bearer, version, body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) });
     return done.kind === "unauthorized" || done.kind === "error" ? done : init;
   }
@@ -279,8 +285,7 @@ export class Forwarder {
     if (pair.response) return { kind: "response", response: pair.response };
     if (!res.ok) {
       const response = errorResponse(exchange.id, SERVER_ERROR, refusalMessage(res.status, refusalCode, refusal));
-      const known = knownRefusalText(refusalCode, refusal);
-      return known === null ? { kind: "response", response } : { kind: "response", response, refusal: known };
+      return { kind: "response", response, refused: { status: res.status, code: refusalCode, text: knownRefusalText(refusalCode, refusal) } };
     }
     return { kind: "error", code: SERVER_ERROR, message: "Assay's answer had no result for this request." };
   }
@@ -430,6 +435,16 @@ export function knownRefusalText(code: string | null, body?: unknown): string | 
   if (code === URL_NOT_FOUND_CODE) return "This MCP URL does not exist. Check the URL, or copy it again from Assay.";
   const reason = code === null ? undefined : REFUSAL_REASONS[code];
   return reason === undefined ? null : `Assay refused the request: ${reason} (${code}).`;
+}
+
+/**
+ * The handshake's refusal: the known text, else "Assay refused the handshake (HTTP 403, CODE)."
+ * with the status and the code (only a code-shaped one); a JSON-RPC error gets the bare text.
+ */
+export function handshakeRefusalText(refused: Refused | undefined): string {
+  if (refused === undefined) return "Assay refused the handshake.";
+  if (refused.text !== null) return refused.text;
+  return `Assay refused the handshake (HTTP ${refused.status}${refused.code !== null ? `, ${refused.code}` : ""}).`;
 }
 
 /** "Assay refused the request (HTTP 403)", plus the reason code and, for a known one, its meaning. */
