@@ -417,7 +417,7 @@ describe("signed-in forwarding", () => {
       expect("method" in m || "result" in m || "error" in m).toBe(true);
     }
     const byId = (n: number) => raw.messages().find((m) => m.id === n)!;
-    expect(byId(3)).toEqual({ jsonrpc: "2.0", id: 3, result: { content: [{ type: "text", text: "a\nb c\r\n" }] } });
+    expect(byId(3)).toEqual({ jsonrpc: "2.0", id: 3, result: { content: [{ type: "text", text: "a\nb\u2028c\r\n" }] } });
     expect((byId(5).error as { message: string }).message).toBe("Assay refused the request (HTTP 500).");
     expect(byId(6)).toEqual({ jsonrpc: "2.0", id: 6, result: { ok: true } });
     const named = Object.keys(hostile);
