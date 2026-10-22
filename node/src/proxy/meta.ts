@@ -161,6 +161,30 @@ export function enablePaidLink(web: string, credentialId: string, address: strin
   return `${base.origin}/agents/enable-paid?credential=${credentialId}#key=${getAddress(address)}`;
 }
 
+/**
+ * The server's `approvalUrl` from the bind answer, only when it is safe to open: http(s), no
+ * user info, the same origin as the configured web app (`web`), and a `#key=` fragment naming
+ * this payment key (the page shows that key's fingerprint, which the text tells the user to
+ * check). `null` otherwise; the caller then uses {@link enablePaidLink}.
+ */
+export function serverApprovalLink(web: string, approvalUrl: string | null, address: string): string | null {
+  if (approvalUrl === null) return null;
+  let base: URL;
+  let url: URL;
+  try {
+    base = new URL(web);
+    url = new URL(approvalUrl);
+  } catch {
+    return null;
+  }
+  if (!/^https?:$/.test(url.protocol) || url.username || url.password) return null;
+  if (url.origin !== base.origin) return null;
+  const key = new URLSearchParams(url.hash.slice(1)).get("key");
+  if (key === null || !isAddress(key, { strict: false }) || !isAddress(address, { strict: false })) return null;
+  if (getAddress(key) !== getAddress(address)) return null;
+  return url.href;
+}
+
 /** §7.7 step 6. */
 export function notEnabledText(link: string, address: string): string {
   return `This tool is paid, and paid calls are off for this agent. Open ${link} to turn them on (about a minute), then ask again. The page must show this payment key: ${fingerprint(address)}.`;

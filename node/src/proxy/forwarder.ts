@@ -253,6 +253,7 @@ export class Forwarder {
     const pair = new Pairing(exchange, (n) => this.answerServerRequest(n, exchange));
     const type = (res.headers.get("content-type") ?? "").toLowerCase();
     let refusalCode: string | null = null;
+    let refusal: unknown;
     if (res.ok && type.startsWith("text/event-stream")) {
       await this.readSse(res, pair, controller, charge);
     } else if (type.startsWith("application/json")) {
@@ -265,13 +266,16 @@ export class Forwarder {
       }
       if (parsed !== undefined) {
         pair.take(parsed);
-        if (!res.ok) refusalCode = refusalCodeOf(parsed);
+        if (!res.ok) {
+          refusalCode = refusalCodeOf(parsed);
+          refusal = parsed;
+        }
       }
     } else {
       await cancel(res);
     }
     if (pair.response) return { kind: "response", response: pair.response };
-    if (!res.ok) return { kind: "response", response: errorResponse(exchange.id, SERVER_ERROR, refusalMessage(res.status, refusalCode)) };
+    if (!res.ok) return { kind: "response", response: errorResponse(exchange.id, SERVER_ERROR, refusalMessage(res.status, refusalCode, refusal)) };
     return { kind: "error", code: SERVER_ERROR, message: "Assay's answer had no result for this request." };
   }
 
@@ -362,8 +366,52 @@ export function refusalCodeOf(body: unknown): string | null {
   return typeof body === "object" && body !== null ? find((body as Record<string, unknown>).error) : null;
 }
 
+/** The backend's refusal of an agent key that lacks a scope the route needs (HTTP 403). */
+export const SCOPE_MISSING_CODE = "AUTH_SCOPE_MISSING";
+/** The scope that lets a key pay; its absence makes the key free-only. */
+export const PAYMENTS_SCOPE = "payments";
+const SCOPE_RE = /^[a-z][a-z0-9_-]{0,31}(?::[a-z][a-z0-9_-]{0,31})?$/;
+
+/**
+ * `context.requiredScope` of a refusal body (under `error`, or at the top), only when it has the
+ * shape of a scope (`payments`, `tools:call`): nothing else of the body is ever shown.
+ */
+export function requiredScopeOf(body: unknown): string | null {
+  const scopeIn = (v: unknown): string | null => {
+    if (typeof v !== "object" || v === null || Array.isArray(v)) return null;
+    const context = (v as Record<string, unknown>).context;
+    if (typeof context !== "object" || context === null || Array.isArray(context)) return null;
+    const scope = (context as Record<string, unknown>).requiredScope;
+    return typeof scope === "string" && SCOPE_RE.test(scope) ? scope : null;
+  };
+  const nested = typeof body === "object" && body !== null ? scopeIn((body as Record<string, unknown>).error) : null;
+  return nested ?? scopeIn(body);
+}
+
+/**
+ * A `tools/call` result refused with `_meta["assay/error"]` `AUTH_SCOPE_MISSING` (e.g. a free-only
+ * key on a paid tool, refused `payments` with or without a voucher): the scope it names, read from
+ * `assay/error.requiredScope` (where a tool refusal carries it) or `assay/error.details`, only when
+ * it has the shape of a scope. `undefined` when the result is not such a refusal.
+ */
+export function toolScopeMissingOf(result: unknown): { scope: string | null } | undefined {
+  const asObject = (v: unknown): Record<string, unknown> | null => (typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null);
+  const meta = asObject(asObject(result)?._meta);
+  const error = asObject(meta?.["assay/error"]);
+  if (error === null || error.code !== SCOPE_MISSING_CODE) return undefined;
+  const named = (v: unknown) => (typeof v === "string" && SCOPE_RE.test(v) ? v : null);
+  return { scope: named(error.requiredScope) ?? named(asObject(error.details)?.requiredScope) ?? requiredScopeOf(error) };
+}
+
+/** The text for `AUTH_SCOPE_MISSING`: a key without `payments` cannot pay; any other names the scope. */
+export function scopeMissingText(scope: string | null): string {
+  if (scope === PAYMENTS_SCOPE) return "This key cannot pay. Create a key with paid calls on.";
+  return scope === null ? "This key is missing a permission this needs." : `This key is missing the ${scope} permission.`;
+}
+
 /** "Assay refused the request (HTTP 403)", plus the reason code and, for a known one, its meaning. */
-export function refusalMessage(status: number, code: string | null): string {
+export function refusalMessage(status: number, code: string | null, body?: unknown): string {
+  if (code === SCOPE_MISSING_CODE) return scopeMissingText(requiredScopeOf(body));
   if (code === null) return `Assay refused the request (HTTP ${status}).`;
   const reason = REFUSAL_REASONS[code];
   return reason !== undefined ? `Assay refused the request (HTTP ${status}): ${reason} (${code}).` : `Assay refused the request (HTTP ${status}, ${code}).`;

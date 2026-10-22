@@ -125,7 +125,7 @@ describe("binding.json through the shared binding flow and the SDK signer", () =
   /** The SDK's binding: a stub API answering `challenge`, the KMS-style signer, and a spy. */
   async function bindWith(challenge: unknown) {
     const signTypedData = vi.fn(local.signTypedData);
-    const answer = { data: { credentialId: ctx.credentialId, delegate: `${ctx.network}:${local.address}` } };
+    const answer = { data: { credentialId: ctx.credentialId, delegate: `${ctx.network}:${local.address}`, status: "ACTIVE" } };
     const api = vi.fn(async (_m: string, path: string) =>
       path.endsWith("/challenge") ? { body: { data: challenge }, date: new Date(ctx.nowSeconds * 1000).toUTCString() } : { body: answer, date: null },
     );
