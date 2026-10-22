@@ -227,7 +227,7 @@ export class PaidPath {
 
     // §7.7 step 5 (G11).
     const urlKey = paidUrlKey(deployment);
-    if (!readPaidUrls(profile).includes(urlKey)) return { ...response, result: errorResult(notAllowedText(deployment.url), result) };
+    if (!readPaidUrls(profile).includes(urlKey)) return { ...response, result: errorResult(notAllowedText(deployment.url, profile.name), result) };
 
     // One frozen copy of the requirement: every decision below reads this, and so does the signer.
     let requirement: Record<string, unknown>;

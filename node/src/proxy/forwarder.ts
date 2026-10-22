@@ -48,7 +48,8 @@ const SESSION_ID_RE = /^[\x21-\x7e]{1,256}$/;
 export type FetchLike = (url: string, init: PinnedInit) => Promise<Response>;
 
 export type Outcome =
-  | { kind: "response"; response: JsonRpcResponse }
+  /** `refusal`: the plain-language reason of an HTTP refusal whose code is known. */
+  | { kind: "response"; response: JsonRpcResponse; refusal?: string }
   | { kind: "accepted" }
   | { kind: "unauthorized" }
   | { kind: "error"; code: number; message: string };
@@ -173,7 +174,8 @@ export class Forwarder {
       }),
     });
     if (init.kind !== "response") return init.kind === "accepted" ? { kind: "error", code: SERVER_ERROR, message: "Assay did not answer the handshake." } : init;
-    if ("error" in init.response) return { kind: "error", code: SERVER_ERROR, message: "Assay refused the handshake." };
+    // A known refusal (no such MCP URL, a key without a scope, …) says why; anything else stays generic.
+    if ("error" in init.response) return { kind: "error", code: SERVER_ERROR, message: init.refusal ?? "Assay refused the handshake." };
     const done = await this.send({ id: null, bearer, version, body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) });
     return done.kind === "unauthorized" || done.kind === "error" ? done : init;
   }
@@ -275,7 +277,11 @@ export class Forwarder {
       await cancel(res);
     }
     if (pair.response) return { kind: "response", response: pair.response };
-    if (!res.ok) return { kind: "response", response: errorResponse(exchange.id, SERVER_ERROR, refusalMessage(res.status, refusalCode, refusal)) };
+    if (!res.ok) {
+      const response = errorResponse(exchange.id, SERVER_ERROR, refusalMessage(res.status, refusalCode, refusal));
+      const known = knownRefusalText(refusalCode, refusal);
+      return known === null ? { kind: "response", response } : { kind: "response", response, refusal: known };
+    }
     return { kind: "error", code: SERVER_ERROR, message: "Assay's answer had no result for this request." };
   }
 
@@ -368,6 +374,10 @@ export function refusalCodeOf(body: unknown): string | null {
 
 /** The backend's refusal of an agent key that lacks a scope the route needs (HTTP 403). */
 export const SCOPE_MISSING_CODE = "AUTH_SCOPE_MISSING";
+/** The MCP host's refusal of a URL that serves nothing (HTTP 404). */
+export const URL_NOT_FOUND_CODE = "MCP_URL_NOT_FOUND";
+/** The scope that lets a key call tools; a Read-only key lacks it. */
+export const TOOLS_CALL_SCOPE = "tools:call";
 /** The scope that lets a key pay; its absence makes the key free-only. */
 export const PAYMENTS_SCOPE = "payments";
 const SCOPE_RE = /^[a-z][a-z0-9_-]{0,31}(?::[a-z][a-z0-9_-]{0,31})?$/;
@@ -403,15 +413,30 @@ export function toolScopeMissingOf(result: unknown): { scope: string | null } | 
   return { scope: named(error.requiredScope) ?? named(asObject(error.details)?.requiredScope) ?? requiredScopeOf(error) };
 }
 
-/** The text for `AUTH_SCOPE_MISSING`: a key without `payments` cannot pay; any other names the scope. */
+/** The text for `AUTH_SCOPE_MISSING`: a key without `payments` cannot pay, one without `tools:call` cannot call tools; any other names the scope. */
 export function scopeMissingText(scope: string | null): string {
   if (scope === PAYMENTS_SCOPE) return "This key cannot pay. Create a key with paid calls on.";
+  if (scope === TOOLS_CALL_SCOPE) return "This key cannot call tools. Create a key with the Agent preset.";
   return scope === null ? "This key is missing a permission this needs." : `This key is missing the ${scope} permission.`;
+}
+
+/**
+ * The plain-language text for a refusal code that says what happened and what to do, or `null`
+ * for an unknown one. Built from the code and the scope only: never from the URL (an unlisted
+ * link's `/u/` part is a secret) or any other text of the body.
+ */
+export function knownRefusalText(code: string | null, body?: unknown): string | null {
+  if (code === SCOPE_MISSING_CODE) return scopeMissingText(requiredScopeOf(body));
+  if (code === URL_NOT_FOUND_CODE) return "This MCP URL does not exist. Check the URL, or copy it again from Assay.";
+  const reason = code === null ? undefined : REFUSAL_REASONS[code];
+  return reason === undefined ? null : `Assay refused the request: ${reason} (${code}).`;
 }
 
 /** "Assay refused the request (HTTP 403)", plus the reason code and, for a known one, its meaning. */
 export function refusalMessage(status: number, code: string | null, body?: unknown): string {
-  if (code === SCOPE_MISSING_CODE) return scopeMissingText(requiredScopeOf(body));
+  // These two say what to do; the others keep the status and code next to their meaning.
+  const plain = code === SCOPE_MISSING_CODE || code === URL_NOT_FOUND_CODE ? knownRefusalText(code, body) : null;
+  if (plain !== null) return plain;
   if (code === null) return `Assay refused the request (HTTP ${status}).`;
   const reason = REFUSAL_REASONS[code];
   return reason !== undefined ? `Assay refused the request (HTTP ${status}): ${reason} (${code}).` : `Assay refused the request (HTTP ${status}, ${code}).`;

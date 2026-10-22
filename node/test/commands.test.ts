@@ -377,6 +377,57 @@ describe("status", () => {
     expect(await keyLine()).toBe(`Payment key 1A2B 9F3C · not turned on · run \`${RUN} enable-paid\``);
   });
 
+  describe("a payment key that waits for the payer's approval", () => {
+    const LOCAL = getAddress(DELEGATE);
+    const OTHER = "0x5555555555555555555555555555555555555555";
+    const link = (key: string) => `http://localhost:4000/agents/enable-paid?credential=${CRED}#key=${key}`;
+    const pendingData = (pending: string, bound: string, approvalUrl: string | null = link(pending)) => ({
+      credentialId: CRED,
+      delegate: `eip155:46630:${bound}`,
+      pendingDelegate: `eip155:46630:${pending}`,
+      pendingSince: "2026-10-18T09:30:00.000Z",
+      approvalUrl,
+      paidCalls: { status: "ACTIVE" },
+      paidCallsUnknown: false,
+    });
+    let data: Record<string, unknown> = {};
+    const keyLine = async () => (await statusText([], deps({ env: E2E_ENV }))).split("\n")[3];
+
+    beforeEach(() => {
+      addDevOrigin(dir, E2E_MCP);
+      seedSecret("default", "e2e", "refresh_token", "assay_rt_seed");
+      seedSecret("default", "e2e", "access_token", JSON.stringify({ token: "assay_at_seed", expiresAt: NOW + 600 }));
+      vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify({ data }), { status: 200, headers: { "content-type": "application/json" } }));
+    });
+
+    it("this key: its fingerprint, since when, and the approval link", async () => {
+      await seedProfile("e2e", { delegate: true });
+      data = pendingData(LOCAL, OTHER);
+      expect(await keyLine()).toBe(`Payment key 1A2B 9F3C · waits for the payer's approval since 2026-10-18 · approve it at ${link(LOCAL)}`);
+      // A server link on another origin is not shown; the one built here is.
+      data = pendingData(LOCAL, OTHER, `https://elsewhere.example/agents/enable-paid?credential=${CRED}#key=${LOCAL}`);
+      expect(await keyLine()).toBe(`Payment key 1A2B 9F3C · waits for the payer's approval since 2026-10-18 · approve it at ${link(LOCAL)}`);
+    });
+
+    it("another key: said after this key's state", async () => {
+      await seedProfile("e2e", { delegate: true });
+      data = pendingData(OTHER, LOCAL);
+      expect(await keyLine()).toBe(
+        `Payment key 1A2B 9F3C · on (reported by Assay, not yet read from chain) · another key 5555 5555 waits for the payer's approval since 2026-10-18 · approve it at ${link(OTHER)}`,
+      );
+    });
+
+    it("off on chain: the pending state, when Assay says this key waits", async () => {
+      await seedProfile("e2e", { delegate: true, payer: true });
+      const v = { payer: PAYER, delegate: DELEGATE, maxVoucherAmount: "1", maxPerWindow: "1", delegateMaxVoucherAmount: "1", delegateMaxPerWindow: "1", readAt: NOW };
+      chainResult = { ok: true, value: { ...v, active: false, validUntil: "0" } };
+      data = pendingData(LOCAL, OTHER);
+      expect(await keyLine()).toBe(`Payment key 1A2B 9F3C · waits for the payer's approval since 2026-10-18 · approve it at ${link(LOCAL)}`);
+      data = { credentialId: CRED, delegate: `eip155:46630:${LOCAL}`, pendingDelegate: null, paidCalls: { status: "NONE" } };
+      expect(await keyLine()).toBe(`Payment key 1A2B 9F3C · off (read from chain) · run \`${RUN} enable-paid\``);
+    });
+  });
+
   it("refuses a dev profile while dev mode is off", async () => {
     await seedProfile("e2e");
     expect(await runStatus([], deps())).toBe(2);

@@ -4,15 +4,20 @@
  * Read only: no lock, no refresh, no keychain write. The payment-key line comes from the chain
  * (`delegationOf`/`effectiveCapsOf` through the built-in RPCs, which must agree). The API's
  * `paidCalls` is used only when the chain cannot be asked yet (no payer recorded), and is
- * labelled as such. No secret is printed: the payment key appears only as its fingerprint.
+ * labelled as such. A key that waits for the payer's approval (`pendingDelegate`) is shown with
+ * its fingerprint and the approval page. No secret is printed: the payment key appears only as
+ * its fingerprint (and in the approval link's `#key=`, which is its public address).
  */
+import { getAddress } from "viem";
 import { DEFAULT_PROFILE } from "../clients/install-command.js";
+import { parseCaip10 } from "../deployments.js";
 import { RUN } from "../version.js";
 import { EXIT_OK } from "../exit-codes.js";
 import { SPEND_WINDOW_SECONDS } from "../guards/guards.js";
 import { MAX_BODY_BYTES, readCapped, REQUEST_TIMEOUT_MS, requestSignal } from "../oauth/endpoints.js";
 import { apiKey } from "../oauth/api-key.js";
 import { pinnedFetch } from "../net/fetch.js";
+import { enablePaidLink, serverApprovalLink } from "../proxy/meta.js";
 import type { ResolvedDeployment } from "../profile/deployments.js";
 import { fingerprint } from "../profile/fingerprint.js";
 import type { Keychain } from "../profile/keychain.js";
@@ -43,8 +48,40 @@ export interface PaidCallsView {
   status: "NONE" | "ACTIVE" | "EXPIRED" | "REVOKED" | "UNBOUND" | "UNKNOWN";
 }
 
-/** `GET {API}/agents/me/delegate` → `paidCalls.status` (UX only); null on any failure. */
-async function paidCallsFromApi(deployment: ResolvedDeployment, bearer: string, timeoutMs: number): Promise<PaidCallsView | null> {
+/** A payment key bound while another one was: it waits until the payer approves it on enable-paid. */
+export interface PendingKey {
+  /** Checksummed. */
+  address: string;
+  /** `YYYY-MM-DD` (UTC) of `pendingSince`, or null. */
+  since: string | null;
+  /** The approval page, only when it is safe to open (the server's `approvalUrl`, or one built here). */
+  link: string | null;
+}
+
+interface DelegateView {
+  /** `paidCalls`, or null when the answer has no status this reads. */
+  paid: PaidCallsView | null;
+  pending: PendingKey | null;
+}
+
+/** `pendingDelegate`, `pendingSince` and `approvalUrl` of a delegate answer; only checked values. */
+export function pendingKeyOf(data: unknown, web: string, credentialId: string | null): PendingKey | null {
+  if (typeof data !== "object" || data === null) return null;
+  const d = data as { pendingDelegate?: unknown; pendingSince?: unknown; approvalUrl?: unknown; credentialId?: unknown };
+  const parsed = typeof d.pendingDelegate === "string" ? parseCaip10(d.pendingDelegate) : null;
+  if (parsed === null) return null;
+  const address = getAddress(parsed.address);
+  const at = typeof d.pendingSince === "string" ? Date.parse(d.pendingSince) : NaN;
+  const since = Number.isFinite(at) ? utcDate(Math.floor(at / 1000)) : null;
+  const credential = typeof d.credentialId === "string" ? d.credentialId : credentialId;
+  const link =
+    serverApprovalLink(web, typeof d.approvalUrl === "string" ? d.approvalUrl : null, address) ??
+    (credential !== null ? enablePaidLink(web, credential, address) : null);
+  return { address, since, link };
+}
+
+/** `GET {API}/agents/me/delegate` → `paidCalls.status` and a pending key (UX only); null on any failure. */
+async function delegateFromApi(deployment: ResolvedDeployment, bearer: string, timeoutMs: number, credentialId: string | null): Promise<DelegateView | null> {
   try {
     const signal = requestSignal(timeoutMs);
     const res = await pinnedFetch(deployment, `${deployment.api.replace(/\/+$/, "")}/agents/me/delegate`, {
@@ -59,10 +96,12 @@ async function paidCallsFromApi(deployment: ResolvedDeployment, bearer: string, 
     const text = await readCapped(res, MAX_BODY_BYTES, signal);
     if (text === null) return null;
     const data = (JSON.parse(text) as { data?: { paidCalls?: { status?: unknown } | null; paidCallsUnknown?: unknown } } | null)?.data;
-    if (data?.paidCallsUnknown === true) return { status: "UNKNOWN" };
-    if (data?.paidCalls === null && data.paidCallsUnknown === false) return { status: "UNBOUND" };
+    const pending = pendingKeyOf(data, deployment.web, credentialId);
+    const view = (paid: PaidCallsView | null): DelegateView => ({ paid, pending });
+    if (data?.paidCallsUnknown === true) return view({ status: "UNKNOWN" });
+    if (data?.paidCalls === null && data.paidCallsUnknown === false) return view({ status: "UNBOUND" });
     const status = data?.paidCalls?.status;
-    return status === "NONE" || status === "ACTIVE" || status === "EXPIRED" || status === "REVOKED" ? { status } : null;
+    return view(status === "NONE" || status === "ACTIVE" || status === "EXPIRED" || status === "REVOKED" ? { status } : null);
   } catch {
     return null;
   }
@@ -89,11 +128,19 @@ async function paymentKeyLine(
   const fp = fingerprint(delegate);
   const network = networkOf(record, deployment);
   const enable = enablePaidHint(profile);
+  const timeoutMs = deps.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
+  const isLocal = (pending: PendingKey): boolean => pending.address === getAddress(delegate);
   if (record?.payer && network !== null) {
     const read = await deps.chain(deployment.environment, profile).readDelegation(network, record.payer, delegate, { fresh: true });
     if (!read.ok) return `${fp} · can't confirm on chain right now`;
     const d = read.value;
     const now = deps.nowSeconds();
+    const live = BigInt(d.validUntil) !== 0n && d.active && BigInt(d.validUntil) > BigInt(now);
+    if (!live && bearer !== null) {
+      // Not live on chain: this key may be waiting for the payer's approval of a rebinding.
+      const pending = (await delegateFromApi(deployment, bearer, timeoutMs, record.credentialId))?.pending ?? null;
+      if (pending !== null && isLocal(pending)) return `${fp} · ${pendingText(pending, enable)}`;
+    }
     if (BigInt(d.validUntil) === 0n) return `${fp} · off (read from chain) · ${enable}`;
     if (!d.active) return `${fp} · stopped (read from chain) · ${enable}`;
     if (BigInt(d.validUntil) <= BigInt(now)) return `${fp} · expired ${utcDate(d.validUntil)} (read from chain) · ${enable}`;
@@ -105,12 +152,24 @@ async function paymentKeyLine(
       ? `${fp} · unknown: the stored sign-in has expired (it renews on the next call, or run \`${RUN} login\`)`
       : `${fp} · unknown while signed out · run \`${RUN} login\``;
   }
-  const api = await paidCallsFromApi(deployment, bearer, deps.requestTimeoutMs ?? REQUEST_TIMEOUT_MS);
-  if (api === null || api.status === "UNKNOWN") return `${fp} · can't check with Assay right now`;
-  if (api.status === "UNBOUND") return `${fp} · not bound to this sign-in · ${enable}`;
-  if (api.status === "NONE") return `${fp} · not turned on · ${enable}`;
+  const answer = await delegateFromApi(deployment, bearer, timeoutMs, record?.credentialId ?? null);
+  const pending = answer?.pending ?? null;
+  if (pending !== null && isLocal(pending)) return `${fp} · ${pendingText(pending, enable)}`;
+  // Another key waits for approval (bound from another computer): said after this key's state.
+  const other = pending === null ? "" : ` · another key ${fingerprint(pending.address)} ${pendingText(pending, null)}`;
+  const api = answer?.paid ?? null;
+  if (api === null || api.status === "UNKNOWN") return `${fp} · can't check with Assay right now${other}`;
+  if (api.status === "UNBOUND") return `${fp} · not bound to this sign-in · ${enable}${other}`;
+  if (api.status === "NONE") return `${fp} · not turned on · ${enable}${other}`;
   const word = { ACTIVE: "on", EXPIRED: "expired", REVOKED: "stopped" }[api.status];
-  return `${fp} · ${word} (reported by Assay, not yet read from chain)${api.status === "ACTIVE" ? "" : ` · ${enable}`}`;
+  return `${fp} · ${word} (reported by Assay, not yet read from chain)${api.status === "ACTIVE" ? "" : ` · ${enable}`}${other}`;
+}
+
+/** `waits for the payer's approval since 2026-10-22 · approve it at <link>` (else `fallback`, when given). */
+function pendingText(pending: PendingKey, fallback: string | null): string {
+  const since = pending.since === null ? "" : ` since ${pending.since}`;
+  const next = pending.link !== null ? ` · approve it at ${pending.link}` : fallback !== null ? ` · ${fallback}` : "";
+  return `waits for the payer's approval${since}${next}`;
 }
 
 async function signedInBearer(keychain: Keychain, nowSeconds: number): Promise<string | null> {
