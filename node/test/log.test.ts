@@ -114,6 +114,36 @@ describe("redactMcpUrl", () => {
     }
   });
 
+  it("hides the token in mixed encodings and with an encoded u", () => {
+    for (const text of [
+      `https://m.example.test/u%2F${token}`,
+      `next=%2Fu/${token}`,
+      `/u%252F${token}`,
+      `/%75/${token}`,
+      `%2F%75%2F${token}`,
+      `/u//${token}`,
+      `\\\\u002Fu\\\\u002F${token}`,
+    ]) {
+      expect(redactMcpUrl(text), text).not.toContain(token);
+    }
+  });
+
+  it("hides a secret query key in a percent-encoded URL", () => {
+    for (const text of [`next=%3Fkey%3D${token}`, `x%26key%3D${token}%26free%3D1`, `n=%253Fapi_key%253D${token}`, `?apikey=${token}`, `&access-token=${token}`]) {
+      expect(redactMcpUrl(text), text).not.toContain(token);
+    }
+    expect(redactMcpUrl(`x%26key%3D${token}%26free%3D1`)).toBe("x%26key%3D[redacted]%26free%3D1");
+  });
+
+  it("stays fast on long runs of backslashes and %25", () => {
+    for (const text of ["\\".repeat(200_000), "%25".repeat(100_000), `/u${"/".repeat(100_000)}`]) {
+      const start = performance.now();
+      redactMcpUrl(text);
+      redact(text);
+      expect(performance.now() - start, text.slice(0, 6)).toBeLessThan(1_000);
+    }
+  });
+
   it("keeps URLs that carry no secret", () => {
     for (const url of ["https://mcp.example.test/", "https://mcp.example.test/@acme/weather@3?tools=a,b", "https://mcp.example.test/c/finance"]) {
       expect(redactMcpUrl(url)).toBe(url);

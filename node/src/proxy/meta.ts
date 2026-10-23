@@ -73,7 +73,7 @@ export function appendText(result: Record<string, unknown>, suffix: string): Rec
 export function notAllowedText(url: string, profile: string = DEFAULT_PROFILE): string {
   const flag = profile === DEFAULT_PROFILE ? "" : ` --profile ${shellQuote(profile)}`;
   const shown = redactMcpUrl(url);
-  const note = shown === url ? "" : ` (use your full private link in place of ${REDACTED}; it is kept out of this message)`;
+  const note = shown === url ? "" : ` (use your full private link in place of ${REDACTED}; it is kept out of this message, and "npx -y @goassay-ai/mcp@${VERSION} list" shows it)`;
   return `Paid calls through this server are off. To allow them, run in a terminal: npx -y @goassay-ai/mcp@${VERSION} allow-paid ${shellQuote(shown)}${flag}${note}`;
 }
 
