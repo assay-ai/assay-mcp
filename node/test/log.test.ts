@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { builtInDeployments } from "../src/deployments.js";
 import { LOG_FILE_HEADER, LogFileError, openLogFile, type LogFile } from "../src/log/log-file.js";
 import { createLogger, DEFAULT_LOG_LEVEL, escapeControl, formatLine, isSecretFieldName, parseLogLevel, type Logger } from "../src/log/logger.js";
-import { redact } from "../src/log/redact.js";
+import { redact, redactMcpUrl } from "../src/log/redact.js";
 import { pinnedFetch } from "../src/net/fetch.js";
 import { resolveDeployment } from "../src/profile/deployments.js";
 
@@ -74,6 +74,39 @@ describe("redact", () => {
       expect(out, param).toBe(`https://mcp.example.test/continue?x=1&${param}=[redacted]&y=2`);
     }
     expect(redact("cb#state=Zx9kQ2&code=Pq7")).toBe("cb#state=[redacted]&code=[redacted]");
+  });
+});
+
+describe("redactMcpUrl", () => {
+  const token = "k3y_t0ken-abcdefghijklmnop";
+
+  it("hides a link-only tool set's token and keeps the rest of the URL", () => {
+    expect(redactMcpUrl(`https://mcp.example.test/u/${token}`)).toBe("https://mcp.example.test/u/[redacted]");
+    expect(redactMcpUrl(`https://mcp.example.test/u/${token}@2?free=1`)).toBe("https://mcp.example.test/u/[redacted]@2?free=1");
+    expect(redactMcpUrl(`/U/${token}/`)).toBe("/U/[redacted]/");
+    expect(redactMcpUrl(`next=https%3A%2F%2Fmcp.example.test%2Fu%2F${token}%3Ffree%3D1`)).toBe(
+      "next=https%3A%2F%2Fmcp.example.test%2Fu%2F[redacted]%3Ffree%3D1",
+    );
+  });
+
+  it("hides a key or token in the query", () => {
+    for (const param of ["key", "api_key", "token"]) {
+      expect(redactMcpUrl(`https://mcp.example.test/my/research?${param}=${token}&free=1`), param).toBe(
+        `https://mcp.example.test/my/research?${param}=[redacted]&free=1`,
+      );
+    }
+  });
+
+  it("keeps URLs that carry no secret", () => {
+    for (const url of ["https://mcp.example.test/", "https://mcp.example.test/@acme/weather@3?tools=a,b", "https://mcp.example.test/c/finance"]) {
+      expect(redactMcpUrl(url)).toBe(url);
+    }
+  });
+
+  it("runs on every log line", () => {
+    const line = formatLine(new Date(0), "info", "proxy", `serving https://mcp.example.test/u/${token}`, { url: `https://mcp.example.test/u/${token}?key=${token}` });
+    expect(line).not.toContain(token);
+    expect(line).toContain("/u/[redacted]");
   });
 });
 

@@ -1,8 +1,7 @@
 # Test vectors
 
-Language-neutral test vectors, shared by every implementation (`node/`, `sdk/node/` and later ports):
+Language-neutral test vectors, used by the proxy in `node/`. The payment core (guards, vouchers, binding) and its canonical vectors live in `@goassay-ai/sdk` (`vectors/eip155/`); the proxy's `guards.json`, `seq.json` and `vouchers.json` pin what it adds: its built-in `eip155:46630` networks, its G4 text and G11. The files cover:
 
-- delegate binding typed data, each valid case and each bad field;
 - vouchers and their EIP-712 digests;
 - payment requirements and every local guard (G1 to G12), passing and failing;
 - `seq` bounds: `2^53 - 1` passes, `2^53` and `2^64 - 1` are refused;
@@ -30,9 +29,8 @@ Notes for consumers (fix round 1):
 - Tool names are ASCII `[A-Za-z0-9_-]`; `L` is measured in UTF-8 bytes. A tool that is not ASCII, or a server name that leaves no room for a prefix character, has no alias (`null`).
 - Refusals have two kinds, `invalid` and `tooLong`; a suggestion, when present, always fits.
 
-## binding.json and vouchers.json
+## vouchers.json, guards.json and seq.json
 
-- `binding.json`: `DelegateBinding` challenges in the backend's wire form (F4 step 3). Each `valid` case is accepted under `context` and gives the typed data to sign (integers as decimal strings), its digest and the test key's signature. Each `invalid` case applies one change to `valid[0].challenge` (`set` the value at `path`, or `delete` it) and must be refused, naming `field`.
 - `vouchers.json`: rail-B requirements plus `issuedAt`, the wire voucher, the EIP-712 typed data, the domain separator, the struct hash, the digest and the test key's signature. `backend-cast-golden` reproduces the backend's own cast-computed voucher vector.
 - `guards.json`: the local guards G1 to G12 (spec §7.8). `base` is a context that passes every guard. Each case applies `changes` to a copy of `base` in order (`set` the value at `path`, or `delete` it) and runs the guards in order G1 to G12. `expect` is `{ok: true}` or the first refusal, `{ok: false, guard, code}`, plus the exact `reason` where the text is part of the contract (`G4_PAYER_CHANGED`). Every guard has at least one passing and one failing case, and every refusal code has at least one case. Codes are stable: never rename or reuse one.
 - `seq.json`: G9, `1 <= seq < 2^53` with `seq` a canonical decimal string. Each case sets `requirement.seq` in the `base` of `guards.json`; `ok: false` means refused with `G9` / `G9_SEQ`. It includes `2^53 - 1` (passes), `2^53` and `2^64 - 1` (refused).
@@ -41,11 +39,11 @@ Guard order: G1 to G12 (G7 here checks only the caps), then the G7 `confirmAbove
 
 Conventions in the guard vectors: amounts, caps and spend are atomic units as decimal strings (6 decimals); local limits are dollars as decimal strings, converted exactly (no floating point); times are Unix seconds on the local clock; `resource` length counts Unicode code points; addresses from the server are checksummed CAIP-10, and addresses the proxy holds itself may be bare `0x` addresses in any case.
 
-Every digest and signature in `binding.json` and `vouchers.json` was recomputed independently with foundry `cast` (EIP-712 built by hand with `cast abi-encode` and `cast keccak`, and `cast wallet sign --data`), and accepted by the backend's EVM verifier (`buildVoucherMessage`, `verifyVoucherSignature`, `delegateBindingTypedData`, `verifyDelegateBindingSignature`).
+Every digest and signature in `vouchers.json` was recomputed independently with foundry `cast` (EIP-712 built by hand with `cast abi-encode` and `cast keccak`, and `cast wallet sign --data`), and accepted by the backend's EVM verifier (`buildVoucherMessage`, `verifyVoucherSignature`, `delegateBindingTypedData`, `verifyDelegateBindingSignature`).
 
-The `built-in-escrow` and `short-timeout-utf8-max-safe-seq` vouchers sign for the built-in `eip155:46630` escrow of `deployments.json`, so a redeploy of the escrow regenerates them (their domain separator equals the escrow's on-chain `DOMAIN_SEPARATOR()`). `backend-cast-golden` and the binding digests do not depend on the escrow.
+The `built-in-escrow` and `short-timeout-utf8-max-safe-seq` vouchers sign for the built-in `eip155:46630` escrow of `deployments.json`, so a redeploy of the escrow regenerates them (their domain separator equals the escrow's on-chain `DOMAIN_SEPARATOR()`). `backend-cast-golden` does not depend on the escrow.
 
-The signing key in `binding.json` and `vouchers.json` is **test only**: the well-known public anvil/hardhat default account 0. The addresses in `guards.json` are the public anvil/hardhat default accounts 0 to 4, also test only. Never fund them or use them for anything real.
+The signing key in `vouchers.json` is **test only**: the well-known public anvil/hardhat default account 0. The addresses in `guards.json` are the public anvil/hardhat default accounts 0 to 4, also test only. Never fund them or use them for anything real.
 
 ## lock-protocol.json
 

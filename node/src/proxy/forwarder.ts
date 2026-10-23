@@ -1,6 +1,6 @@
 import { silentLogger, type Logger } from "../log/logger.js";
 import { PinnedFetchError, type PinnedInit } from "../net/fetch.js";
-import { dateHeaderOffset } from "../signer/clock.js";
+import { dateHeaderOffset } from "@goassay-ai/sdk/core";
 import { VERSION } from "../version.js";
 import {
   classify,

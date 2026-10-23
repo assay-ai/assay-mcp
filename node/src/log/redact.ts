@@ -39,9 +39,25 @@ const BASIC = /\b(Basic)\s+(?=[A-Za-z0-9+/_-]*(?:[0-9+/=]|[a-z][A-Z]))[A-Za-z0-9
 
 export const REDACTED = "[redacted]";
 
+/** A link-only tool set's token in an MCP URL path (`/u/{token}`), raw or percent-encoded. */
+const MCP_LINK_TOKEN = /(\/u\/)[^/?#@\s"'&;,)]+/gi;
+const MCP_LINK_TOKEN_ENCODED = /(%2Fu%2F)(?:(?!%2F|%3F|%23|%40)[^&#\s"';,)])+/gi;
+
+/**
+ * An MCP URL with its secrets removed: the link-only token in the path (`/u/[redacted]`, kept
+ * pinned as `/u/[redacted]@2`) and any key or token in the query. Safe on any text, so the
+ * logger runs it on every line; also for a URL shown outside the log.
+ */
+export function redactMcpUrl(text: string): string {
+  return text
+    .replace(MCP_LINK_TOKEN, `$1${REDACTED}`)
+    .replace(MCP_LINK_TOKEN_ENCODED, `$1${REDACTED}`)
+    .replace(QUERY_SECRET, `$1${REDACTED}`);
+}
+
 /** Replaces every secret-shaped substring of `text` with `[redacted]`. */
 export function redact(text: string): string {
-  return text
+  return redactMcpUrl(text)
     .replace(TOKEN_PATTERN, REDACTED)
     .replace(LONG_HEX, REDACTED)
     .replace(HEX65_PATTERN, REDACTED)

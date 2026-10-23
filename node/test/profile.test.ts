@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { usdToAtomic } from "../src/guards/guards.js";
+import { usdToAtomic } from "@goassay-ai/sdk/core";
 import { pruneSpend, recordUnderLock, SpendLimitError, sumSpend } from "../src/guards/spend-record.js";
 import { ProfilePathError } from "../src/profile/paths.js";
 import { bundleFixture } from "./helpers/bundle.js";
