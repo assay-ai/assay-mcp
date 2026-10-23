@@ -53,10 +53,21 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await Promise.all(clients.splice(0).map((c) => c.close().catch(() => {})));
-  for (const c of children.splice(0)) c.kill("SIGKILL");
+  // Wait for each child to be gone: on Windows a child still holds its files in `dir` until it
+  // has exited, and removing them earlier fails with EPERM.
+  await Promise.all(
+    children.splice(0).map(
+      (c) =>
+        new Promise<void>((resolve) => {
+          if (c.exitCode !== null || c.signalCode !== null) return resolve();
+          c.once("exit", () => resolve());
+          c.kill("SIGKILL");
+        }),
+    ),
+  );
   await mcp.stop();
   await as.stop();
-  rmSync(dir, { recursive: true, force: true });
+  rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   rmSync(keyringFile, { force: true });
 });
 
