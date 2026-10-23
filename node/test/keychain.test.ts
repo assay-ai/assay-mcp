@@ -17,6 +17,8 @@ import {
   LOCKED_KEYCHAIN_MESSAGE,
   NO_KEYCHAIN_MESSAGE,
   probeKeychain,
+  keychainProbeTimedOut,
+  PROBE_TIMEOUT_MS,
   reportKeychainError,
   SECRET_KINDS,
   type NapiAsyncEntryCtor,
@@ -192,6 +194,15 @@ describe("keychain", () => {
     expect(classifyKeyringError(new Error("No such interface"))).toBe("unavailable");
   });
 
+  it("a keychain that never answers (an unlock prompt nobody sees) → the unlock text", async () => {
+    const backend = new MemoryKeyring();
+    backend.get = () => new Promise<string | null>(() => {});
+    const err = await probeKeychain(backend, 20).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(KeychainError);
+    expect((err as KeychainError).message).toBe(LOCKED_KEYCHAIN_MESSAGE);
+    expect(keychainProbeTimedOut()).toBe(true);
+  });
+
   it("never puts a secret or the platform error into its errors", async () => {
     const backend = new MemoryKeyring();
     const kc = new Keychain(backend, scope);
@@ -229,12 +240,12 @@ describe.runIf(realKeychain || expectFailure !== undefined)("real OS keychain (g
   });
   afterAll(() => rmSync(probe.dir, { recursive: true, force: true }));
 
-  function runProbe(): Promise<{ code: number | null; stderr: string }> {
+  function runProbe(): Promise<{ code: number | null; stderr: string; signal?: NodeJS.Signals }> {
     return new Promise((resolve) => {
       const child = fork(probe.file, [], { stdio: ["ignore", "ignore", "pipe", "ipc"] });
       let stderr = "";
       child.stderr!.on("data", (d: Buffer) => (stderr += d.toString()));
-      child.on("exit", (code) => resolve({ code, stderr }));
+      child.on("exit", (code, signal) => resolve(signal ? { code, stderr, signal } : { code, stderr }));
     });
   }
 
@@ -263,7 +274,14 @@ describe.runIf(realKeychain || expectFailure !== undefined)("real OS keychain (g
     expect(await runProbe()).toEqual({ code: 1, stderr: `${NO_KEYCHAIN_MESSAGE}\n` });
   });
 
-  it.runIf(expectFailure === "locked")("locked keychain → exit 1 with the unlock text (real probe)", async () => {
-    expect(await runProbe()).toEqual({ code: 1, stderr: `${LOCKED_KEYCHAIN_MESSAGE}\n` });
-  });
+  // macOS asks to unlock the keychain; on a runner nobody answers, so the probe's timeout ends it.
+  // The read stuck on the prompt keeps a normal exit from returning, so the process is killed
+  // (exitProcess) once the unlock text is out.
+  it.runIf(expectFailure === "locked")(
+    "locked keychain → the unlock text, then the process ends (real probe)",
+    async () => {
+      expect(await runProbe()).toEqual({ code: null, stderr: `${LOCKED_KEYCHAIN_MESSAGE}\n`, signal: "SIGKILL" });
+    },
+    PROBE_TIMEOUT_MS + 15_000,
+  );
 });
