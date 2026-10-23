@@ -1,5 +1,5 @@
 import { ENVIRONMENTS, type Environment } from "../deployments.js";
-import { DEFAULT_LIMITS as GUARD_DEFAULT_LIMITS, type LocalLimits, type SignedVoucher } from "../guards/types.js";
+import { DEFAULT_LIMITS as GUARD_DEFAULT_LIMITS, type LocalLimits, type SignedVoucher } from "@goassay-ai/sdk/core";
 import type { ResolvedDeployment } from "./deployments.js";
 import type { LockHandle, ProfileRef } from "./lock.js";
 import { canonicalPath, canonicalQuery, parseMcpUrl } from "./mcp-url.js";

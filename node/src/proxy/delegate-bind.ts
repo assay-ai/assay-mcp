@@ -2,9 +2,14 @@ import { getAddress, type Address, type LocalAccount } from "viem";
 import { parseCaip10, type Environment } from "../deployments.js";
 import { silentLogger, type Logger } from "../log/logger.js";
 import { MAX_BODY_BYTES, readCapped, requestSignal } from "../oauth/endpoints.js";
-import { checkBindingChallenge, type DelegateBindingTypedData } from "../signer/binding.js";
-import { dateHeaderOffset, issuedAt } from "../signer/clock.js";
-import { SignerRefusal } from "../signer/errors.js";
+import {
+  checkBindingChallenge,
+  correctedNow,
+  dateHeaderOffset,
+  SignerRefusal,
+  type DelegateBindingTypedData,
+} from "@goassay-ai/sdk/core";
+import { builtInNetworks } from "../guards/sign.js";
 import { refusalCodeOf, requiredScopeOf, scopeMissingText, SCOPE_MISSING_CODE, type FetchLike } from "./forwarder.js";
 
 /**
@@ -196,11 +201,14 @@ export async function bindDelegateKey(o: BindInputs): Promise<BindResult> {
     const challenge = await o.api("POST", "/agents/me/delegate/challenge", { delegate: address });
     if (challenge === null) throw new BindError(BIND_TEXTS.noAnswer);
     const local = o.now() / 1000;
-    const nowSeconds = issuedAt(local, dateHeaderOffset(challenge.date, local));
+    const nowSeconds = correctedNow(local, dateHeaderOffset(challenge.date, local));
     const data = isObject(challenge.body) ? challenge.body.data : undefined;
     let typedData: DelegateBindingTypedData;
     try {
-      typedData = checkBindingChallenge(data, { localAddress: address, credentialId: o.credentialId, environment: o.environment, network: o.network, nowSeconds });
+      // The chain id comes from the built-in table only (a placeholder entry is refused), never from the server.
+      const entry = builtInNetworks(o.environment).get(o.network);
+      if (entry === undefined) throw new SignerRefusal("the binding challenge", "network", "is not in the built-in table");
+      typedData = checkBindingChallenge(data, { localAddress: address, credentialId: o.credentialId, chainId: entry.chainId, nowSeconds });
     } catch (err) {
       if (err instanceof SignerRefusal && err.field === "message.expiresAt") {
         // Clock: retried once with a fresh challenge, then refused (no widening of the window).

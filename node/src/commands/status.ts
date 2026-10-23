@@ -13,7 +13,7 @@ import { DEFAULT_PROFILE } from "../clients/install-command.js";
 import { parseCaip10 } from "../deployments.js";
 import { RUN } from "../version.js";
 import { EXIT_OK } from "../exit-codes.js";
-import { SPEND_WINDOW_SECONDS } from "../guards/guards.js";
+import { SPEND_WINDOW_SECONDS } from "@goassay-ai/sdk/core";
 import { MAX_BODY_BYTES, readCapped, REQUEST_TIMEOUT_MS, requestSignal } from "../oauth/endpoints.js";
 import { apiKey } from "../oauth/api-key.js";
 import { pinnedFetch } from "../net/fetch.js";

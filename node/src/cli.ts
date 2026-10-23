@@ -1,6 +1,7 @@
 import { RUN } from "./version.js";
 import { builtInDeployments, validateDeployments } from "./deployments.js";
 import { EXIT_FATAL, EXIT_OK, EXIT_USAGE } from "./exit-codes.js";
+import { redactMcpUrl } from "./log/redact.js";
 import { VERSION } from "./version.js";
 import * as add from "./commands/add.js";
 import * as allowPaid from "./commands/allow-paid.js";
@@ -87,7 +88,8 @@ export async function main(argv: readonly string[]): Promise<number> {
       process.stderr.write(USAGE);
       return EXIT_OK;
     case "usage-error":
-      process.stderr.write(`assay-mcp: ${r.message}\n${USAGE}`);
+      // The message can echo an argument, such as a private MCP link: MCP hosts keep stderr in their logs.
+      process.stderr.write(`assay-mcp: ${redactMcpUrl(r.message)}\n${USAGE}`);
       return EXIT_USAGE;
     case "command": {
       const errors = validateDeployments(builtInDeployments());

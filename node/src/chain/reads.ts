@@ -79,24 +79,9 @@ export type DelegationResult =
   | { ok: true; value: DelegationState }
   | { ok: false; code: "CHAIN_UNCONFIRMED"; reason: string };
 
-/**
- * The guard's `chain` input (G4, G6). Same shape as Task 2.3's `ChainState`
- * (`guards/types.ts`), so the proxy passes it without a cast.
- */
-export interface ChainState {
-  /** The payer the delegation was read for. */
-  payer: string;
-  /** The key the delegation was read for; must be the local key. */
-  delegate: string;
-  /** When the read was made, Unix seconds on the same clock as `nowSeconds`; at most 600 s old. */
-  readAt: number;
-  delegateMaxVoucherAmount: string;
-  maxVoucherAmount: string;
-  /** The grant exists and is not revoked. */
-  active: boolean;
-  /** `delegationOf(...).validUntil`, Unix seconds. */
-  validUntil: string | number;
-}
+/** The guard's `chain` input (G4, G6): the SDK's `ChainState`, so the proxy passes it without a cast. */
+export type { ChainState } from "@goassay-ai/sdk/core";
+import type { ChainState } from "@goassay-ai/sdk/core";
 
 /**
  * The agreed state for the guard, or `null` when there is none (fail closed). A read made for

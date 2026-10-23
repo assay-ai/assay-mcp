@@ -13,7 +13,14 @@ import { hashDomain, recoverTypedDataAddress, verifyTypedData } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { builtInDeployments, parseCaip10 } from "../../src/deployments.js";
 import { generate } from "../../src/signer/keygen.js";
-import { buildVoucher, type VoucherRequirement } from "../../src/signer/voucher.js";
+import { buildVoucher as buildFor, type VoucherRequirement } from "@goassay-ai/sdk/core";
+import { builtInNetworks } from "../../src/guards/sign.js";
+
+/** The SDK's voucher builder with the built-in anvil entry, as the proxy signs. */
+function buildVoucher(requirement: VoucherRequirement, issuedAt: number, env: "anvil") {
+  const e = builtInNetworks(env).get(requirement.network)!;
+  return buildFor(requirement, issuedAt, { caip2: e.id, escrow: e.escrowCaip10, asset: e.asset, decimals: e.decimals });
+}
 
 const RPC = process.env.ASSAY_ANVIL_RPC ?? "http://127.0.0.1:8547";
 const NETWORK = "eip155:46630";

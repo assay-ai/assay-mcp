@@ -2,11 +2,28 @@ import { RUN } from "../src/version.js";
 import { describe, expect, it } from "vitest";
 import guardVectors from "../../vectors/guards.json" with { type: "json" };
 import seqVectors from "../../vectors/seq.json" with { type: "json" };
-import { builtInDeployments } from "../src/deployments.js";
 import { getAddress } from "viem";
-import { builtInNetwork, checkAll, confirmationFor, GUARD_ORDER, usdToAtomic } from "../src/guards/guards.js";
-import { guardAndBuild } from "../src/guards/sign.js";
-import { DEFAULT_LIMITS, REFUSAL_CODES, type GuardContext, type GuardResult } from "../src/guards/types.js";
+import {
+  checkAll as coreCheckAll,
+  confirmationFor,
+  DEFAULT_LIMITS,
+  GUARD_ORDER_ALL as GUARD_ORDER,
+  REFUSAL_CODES,
+  type GuardContext as CoreGuardContext,
+  type GuardResult,
+} from "@goassay-ai/sdk/core";
+import { builtInNetwork, guardAndBuild, proxyGuardOptions, type ProxyGuardContext } from "../src/guards/sign.js";
+
+// The guards are the SDK's (`@goassay-ai/sdk/core`, tested there against its own vectors). These
+// tests run the proxy's vectors (its built-in network, its G4 text, G11 on) through the options
+// the proxy passes, so the order, codes and texts the user sees stay the proxy's.
+
+type GuardContext = CoreGuardContext & Pick<ProxyGuardContext, "canonicalUrl" | "paidUrls">;
+
+/** The guards exactly as the proxy runs them. */
+function checkAll(ctx: GuardContext): GuardResult {
+  return coreCheckAll(ctx, proxyGuardOptions(ctx));
+}
 
 type Path = (string | number)[];
 interface Change {
@@ -79,8 +96,7 @@ describe("guards.json", () => {
   });
 
   it("uses the built-in e2e network (the dev escrow), the default limits and a $5 day", () => {
-    const e2e = builtInDeployments().e2e;
-    expect(base.network).toEqual(builtInNetwork(e2e, "eip155:46630"));
+    expect(base.network).toEqual(builtInNetwork("e2e", "eip155:46630"));
     expect(base.limits).toEqual(DEFAULT_LIMITS);
   });
 });
@@ -239,6 +255,16 @@ describe("guardAndBuild (M1)", () => {
     expect(() => guardAndBuild(withPrompt, 1.5, "e2e")).toThrow(/issuedAt/);
   });
 
+  // The proxy's own options (G11, its G4 text) go with every voucher it builds: the one entry point
+  // passes them itself, so a caller cannot leave them out (eslint keeps the SDK's out of reach).
+  it("always runs G11 and the proxy's G4 text", () => {
+    expect(guardAndBuild({ ...ctx, paidUrls: [] }, base.nowSeconds, "e2e")).toMatchObject({ ok: false, guard: "G11" });
+    const g4 = cases.find((c) => !c.expect.ok && c.guard === "G4" && c.expect.reason?.includes("payer changed"));
+    if (!g4) throw new Error("no payer-changed G4 vector");
+    const r = guardAndBuild(apply(ctx, g4.changes), base.nowSeconds, "e2e");
+    expect(r).toMatchObject({ ok: false, guard: "G4", reason: `payer changed; run ${RUN} enable-paid` });
+  });
+
   it("returns the guard refusal and builds nothing", () => {
     const r = guardAndBuild(apply(ctx, find("seq 2^53").changes), base.nowSeconds, "e2e");
     expect(r).toMatchObject({ ok: false, guard: "G9" });
@@ -258,30 +284,11 @@ describe("guardAndBuild (M1)", () => {
   });
 });
 
-describe("usdToAtomic", () => {
-  it("converts dollars at the asset's decimals", () => {
-    expect(usdToAtomic("0.50", 6)).toBe(500000n);
-    expect(usdToAtomic("5", 6)).toBe(5000000n);
-    expect(usdToAtomic(".5", 6)).toBe(500000n);
-    expect(usdToAtomic("155", 6)).toBe(155000000n);
-    expect(usdToAtomic("0.000001", 6)).toBe(1n);
-  });
-
-  it("refuses anything that is not a plain non-negative decimal", () => {
-    for (const v of ["", "abc", "-1", "1e3", "0.0000001", "1.", " 1", "1,5", "0x10", "Infinity"]) {
-      expect(usdToAtomic(v, 6), v).toBeNull();
-    }
-    expect(usdToAtomic(0.5 as unknown as string, 6)).toBeNull();
-  });
-});
-
 describe("builtInNetwork", () => {
   it("returns the entry with its id, or null", () => {
-    const prod = builtInDeployments().production;
-    const n = builtInNetwork(prod, "eip155:46630");
-    expect(n).toMatchObject({ id: "eip155:46630", decimals: 6 });
-    expect(builtInNetwork(prod, "eip155:1")).toBeNull();
-    expect(builtInNetwork(prod, "__proto__")).toBeNull();
-    expect(builtInNetwork(prod, "toString")).toBeNull();
+    expect(builtInNetwork("production", "eip155:46630")).toMatchObject({ id: "eip155:46630", decimals: 6 });
+    expect(builtInNetwork("production", "eip155:1")).toBeNull();
+    expect(builtInNetwork("production", "__proto__")).toBeNull();
+    expect(builtInNetwork("production", "toString")).toBeNull();
   });
 });

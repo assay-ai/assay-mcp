@@ -1,4 +1,4 @@
-import type { Quote } from "./types.js";
+import type { Quote } from "@goassay-ai/sdk/core";
 
 /**
  * The G3 quote cache (spec §7.7 step 2, §7.8 G3): `assay/price` seen in `tools/list`,

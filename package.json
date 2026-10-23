@@ -3,8 +3,7 @@
   "private": true,
   "type": "module",
   "workspaces": [
-    "node",
-    "sdk/node"
+    "node"
   ],
   "scripts": {
     "lint": "eslint .",
@@ -15,8 +14,7 @@
     "check:unscoped": "node scripts/check-no-unscoped.mjs",
     "check:pack": "node scripts/check-pack.mjs",
     "check:no-fork": "node scripts/check-no-fork.mjs",
-    "check:release": "node scripts/check-deployments.mjs --release",
-    "build:signer": "node scripts/build-signer.mjs"
+    "check:release": "node scripts/check-deployments.mjs --release"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
