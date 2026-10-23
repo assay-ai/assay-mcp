@@ -157,7 +157,7 @@ const INIT = (v = "2025-06-18") =>
 describe("pre-sign-in mode", () => {
   it("initialize answered without any network", async () => {
     const { client, stderr } = await connect();
-    expect(client.getServerVersion()).toEqual({ name: "assay", version: "0.2.0" });
+    expect(client.getServerVersion()).toEqual({ name: "assay", version: "0.2.1" });
     expect(client.getServerCapabilities()).toEqual({ tools: { listChanged: true } });
     expect(client.getInstructions()).toBe("If Assay tools are missing, call assay_sign_in.");
     // The startup link goes to stderr; the browser is not opened.
@@ -301,7 +301,7 @@ describe("signed-in forwarding", () => {
       expect(r.headers.accept).toBe("application/json, text/event-stream");
       expect(r.headers["mcp-protocol-version"]).toBe("2025-06-18");
       expect(r.headers.authorization).toBe(`Bearer ${pair.accessToken}`);
-      expect(r.headers["user-agent"]).toBe("assay-mcp/0.2.0");
+      expect(r.headers["user-agent"]).toBe("assay-mcp/0.2.1");
     }
     expect(((await raw.answer(11)).result as Record<string, unknown>).echoed).toBe("vendor/brand-new");
     expect(raw.stderr()).not.toMatch(SECRET_RE);
