@@ -114,7 +114,8 @@ describe("§12.4 concurrency, OAuth mode (fake AS + fake MCP)", () => {
     await as.stop();
   });
 
-  const proxy = () => spawnProxy(serveFixture, { TEST_AS_PORT: String(as.port), TEST_MCP_PORT: String(mcp.port) });
+  const proxy = (env: Record<string, string> = {}) =>
+    spawnProxy(serveFixture, { TEST_AS_PORT: String(as.port), TEST_MCP_PORT: String(mcp.port), ...env });
 
   /** A stored grant, as an earlier sign-in left it; the stored access token looks valid locally. */
   async function signedIn() {
@@ -128,7 +129,9 @@ describe("§12.4 concurrency, OAuth mode (fake AS + fake MCP)", () => {
 
   it("10 processes get a 401 at once → one server refresh, no revoke, every call served", async () => {
     const pair = await signedIn();
-    const procs = await Promise.all(Array.from({ length: 10 }, () => proxy()));
+    // Ten processes queue for the one profile lock; on a slow (Windows) runner the last one can
+    // wait past the 30 s default, so the lock wait and the test get more room here.
+    const procs = await Promise.all(Array.from({ length: 10 }, () => proxy({ TEST_LOCK_TIMEOUT_MS: "90000" })));
     for (const p of procs) expect((await p.client.listTools()).tools.map((t) => t.name)).toEqual(["echo"]);
     expect(as.tokenCalls("refresh_token")).toHaveLength(0);
 
@@ -151,7 +154,7 @@ describe("§12.4 concurrency, OAuth mode (fake AS + fake MCP)", () => {
     expect(Object.keys(stored).sort()).toEqual(["ai.assay.mcp/default@e2e/access_token", "ai.assay.mcp/default@e2e/refresh_token"]);
     expect(stored["ai.assay.mcp/default@e2e/refresh_token"]).not.toBe(pair.refreshToken);
     for (const p of procs) expect(p.stderr()).not.toMatch(/assay_(at|rt)_/);
-  }, 60_000);
+  }, 120_000);
 
   it("two first-time processes sign in at once → one consent, one grant, one stored credential", async () => {
     expect(existsSync(join(dir, "profiles"))).toBe(false);
