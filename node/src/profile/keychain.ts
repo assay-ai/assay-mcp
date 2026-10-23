@@ -2,6 +2,7 @@ import { ENVIRONMENTS, type Environment } from "../deployments.js";
 import { EXIT_FATAL } from "../exit-codes.js";
 import type { LockHandle } from "./lock.js";
 import { isValidProfileName } from "./paths.js";
+import { markKeychainProbeTimedOut } from "./probe-state.js";
 
 /**
  * Profile secrets in the OS keychain (spec §7.4, §7.9; R-MCP-6, R-MU-3, R-MU-6).
@@ -106,11 +107,31 @@ async function guardedUnderLock<T>(lock: LockHandle, op: () => Promise<T>): Prom
 }
 
 /**
- * Checks at startup that the keychain can be read. Throws `KeychainError` (exit code 1)
- * with the exact §7.9 text, or the "unlock" text for a locked store.
+ * How long the startup probe waits for the keychain. A locked macOS keychain asks to be unlocked;
+ * with nobody to answer (an SSH session, a headless host) the read never returns.
  */
-export async function probeKeychain(backend: KeyringBackend): Promise<void> {
-  await guarded(() => backend.get(KEYCHAIN_SERVICE, PROBE_ACCOUNT));
+export const PROBE_TIMEOUT_MS = 30_000;
+
+export { keychainProbeTimedOut } from "./probe-state.js";
+
+/**
+ * Checks at startup that the keychain can be read. Throws `KeychainError` (exit code 1)
+ * with the exact §7.9 text, or the "unlock" text for a locked store, including one that has not
+ * answered within `timeoutMs`.
+ */
+export async function probeKeychain(backend: KeyringBackend, timeoutMs: number = PROBE_TIMEOUT_MS): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      markKeychainProbeTimedOut();
+      reject(new KeychainError("locked"));
+    }, timeoutMs);
+  });
+  try {
+    await Promise.race([guarded(() => backend.get(KEYCHAIN_SERVICE, PROBE_ACCOUNT)), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** Writes the failure text to stderr and returns exit code 1. For the command entry points. */

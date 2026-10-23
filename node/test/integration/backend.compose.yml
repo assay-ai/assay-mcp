@@ -58,6 +58,9 @@ services:
       PRIVY_APP_SECRET: ci-placeholder
       PRIVY_DEFAULT_CHAIN_ID: solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1
       PRIVY_USER_LOOKUP_ENABLED: "false"
+      # The public testnet USDG token (deployments.json, production); `yarn demo:seed` seeds the
+      # demo bindings in it.
+      ROBINHOOD_TESTNET_USDG_ADDRESS: "0xDbbC156dD414f43f2c952C1Be0f16A0B9a826Cd3"
       MCP_CREDENTIALS_FILE: /app/scripts/mcp/seed/credentials.json
       TOOL_CATALOGUE_SEED_FILE: /app/scripts/mcp/seed/catalogue.json
       PROVIDER_REGISTRY_SEED_FILE: /app/scripts/mcp/seed/providers.json
@@ -65,7 +68,14 @@ services:
       CREDENTIAL_VAULT_KEKS: ${CREDENTIAL_VAULT_KEKS:?generated per run}
       PROVIDER_REQUEST_SIGNING_KEYS: ${PROVIDER_REQUEST_SIGNING_KEYS:?generated per run}
       BULLBOARD_ENABLED: "false"
+      # The dashboard API's per-user windows: the suite calls one agent's routes back to back, many
+      # more times than a person would. The MCP limits the suite compares stay on.
+      API_USER_RATE_LIMITS_ENABLED: "false"
       EXAMPLES_ENABLED: "false"
+    # The image carries only what the build needs (the backend's .dockerignore is an allowlist):
+    # the seed files and the seed scripts the job runs come from the checkout, read-only.
+    volumes:
+      - ${BACKEND_DIR}/scripts:/app/scripts:ro
     command: ["sh", "-c", "yarn -s migration:run:prod && exec node dist/main"]
     ports:
       - "3000:3000"

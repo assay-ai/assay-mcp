@@ -126,7 +126,14 @@ jobs:
           # shellcheck disable=SC2046
           security list-keychains -d user -s "$KC" $(cat "$RUNNER_TEMP/keychains.before")
           security default-keychain -d user -s "$KC"
-          if [ "${{ matrix.name }}" = "macos locked" ]; then security lock-keychain "$KC"; fi
+          if [ "${{ matrix.name }}" = "macos locked" ]; then
+            # Search the locked keychain alone (the runner's own login keychain is unlocked), and
+            # give the probe an entry to read: finding that an entry is missing needs no unlock on
+            # macOS, reading one does. -A: any app may read it, so only the lock can refuse.
+            security list-keychains -d user -s "$KC"
+            security add-generic-password -A -s ai.assay.mcp -a probe -w ci-probe "$KC"
+            security lock-keychain "$KC"
+          fi
           echo "ASSAY_CI_KEYCHAIN=$KC" >> "$GITHUB_ENV"
       - name: Keychain tests
         if: matrix.name == 'macos' || matrix.name == 'windows'
@@ -172,8 +179,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      # The backend under test: assay-backend develop (with the MCP onboarding work), pinned by full commit SHA.
-      BACKEND_SHA: ${{ inputs.backend_sha || 'c1616f2d77b37ef97267d14ef78be748aa201e76' }}
+      # The backend under test: assay-backend main, pinned by full commit SHA.
+      BACKEND_SHA: ${{ inputs.backend_sha || '9f0f4db18afddc5f496782d04b764be2b5dd884f' }}
       BACKEND_DIR: ${{ github.workspace }}/backend
       COMPOSE_FILE: node/test/integration/backend.compose.yml
       # A person's session from the backend's own demo seed (scripts/mcp/seed/credentials.json),

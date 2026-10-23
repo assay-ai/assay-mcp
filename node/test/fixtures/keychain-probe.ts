@@ -1,6 +1,7 @@
 // Probes the real OS keychain the way `assay-mcp` does at startup, then exits.
 // Used by the gated real-keychain tests in node/test/keychain.test.ts.
 import { KeychainError, openOsKeychain, reportKeychainError } from "../../src/profile/keychain.js";
+import { exitProcess } from "../../src/profile/probe-state.js";
 
 async function main(): Promise<number> {
   try {
@@ -12,4 +13,4 @@ async function main(): Promise<number> {
   }
 }
 
-main().then((code) => process.exit(code));
+main().then((code) => exitProcess(code));
