@@ -52,6 +52,25 @@ export function parseCaip19Erc20(value: string): { chainId: number; address: str
   return { chainId: Number(m[1]), address: m[2]! };
 }
 
+/** Loopback hosts an RPC may reach over plain http (as `URL.hostname` spells them). */
+const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"]);
+
+/**
+ * The SDK's rule for a usable RPC URL (`isUsableRpcUrl` in `@goassay-ai/sdk/core`, which the
+ * SDK applies when it builds the network map): https, or http to a loopback host only; no
+ * credentials, query or fragment. Kept identical so this check and the SDK never disagree.
+ */
+export function isUsableRpcUrl(value: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  if (url.username || url.password || url.search || url.hash) return false;
+  return url.protocol === "https:" || (url.protocol === "http:" && LOOPBACK.has(url.hostname));
+}
+
 function checkUrl(errors: string[], where: string, value: unknown, allowPlaceholder: boolean): void {
   if (typeof value !== "string") {
     errors.push(`${where}: missing`);
@@ -106,12 +125,18 @@ export function validateDeployment(env: Environment, d: Deployment, allowPlaceho
     const minRpc = DEV_ENVIRONMENTS.includes(env) ? 1 : 2;
     if (!Array.isArray(n.rpc) || n.rpc.length < minRpc) errors.push(`${where}.rpc: needs at least ${minRpc}`);
     else {
-      n.rpc.forEach((r, i) => checkUrl(errors, `${where}.rpc[${i}]`, r, allowPlaceholder));
+      n.rpc.forEach((r, i) => {
+        checkUrl(errors, `${where}.rpc[${i}]`, r, allowPlaceholder);
+        // In every environment, the SDK's rule as well: http only to a loopback host.
+        if (typeof r === "string" && !isPlaceholder(r) && !isUsableRpcUrl(r)) errors.push(`${where}.rpc[${i}]: must be https, or http to a loopback host`);
+      });
+      const filled = n.rpc.filter((r) => typeof r === "string" && !isPlaceholder(r));
+      // The SDK's chain reader reads each RPC once and gives no answer for a list with a repeat.
+      if (new Set(filled).size !== filled.length) errors.push(`${where}.rpc: lists the same RPC twice`);
       if (!DEV_ENVIRONMENTS.includes(env)) {
         // Outside dev: https only, and the RPCs must be different hosts, so that two agreeing
         // answers are two independent answers (chain reads, G4).
         const hosts = new Set<string>();
-        const filled = n.rpc.filter((r) => typeof r === "string" && !isPlaceholder(r));
         for (const r of filled) {
           if (!r.startsWith("https://")) errors.push(`${where}.rpc: ${r} must be https`);
           try {

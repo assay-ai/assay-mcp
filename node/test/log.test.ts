@@ -89,11 +89,58 @@ describe("redactMcpUrl", () => {
     );
   });
 
+  it("hides the token when percent-encoded more than once", () => {
+    expect(redactMcpUrl(`next=https%253A%252F%252Fmcp.example.test%252Fu%252F${token}%253Ffree%253D1`)).toBe(
+      "next=https%253A%252F%252Fmcp.example.test%252Fu%252F[redacted]%253Ffree%253D1",
+    );
+    expect(redactMcpUrl(`x=%25252FU%25252F${token}%25252Fmore`)).toBe("x=%25252FU%25252F[redacted]%25252Fmore");
+  });
+
+  it("hides the token behind JSON-escaped slashes", () => {
+    expect(redactMcpUrl(`{"url":"https:\\/\\/mcp.example.test\\/u\\/${token}\\/x"}`)).toBe('{"url":"https:\\/\\/mcp.example.test\\/u\\/[redacted]\\/x"}');
+    expect(redactMcpUrl(`"https:\\\\/\\\\/mcp.example.test\\\\/u\\\\/${token}"`)).toBe('"https:\\\\/\\\\/mcp.example.test\\\\/u\\\\/[redacted]"');
+    expect(redactMcpUrl(`"https:\\u002F\\u002Fmcp.example.test\\u002Fu\\u002F${token}\\u002Fx"`)).toBe(
+      '"https:\\u002F\\u002Fmcp.example.test\\u002Fu\\u002F[redacted]\\u002Fx"',
+    );
+    const line = formatLine(new Date(0), "info", "proxy", "serving", { body: JSON.stringify({ url: `https://mcp.example.test/u/${token}` }).replaceAll("/", "\\/") });
+    expect(line).not.toContain(token);
+  });
+
   it("hides a key or token in the query", () => {
     for (const param of ["key", "api_key", "token"]) {
       expect(redactMcpUrl(`https://mcp.example.test/my/research?${param}=${token}&free=1`), param).toBe(
         `https://mcp.example.test/my/research?${param}=[redacted]&free=1`,
       );
+    }
+  });
+
+  it("hides the token in mixed encodings and with an encoded u", () => {
+    for (const text of [
+      `https://m.example.test/u%2F${token}`,
+      `next=%2Fu/${token}`,
+      `/u%252F${token}`,
+      `/%75/${token}`,
+      `%2F%75%2F${token}`,
+      `/u//${token}`,
+      `\\\\u002Fu\\\\u002F${token}`,
+    ]) {
+      expect(redactMcpUrl(text), text).not.toContain(token);
+    }
+  });
+
+  it("hides a secret query key in a percent-encoded URL", () => {
+    for (const text of [`next=%3Fkey%3D${token}`, `x%26key%3D${token}%26free%3D1`, `n=%253Fapi_key%253D${token}`, `?apikey=${token}`, `&access-token=${token}`]) {
+      expect(redactMcpUrl(text), text).not.toContain(token);
+    }
+    expect(redactMcpUrl(`x%26key%3D${token}%26free%3D1`)).toBe("x%26key%3D[redacted]%26free%3D1");
+  });
+
+  it("stays fast on long runs of backslashes and %25", () => {
+    for (const text of ["\\".repeat(200_000), "%25".repeat(100_000), `/u${"/".repeat(100_000)}`]) {
+      const start = performance.now();
+      redactMcpUrl(text);
+      redact(text);
+      expect(performance.now() - start, text.slice(0, 6)).toBeLessThan(1_000);
     }
   });
 

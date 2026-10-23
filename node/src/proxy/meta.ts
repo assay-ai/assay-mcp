@@ -1,5 +1,6 @@
 import { fingerprint, isObject } from "@goassay-ai/sdk/core";
 import { DEFAULT_PROFILE, shellQuote } from "../clients/install-command.js";
+import { REDACTED, redactMcpUrl } from "../log/redact.js";
 import { VERSION } from "../version.js";
 
 /**
@@ -64,10 +65,16 @@ export function appendText(result: Record<string, unknown>, suffix: string): Rec
   return { ...result, content };
 }
 
-/** §7.7 step 5. `--profile` is named when the proxy runs under another profile than the default. */
+/**
+ * §7.7 step 5. `--profile` is named when the proxy runs under another profile than the default.
+ * The agent's model reads this text, so a private link's token (or a key in the query) is never
+ * in it: the person puts their own link back in place of `[redacted]`.
+ */
 export function notAllowedText(url: string, profile: string = DEFAULT_PROFILE): string {
   const flag = profile === DEFAULT_PROFILE ? "" : ` --profile ${shellQuote(profile)}`;
-  return `Paid calls through this server are off. To allow them, run in a terminal: npx -y @goassay-ai/mcp@${VERSION} allow-paid ${shellQuote(url)}${flag}`;
+  const shown = redactMcpUrl(url);
+  const note = shown === url ? "" : ` (use your full private link in place of ${REDACTED}; it is kept out of this message, and "npx -y @goassay-ai/mcp@${VERSION} list" shows it)`;
+  return `Paid calls through this server are off. To allow them, run in a terminal: npx -y @goassay-ai/mcp@${VERSION} allow-paid ${shellQuote(shown)}${flag}${note}`;
 }
 
 /** §7.7 step 6. */
