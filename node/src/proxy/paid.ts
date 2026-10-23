@@ -1,19 +1,24 @@
 import { privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
 import { getAddress, type Hex } from "viem";
 import { toGuardChain, type ChainReader, type ChainState } from "../chain/reads.js";
-import { builtInDeployments, parseCaip10 } from "../deployments.js";
-import { builtInNetwork, confirmationFor } from "../guards/guards.js";
+import {
+  confirmationFor,
+  correctedNow,
+  type BuiltInNetwork,
+  type Confirmation,
+  type GuardId,
+  type Quote,
+} from "@goassay-ai/sdk/core";
+import { parseCaip10 } from "../deployments.js";
 import type { QuoteCache } from "../guards/quote-cache.js";
-import { guardAndBuild } from "../guards/sign.js";
+import { builtInNetwork, guardAndBuild, type ProxyGuardContext } from "../guards/sign.js";
 import { recordHeld, SpendLimitError } from "../guards/spend-record.js";
-import type { BuiltInNetwork, Confirmation, GuardContext, GuardId, Quote } from "../guards/types.js";
 import { silentLogger, type Logger } from "../log/logger.js";
 import { identifyCredential } from "../oauth/flow.js";
 import type { ResolvedDeployment } from "../profile/deployments.js";
 import type { Keychain } from "../profile/keychain.js";
 import { withLock, type LockHandle, type LockOptions, type ProfileRef } from "../profile/lock.js";
 import { createProfile, paidUrlKey, readLimits, readPaidUrls, readProfileFor, readState, updateProfile } from "../profile/profile.js";
-import { issuedAt } from "../signer/clock.js";
 import { generate } from "../signer/keygen.js";
 import { openThroughGate } from "./browser-gate.js";
 import { apiGet, apiRequest, BindError, bindDelegateKey, type BindResult } from "./delegate-bind.js";
@@ -241,7 +246,7 @@ export class PaidPath {
     // G1 first (review M6): only a rail-B voucher request can lead to a key or a binding.
     if (requirement.rail !== "B") return this.refused(response, result, new Refusal("G1", "the payment request is not on rail B"));
     if (requirement.scheme !== "voucher") return this.refused(response, result, new Refusal("G1", "the payment request is not a voucher"));
-    const network = typeof requirement.network === "string" ? builtInNetwork(builtInDeployments()[deployment.environment], requirement.network) : null;
+    const network = typeof requirement.network === "string" ? builtInNetwork(deployment.environment, requirement.network) : null;
     if (network === null) return this.refused(response, result, new Refusal("G2", "the network is not in the built-in table"));
     const chainId = Number(network.id.slice("eip155:".length));
 
@@ -298,7 +303,7 @@ export class PaidPath {
           const nowSeconds = Math.floor(this.now() / 1000);
           const limits = readLimits(profile);
           const record = readProfileFor(profile, env);
-          const ctx: Omit<GuardContext, "network"> = {
+          const ctx: ProxyGuardContext = {
             requirement,
             forwardedCall,
             quote,
@@ -312,7 +317,7 @@ export class PaidPath {
             paidUrls: readPaidUrls(profile),
             nowSeconds,
           };
-          const built = guardAndBuild(ctx, issuedAt(nowSeconds, this.host.dateOffset()), env);
+          const built = guardAndBuild(ctx, correctedNow(nowSeconds, this.host.dateOffset()), env);
           if (!built.ok) return { kind: "refused", guard: built.guard, code: built.code, reason: built.reason };
 
           // The key that signs is re-read under the lock and must be the key the guards checked.

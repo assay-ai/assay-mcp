@@ -112,8 +112,7 @@ On Windows, `npx -y @goassay-ai/mcp@0.1.1 add` runs a client CLI (`claude`, `cod
 |---|---|
 | `deployments.json` | The built-in table of hosts, networks, contracts and RPCs. The one source for every build. |
 | `vectors/` | Shared test vectors for every implementation. |
-| `node/` | The `@goassay-ai/mcp` package. |
-| `sdk/node/` | The `@goassay-ai/sdk` package (not started). |
+| `node/` | The `@goassay-ai/mcp` package. Its payment core (guards, vouchers, EIP-712 types) comes from `@goassay-ai/sdk/core`, bundled in. |
 | `placeholders/` | Packages that reserve look-alike names and point to `@goassay-ai/mcp`. |
 
 ## Development

@@ -1,7 +1,6 @@
 import { withLock, type LockHandle, type LockOptions, type ProfileRef } from "../profile/lock.js";
 import { readLimitsIfPresent, updateState, usdToUnits, type SpendEntry } from "../profile/profile.js";
-import { SPEND_WINDOW_SECONDS } from "./guards.js";
-import type { LocalLimits } from "./types.js";
+import { SPEND_WINDOW_SECONDS, type LocalLimits } from "@goassay-ai/sdk/core";
 
 /**
  * The G7 spend record (spec §7.8 G7, §8.4, R-MU-7): the only state voucher signing keeps.
