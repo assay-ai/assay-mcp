@@ -255,6 +255,16 @@ describe("guardAndBuild (M1)", () => {
     expect(() => guardAndBuild(withPrompt, 1.5, "e2e")).toThrow(/issuedAt/);
   });
 
+  // The proxy's own options (G11, its G4 text) go with every voucher it builds: the one entry point
+  // passes them itself, so a caller cannot leave them out (eslint keeps the SDK's out of reach).
+  it("always runs G11 and the proxy's G4 text", () => {
+    expect(guardAndBuild({ ...ctx, paidUrls: [] }, base.nowSeconds, "e2e")).toMatchObject({ ok: false, guard: "G11" });
+    const g4 = cases.find((c) => !c.expect.ok && c.guard === "G4" && c.expect.reason?.includes("payer changed"));
+    if (!g4) throw new Error("no payer-changed G4 vector");
+    const r = guardAndBuild(apply(ctx, g4.changes), base.nowSeconds, "e2e");
+    expect(r).toMatchObject({ ok: false, guard: "G4", reason: `payer changed; run ${RUN} enable-paid` });
+  });
+
   it("returns the guard refusal and builds nothing", () => {
     const r = guardAndBuild(apply(ctx, find("seq 2^53").changes), base.nowSeconds, "e2e");
     expect(r).toMatchObject({ ok: false, guard: "G9" });
