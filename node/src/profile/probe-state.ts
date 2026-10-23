@@ -14,3 +14,13 @@ export function markKeychainProbeTimedOut(): void {
 export function keychainProbeTimedOut(): boolean {
   return timedOut;
 }
+
+/**
+ * Ends the process with `code`. After a probe that timed out, a normal exit would hang: the
+ * keyring read stuck on the unlock prompt holds a libuv worker thread, and exiting waits for every
+ * worker. The process is then killed instead; the text was already written to stderr.
+ */
+export function exitProcess(code: number): never {
+  if (timedOut) process.kill(process.pid, "SIGKILL");
+  process.exit(code);
+}

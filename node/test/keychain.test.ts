@@ -240,12 +240,12 @@ describe.runIf(realKeychain || expectFailure !== undefined)("real OS keychain (g
   });
   afterAll(() => rmSync(probe.dir, { recursive: true, force: true }));
 
-  function runProbe(): Promise<{ code: number | null; stderr: string }> {
+  function runProbe(): Promise<{ code: number | null; stderr: string; signal?: NodeJS.Signals }> {
     return new Promise((resolve) => {
       const child = fork(probe.file, [], { stdio: ["ignore", "ignore", "pipe", "ipc"] });
       let stderr = "";
       child.stderr!.on("data", (d: Buffer) => (stderr += d.toString()));
-      child.on("exit", (code) => resolve({ code, stderr }));
+      child.on("exit", (code, signal) => resolve(signal ? { code, stderr, signal } : { code, stderr }));
     });
   }
 
@@ -275,10 +275,12 @@ describe.runIf(realKeychain || expectFailure !== undefined)("real OS keychain (g
   });
 
   // macOS asks to unlock the keychain; on a runner nobody answers, so the probe's timeout ends it.
+  // The read stuck on the prompt keeps a normal exit from returning, so the process is killed
+  // (exitProcess) once the unlock text is out.
   it.runIf(expectFailure === "locked")(
-    "locked keychain → exit 1 with the unlock text (real probe)",
+    "locked keychain → the unlock text, then the process ends (real probe)",
     async () => {
-      expect(await runProbe()).toEqual({ code: 1, stderr: `${LOCKED_KEYCHAIN_MESSAGE}\n` });
+      expect(await runProbe()).toEqual({ code: null, stderr: `${LOCKED_KEYCHAIN_MESSAGE}\n`, signal: "SIGKILL" });
     },
     PROBE_TIMEOUT_MS + 15_000,
   );
