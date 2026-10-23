@@ -127,10 +127,11 @@ jobs:
           security list-keychains -d user -s "$KC" $(cat "$RUNNER_TEMP/keychains.before")
           security default-keychain -d user -s "$KC"
           if [ "${{ matrix.name }}" = "macos locked" ]; then
-            # The probe only looks up an entry that does not exist: with the runner's own (unlocked)
-            # login keychain still in the search list, that lookup answers "not found" from there
-            # and never reaches the locked one. Search the locked keychain alone.
+            # Search the locked keychain alone (the runner's own login keychain is unlocked), and
+            # give the probe an entry to read: finding that an entry is missing needs no unlock on
+            # macOS, reading one does. -A: any app may read it, so only the lock can refuse.
             security list-keychains -d user -s "$KC"
+            security add-generic-password -A -s ai.assay.mcp -a probe -w ci-probe "$KC"
             security lock-keychain "$KC"
           fi
           echo "ASSAY_CI_KEYCHAIN=$KC" >> "$GITHUB_ENV"
