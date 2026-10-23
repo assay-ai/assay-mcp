@@ -89,6 +89,23 @@ describe("redactMcpUrl", () => {
     );
   });
 
+  it("hides the token when percent-encoded more than once", () => {
+    expect(redactMcpUrl(`next=https%253A%252F%252Fmcp.example.test%252Fu%252F${token}%253Ffree%253D1`)).toBe(
+      "next=https%253A%252F%252Fmcp.example.test%252Fu%252F[redacted]%253Ffree%253D1",
+    );
+    expect(redactMcpUrl(`x=%25252FU%25252F${token}%25252Fmore`)).toBe("x=%25252FU%25252F[redacted]%25252Fmore");
+  });
+
+  it("hides the token behind JSON-escaped slashes", () => {
+    expect(redactMcpUrl(`{"url":"https:\\/\\/mcp.example.test\\/u\\/${token}\\/x"}`)).toBe('{"url":"https:\\/\\/mcp.example.test\\/u\\/[redacted]\\/x"}');
+    expect(redactMcpUrl(`"https:\\\\/\\\\/mcp.example.test\\\\/u\\\\/${token}"`)).toBe('"https:\\\\/\\\\/mcp.example.test\\\\/u\\\\/[redacted]"');
+    expect(redactMcpUrl(`"https:\\u002F\\u002Fmcp.example.test\\u002Fu\\u002F${token}\\u002Fx"`)).toBe(
+      '"https:\\u002F\\u002Fmcp.example.test\\u002Fu\\u002F[redacted]\\u002Fx"',
+    );
+    const line = formatLine(new Date(0), "info", "proxy", "serving", { body: JSON.stringify({ url: `https://mcp.example.test/u/${token}` }).replaceAll("/", "\\/") });
+    expect(line).not.toContain(token);
+  });
+
   it("hides a key or token in the query", () => {
     for (const param of ["key", "api_key", "token"]) {
       expect(redactMcpUrl(`https://mcp.example.test/my/research?${param}=${token}&free=1`), param).toBe(

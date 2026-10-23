@@ -39,14 +39,21 @@ const BASIC = /\b(Basic)\s+(?=[A-Za-z0-9+/_-]*(?:[0-9+/=]|[a-z][A-Z]))[A-Za-z0-9
 
 export const REDACTED = "[redacted]";
 
-/** A link-only tool set's token in an MCP URL path (`/u/{token}`), raw or percent-encoded. */
-const MCP_LINK_TOKEN = /(\/u\/)[^/?#@\s"'&;,)]+/gi;
-const MCP_LINK_TOKEN_ENCODED = /(%2Fu%2F)(?:(?!%2F|%3F|%23|%40)[^&#\s"';,)])+/gi;
+/**
+ * A link-only tool set's token in an MCP URL path (`/u/{token}`): raw, or with JSON-escaped
+ * slashes (`\/u\/{token}`, `\u002Fu\u002F{token}`). The token ends at the next separator.
+ */
+const MCP_LINK_TOKEN = /((?:\\*\/|\\u002F)u(?:\\*\/|\\u002F))(?:(?!\\u002F)[^\\/?#@\s"'&;,)])+/gi;
+/** The same, percent-encoded once or more (`%2Fu%2F`, `%252Fu%252F`, …). */
+const MCP_LINK_TOKEN_ENCODED = /(%(?:25)*2Fu%(?:25)*2F)(?:(?!%(?:25)*(?:2F|3F|23|40))[^&#\s"';,)\\])+/gi;
 
 /**
  * An MCP URL with its secrets removed: the link-only token in the path (`/u/[redacted]`, kept
- * pinned as `/u/[redacted]@2`) and any key or token in the query. Safe on any text, so the
- * logger runs it on every line; also for a URL shown outside the log.
+ * pinned as `/u/[redacted]@2`) and any key or token in the query. Safe on any text. Used by
+ * {@link redact} (every log line, command error messages), by the CLI usage error (stderr,
+ * which MCP hosts keep in their logs) and by the paid-calls-off text the agent's model reads.
+ * The person's own terminal output of `add`, `list` and `allow-paid` keeps the full URL on
+ * purpose: it is their link, and the printed `allow-paid` command must work when copied.
  */
 export function redactMcpUrl(text: string): string {
   return text

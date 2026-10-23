@@ -11,6 +11,7 @@ import {
   validateDeployments,
   type Deployment,
 } from "../src/deployments.js";
+import { sdkNetworkErrors } from "../src/guards/sign.js";
 
 const table = builtInDeployments();
 const ESCROW = "eip155:46630:0x1eDb0E45747cfEf778bDB4f4418319efc0DD814f";
@@ -139,6 +140,50 @@ describe("deployments.json", () => {
       ).toEqual([]);
     }
     expect(validateDeployment("anvil", table.anvil)).toEqual([]);
+  });
+});
+
+describe("deployments: mcp and SDK agree", () => {
+  const withRpc = (env: "e2e" | "anvil" | "staging", rpc: string[]) => {
+    const t = structuredClone(table);
+    t[env].networks["eip155:46630"]!.rpc = rpc;
+    return t;
+  };
+
+  it("the built-in table passes the SDK as well", () => {
+    expect(sdkNetworkErrors(table)).toEqual([]);
+  });
+
+  it("an RPC the SDK refuses is refused by validateDeployments too, in every environment", () => {
+    for (const bad of [
+      "http://rpc.example.com",
+      "http://rpc.internal.example:8545",
+      "https://user:pass@rpc.example.com",
+      "https://rpc.example.com/?key=x",
+      "https://rpc.example.com/#x",
+      "ws://localhost:8545",
+    ]) {
+      const t = withRpc("e2e", [bad]);
+      expect(sdkNetworkErrors(t).length, bad).toBeGreaterThan(0);
+      expect(validateDeployments(t).some((e) => e.startsWith("e2e.networks.eip155:46630.rpc")), bad).toBe(true);
+    }
+    for (const ok of ["http://127.0.0.1:8547", "http://localhost:8547", "http://[::1]:8547", "https://rpc.example.com/v1"]) {
+      const t = withRpc("anvil", [ok]);
+      expect(sdkNetworkErrors(t), ok).toEqual([]);
+      expect(validateDeployments(t), ok).toEqual([]);
+    }
+  });
+
+  it("refuses the same RPC listed twice", () => {
+    expect(validateDeployments(withRpc("e2e", ["http://localhost:8547", "http://localhost:8547"]))).toContain(
+      "e2e.networks.eip155:46630.rpc: lists the same RPC twice",
+    );
+  });
+
+  it("names the environment and the entry the SDK refuses", () => {
+    const t = withRpc("staging", ["<operator RPC>", "<public RPC>"]);
+    expect(validateDeployments(t)).toEqual([]);
+    expect(sdkNetworkErrors(t)).toEqual(["staging: networks.eip155:46630.rpcUrls must list at least one https RPC URL"]);
   });
 });
 

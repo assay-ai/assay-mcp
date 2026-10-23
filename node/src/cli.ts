@@ -1,6 +1,7 @@
 import { RUN } from "./version.js";
 import { builtInDeployments, validateDeployments } from "./deployments.js";
 import { EXIT_FATAL, EXIT_OK, EXIT_USAGE } from "./exit-codes.js";
+import { sdkNetworkErrors } from "./guards/sign.js";
 import { redactMcpUrl } from "./log/redact.js";
 import { VERSION } from "./version.js";
 import * as add from "./commands/add.js";
@@ -92,7 +93,10 @@ export async function main(argv: readonly string[]): Promise<number> {
       process.stderr.write(`assay-mcp: ${redactMcpUrl(r.message)}\n${USAGE}`);
       return EXIT_USAGE;
     case "command": {
-      const errors = validateDeployments(builtInDeployments());
+      // mcp's own rules, then the SDK's: a table the SDK refuses would leave the signer with no
+      // network at all, so every payment would be refused at G2 with no hint why.
+      const table = builtInDeployments();
+      const errors = [...validateDeployments(table), ...sdkNetworkErrors(table)];
       if (errors.length > 0) {
         process.stderr.write(`assay-mcp: the built-in deployments table is invalid:\n  ${errors.join("\n  ")}\n`);
         return EXIT_FATAL;

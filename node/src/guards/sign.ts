@@ -8,7 +8,7 @@ import {
   type GuardOptions,
   type GuardResult,
 } from "@goassay-ai/sdk/core";
-import { builtInDeployments, isPlaceholder, type Environment } from "../deployments.js";
+import { builtInDeployments, ENVIRONMENTS, isPlaceholder, type Deployments, type Environment } from "../deployments.js";
 import { RUN } from "../version.js";
 
 /**
@@ -24,26 +24,50 @@ export const PAYER_CHANGED_REASON = `payer changed; run ${RUN} enable-paid`;
 const NETWORKS = new Map<Environment, ReadonlyMap<string, Eip155NetworkEntry>>();
 
 /**
+ * The SDK's network map for `env` of `table`: an entry whose escrow or asset is still a
+ * placeholder is left out, placeholder RPCs are dropped. Throws the SDK's `ConfigError`, naming
+ * the entry, when the SDK refuses one.
+ */
+export function networkEntriesOf(table: Deployments, env: Environment): ReadonlyMap<string, Eip155NetworkEntry> {
+  if (!Object.hasOwn(table, env)) return new Map();
+  const entries = Object.entries(table[env].networks).map(
+    ([id, n]) => [id, { escrow: n.escrow, asset: n.asset, decimals: n.decimals, rpcUrls: n.rpc.filter((r) => !isPlaceholder(r)) }] as const,
+  );
+  return networkEntriesFrom(Object.fromEntries(entries), {
+    skip: (_id, n) => isPlaceholder(n.escrow) || isPlaceholder(n.asset),
+  });
+}
+
+/**
+ * Every entry of `table` the SDK refuses, as `env: reason`. The CLI checks the built-in table
+ * with this on start, so a refusal is reported there and never only seen as payments refused
+ * at G2 (see {@link builtInNetworks}).
+ */
+export function sdkNetworkErrors(table: Deployments): string[] {
+  const errors: string[] = [];
+  for (const env of ENVIRONMENTS) {
+    try {
+      networkEntriesOf(table, env);
+    } catch (err) {
+      errors.push(`${env}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  return errors;
+}
+
+/**
  * The built-in networks of `env` the signer may sign for, from the bundled `deployments.json`
  * only. An entry whose escrow or asset is still a placeholder is left out; a table the SDK
- * refuses gives no network at all (fail closed: every payment is then refused at G2).
+ * refuses gives no network at all (fail closed: every payment is then refused at G2). The CLI
+ * refuses to start on such a table ({@link sdkNetworkErrors}), so this is only a backstop.
  */
 export function builtInNetworks(env: Environment): ReadonlyMap<string, Eip155NetworkEntry> {
   let networks = NETWORKS.get(env);
   if (networks === undefined) {
-    const table = builtInDeployments();
-    networks = new Map();
-    if (Object.hasOwn(table, env)) {
-      const entries = Object.entries(table[env].networks).map(
-        ([id, n]) => [id, { escrow: n.escrow, asset: n.asset, decimals: n.decimals, rpcUrls: n.rpc.filter((r) => !isPlaceholder(r)) }] as const,
-      );
-      try {
-        networks = networkEntriesFrom(Object.fromEntries(entries), {
-          skip: (_id, n) => isPlaceholder(n.escrow) || isPlaceholder(n.asset),
-        });
-      } catch {
-        networks = new Map();
-      }
+    try {
+      networks = networkEntriesOf(builtInDeployments(), env);
+    } catch {
+      networks = new Map();
     }
     NETWORKS.set(env, networks);
   }
