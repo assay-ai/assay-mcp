@@ -66,6 +66,10 @@ services:
       PROVIDER_REQUEST_SIGNING_KEYS: ${PROVIDER_REQUEST_SIGNING_KEYS:?generated per run}
       BULLBOARD_ENABLED: "false"
       EXAMPLES_ENABLED: "false"
+    # The image carries only what the build needs (the backend's .dockerignore is an allowlist):
+    # the seed files and the seed scripts the job runs come from the checkout, read-only.
+    volumes:
+      - ${BACKEND_DIR}/scripts:/app/scripts:ro
     command: ["sh", "-c", "yarn -s migration:run:prod && exec node dist/main"]
     ports:
       - "3000:3000"
