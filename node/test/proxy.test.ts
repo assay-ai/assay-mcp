@@ -819,7 +819,8 @@ describe("sign-in across processes (fix round 1, I1)", () => {
     expect(textOf(await a.client.callTool(SIGN_IN))).toMatch(/^Approve in your browser:\n/);
     await until(() => a.changed.length > 0, 10_000);
     expect(mcp.opened).toHaveLength(1);
-    expect(existsSync(join(dir, "profiles", "default.signin.json"))).toBe(false);
+    // The marker is released once the sign-in returns, which can be just after the list changed.
+    await until(() => !existsSync(join(dir, "profiles", "default.signin.json")), 10_000);
   });
 });
 
