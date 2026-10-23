@@ -330,8 +330,10 @@ describe("paid path (SDK client → proxy → fake Assay)", () => {
     const a = await connect();
     const b = await connect();
     const [ra, rb] = await Promise.all([a.client.callTool({ name: "weather", arguments: {} }), b.client.callTool({ name: "weather", arguments: {} })]);
-    expect(textOf(ra)).toContain("#key=0x");
-    expect(textOf(rb)).toContain("#key=0x");
+    // The server keeps one live challenge per credential: when the sibling's replaced this
+    // window's, its bind is refused with the "try again" text (concurrency.test.ts, F4).
+    const retry = "Paid calls could not be set up: Assay did not accept the payment key. Try again.";
+    for (const t of [textOf(ra), textOf(rb)]) expect(t.includes("#key=0x") || t === retry, t).toBe(true);
     const again = await a.client.callTool({ name: "weather", arguments: {} });
     expect(textOf(again)).toContain("#key=0x");
     expect(fake.opened).toHaveLength(1);
