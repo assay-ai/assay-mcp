@@ -61,6 +61,13 @@ describe("main", () => {
     expect(err.join("")).toContain("Usage:");
   });
 
+  it("never echoes a private link's token in the usage error", async () => {
+    const { err } = capture();
+    expect(await main(["https://mcp.goassay.ai/u/k3y9q2m4n8p1r5t7v0w6x3z2"])).toBe(2);
+    expect(err.join("")).toContain("/u/[redacted]");
+    expect(err.join("")).not.toContain("k3y9q2m4n8p1r5t7v0w6x3z2");
+  });
+
   it("serve exits 2 with nothing on stdout for a bad flag", async () => {
     const { out, err } = capture();
     expect(await main(["serve", "--bogus"])).toBe(2);

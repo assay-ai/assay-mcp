@@ -752,6 +752,13 @@ describe("meta", () => {
     expect(notAllowedText("https://mcp.goassay.ai/c/x", "default")).toBe(notAllowedText("https://mcp.goassay.ai/c/x"));
     // A URL with ? or & is quoted, so zsh and bash run it as one word (final review I1).
     expect(notAllowedText("https://mcp.goassay.ai/?tools=a&free=1")).toBe(`Paid calls through this server are off. To allow them, run in a terminal: npx -y @goassay-ai/mcp@${VERSION} allow-paid 'https://mcp.goassay.ai/?tools=a&free=1'`);
+    // The model reads this text: a private link's token never reaches it.
+    const priv = notAllowedText("https://mcp.goassay.ai/u/k3y9q2m4n8p1r5t7v0w6x3z2@2", "work");
+    expect(priv).not.toContain("k3y9q2m4n8p1r5t7v0w6x3z2");
+    expect(priv).toBe(
+      `Paid calls through this server are off. To allow them, run in a terminal: npx -y @goassay-ai/mcp@${VERSION} allow-paid 'https://mcp.goassay.ai/u/[redacted]@2' --profile work (use your full private link in place of [redacted]; it is kept out of this message, and "npx -y @goassay-ai/mcp@${VERSION} list" shows it)`,
+    );
+    expect(notAllowedText("https://mcp.goassay.ai/my/x?key=Zx9kQ2secret")).not.toContain("Zx9kQ2secret");
     expect(debtSuffix("http://localhost:4000/")).toBe(" Settle it at http://localhost:4000/funding");
     expect(appendText({ content: [{ type: "image" }, { type: "text", text: "A." }] }, " B")).toEqual({ content: [{ type: "image" }, { type: "text", text: "A. B" }] });
     expect(usdText(250_000n, 6)).toBe("$0.25");
