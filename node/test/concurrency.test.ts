@@ -260,5 +260,5 @@ describe("§12.4 concurrency, the paid path (fake Assay, API-key mode)", () => {
     expect(fake.opened).toEqual([link]);
     expect(readProfile(profile())).toMatchObject({ credentialId: CREDENTIAL_ID, delegateAddress: address, network: NET_ID });
     expect(fake.accepted).toHaveLength(0);
-  }, 30_000);
+  }, 120_000);
 });

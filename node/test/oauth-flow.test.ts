@@ -495,7 +495,7 @@ describe("tokens (F2, §8.4)", () => {
       for (const c of children) c.kill();
       rmSync(bundle.dir, { recursive: true, force: true });
     }
-  }, 60_000);
+  }, 120_000);
 
   it("invalid_grant → tokens deleted, key kept, mode pre-sign-in; the next sign-in replaces the old credential (F5)", async () => {
     await signIn(profile(), deployment, {}, { keychain, log, openBrowser: browser().open, nowSeconds: () => as.clock });

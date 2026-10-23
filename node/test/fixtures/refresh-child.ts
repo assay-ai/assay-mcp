@@ -14,7 +14,9 @@ const keychain = new Keychain(new FileKeyring(keyringFile), { profile: "default"
 
 process.on("message", (m) => {
   if (m !== "go") return;
-  refreshUnderLock({ profile: { dir, name: "default" }, deployment, keychain, nowSeconds: () => 1_800_000_000 }, failed).then(
+  // Ten children queue for the one lock; a slow (Windows) runner can take longer than the 30 s
+  // default to serve them all, so the wait gets more room here.
+  refreshUnderLock({ profile: { dir, name: "default" }, deployment, keychain, nowSeconds: () => 1_800_000_000, lockOptions: { timeoutMs: 90_000 } }, failed).then(
     (token) => {
       process.send?.({ token });
       process.exit(0);

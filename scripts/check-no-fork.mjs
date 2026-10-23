@@ -8,7 +8,7 @@
 // literals joined, so a definition split across lines or built from `"a" + "b"` is still seen.
 // Symbolic links are refused, never followed.
 import { readdirSync, readFileSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** The directories scanned, relative to the repo root. */
@@ -79,15 +79,18 @@ function walk(dir, out) {
   return out;
 }
 
+/** `path` relative to `root`, with `/` separators on every OS. */
+const repoPath = (root, path) => relative(root, path).split(sep).join("/");
+
 /** Repo-relative `file: what` for every forbidden definition or symbolic link under `dir`. */
 export function findForks(dir, root = dir, skip = []) {
   const { files, links } = walk(dir, { files: [], links: [] });
   const skipped = new Set(skip.map((p) => resolve(root, p)));
   return [
-    ...links.map((l) => `${relative(root, l)}: symbolic link (not followed; not allowed here)`),
+    ...links.map((l) => `${repoPath(root, l)}: symbolic link (not followed; not allowed here)`),
     ...files
       .filter((f) => !skipped.has(resolve(f)))
-      .flatMap((file) => findForksIn(readFileSync(file, "utf8")).map((h) => `${relative(root, file)}: ${h}`)),
+      .flatMap((file) => findForksIn(readFileSync(file, "utf8")).map((h) => `${repoPath(root, file)}: ${h}`)),
   ];
 }
 
