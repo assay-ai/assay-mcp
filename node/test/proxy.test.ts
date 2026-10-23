@@ -124,10 +124,10 @@ async function connect(args: string[] = [], extraEnv: Record<string, string> = {
 }
 
 /** A raw stdio driver: exact lines in, every stdout line kept. */
-function spawnRaw(args: string[] = [], extraEnv: Record<string, string> = {}) {
+function spawnRaw(args: string[] = [], extraEnv: Record<string, string> = {}, nodeArgs: string[] = []) {
   // serve refuses a repeated flag, so a test's own --url replaces the default one.
   const url = args.includes("--url") ? [] : ["--url", `${E2E_MCP}/`];
-  const child = spawn(process.execPath, [fixture.file, ...url, ...args], { env: { PATH: process.env.PATH ?? "", ...childEnv(extraEnv) } });
+  const child = spawn(process.execPath, [...nodeArgs, fixture.file, ...url, ...args], { env: { PATH: process.env.PATH ?? "", ...childEnv(extraEnv) } });
   children.push(child);
   let out = "";
   let err = "";
@@ -834,7 +834,10 @@ describe("bounds and secrets (fix round 1, I2 and I3)", () => {
       res.end(`${head(msg.id)}${inner}]}}`);
       return true;
     };
-    const raw = spawnRaw([], { TEST_HEAP: "1" });
+    // The bound is enforced, not sampled: a sampled heapUsed counts garbage the collector has not
+    // reached yet, so it swung by hundreds of MiB between runs. Under a hard 1.5 GiB heap V8 must
+    // collect before it grows past it; a proxy that kept the twelve answers would run out and die.
+    const raw = spawnRaw([], {}, ["--max-old-space-size=1536"]);
     raw.send(INIT());
     await raw.answer(0);
     const base = raw.lineCount();
@@ -852,8 +855,7 @@ describe("bounds and secrets (fix round 1, I2 and I3)", () => {
       .map((l) => l.slice(0, 200));
     const answeredId = (i: number) => heads.some((h) => new RegExp(`"id":${i}[,}]`).test(h) && /"(result|error)":/.test(h));
     for (let i = 1; i <= 12; i++) expect(answeredId(i)).toBe(true);
-    expect(mcp.peakHeap).toBeGreaterThan(0);
-    expect(mcp.peakHeap).toBeLessThan(1_536 * 1024 * 1024);
+    expect(raw.stderr()).not.toMatch(/heap out of memory/i);
   }, 120_000);
 
   it("401 → refresh → retry succeeds, and the retry carries the new access token", async () => {

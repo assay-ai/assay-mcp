@@ -2,7 +2,7 @@
 // keyring file instead of the OS keychain, a temporary profile directory, and the e2e origins
 // rerouted at the transport (after pinnedFetch's checks) to the local fake AS and fake MCP.
 // Every outbound URL is reported to the fake MCP's /__test/fetch. Env (test-only):
-// TEST_DIR, TEST_KEYRING, TEST_AS_PORT, TEST_MCP_PORT, TEST_TIMEOUT_MS, TEST_LOCK_TIMEOUT_MS, TEST_HEAP.
+// TEST_DIR, TEST_KEYRING, TEST_AS_PORT, TEST_MCP_PORT, TEST_TIMEOUT_MS, TEST_LOCK_TIMEOUT_MS.
 import { serve } from "../../src/commands/serve.js";
 import { Keychain } from "../../src/profile/keychain.js";
 import { FileKeyring } from "../helpers/file-keyring.js";
@@ -23,10 +23,6 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
   if (u.origin === "http://localhost:3000") return realFetch(`http://127.0.0.1:${asPort}${u.pathname}${u.search}`, init);
   return realFetch(input, init);
 }) as typeof fetch;
-
-if (env.TEST_HEAP) {
-  setInterval(() => void realFetch(`http://127.0.0.1:${mcpPort}/__test/heap`, { method: "POST", body: String(process.memoryUsage().heapUsed) }).then((r) => r.text()).catch(() => {}), 50).unref();
-}
 
 const keyring = new FileKeyring(env.TEST_KEYRING!);
 const code = await serve(process.argv.slice(2), {

@@ -37,8 +37,6 @@ export class FakeMcp {
   readonly refuseOnce = new Set<string>();
   /** Refuses every access token with 401 (a credential the server no longer accepts). */
   refuseAll = false;
-  /** The largest heapUsed the proxy reported (bytes), when TEST_HEAP is set. */
-  peakHeap = 0;
   private server: Server | null = null;
 
   constructor(private readonly as: FakeAs) {}
@@ -77,11 +75,6 @@ export class FakeMcp {
         const target = this.as.approve(raw);
         void fetch(target).then((r) => r.text()).catch(() => {});
       }
-      return;
-    }
-    if (path === "/__test/heap") {
-      this.peakHeap = Math.max(this.peakHeap, Number(raw) || 0);
-      res.writeHead(200).end();
       return;
     }
     if (path === "/__test/fetch") {
