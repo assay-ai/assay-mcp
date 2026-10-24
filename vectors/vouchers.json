@@ -119,7 +119,7 @@
       "note": "The built-in eip155:46630 escrow and USDG; maxTimeoutSeconds 300, so the lifetime is the 240 s default.",
       "network": {
         "caip2": "eip155:46630",
-        "escrow": "eip155:46630:0x1eDb0E45747cfEf778bDB4f4418319efc0DD814f",
+        "escrow": "eip155:46630:0xE68A6E2810027dB5da48c2110bd3993eD8177115",
         "asset": "eip155:46630/erc20:0xDbbC156dD414f43f2c952C1Be0f16A0B9a826Cd3",
         "decimals": 6
       },
@@ -128,7 +128,7 @@
         "scheme": "voucher",
         "network": "eip155:46630",
         "payer": "eip155:46630:0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
-        "payTo": "eip155:46630:0x1eDb0E45747cfEf778bDB4f4418319efc0DD814f",
+        "payTo": "eip155:46630:0xE68A6E2810027dB5da48c2110bd3993eD8177115",
         "provider": "eip155:46630:0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
         "providerId": "00000000-0000-4000-8000-000000000001",
         "amount": {
@@ -149,7 +149,7 @@
       "issuedAt": 1786000000,
       "wire": {
         "payer": "eip155:46630:0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
-        "payTo": "eip155:46630:0x1eDb0E45747cfEf778bDB4f4418319efc0DD814f",
+        "payTo": "eip155:46630:0xE68A6E2810027dB5da48c2110bd3993eD8177115",
         "provider": "eip155:46630:0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
         "amount": {
           "amount": "100000",
@@ -167,7 +167,7 @@
           "name": "Assay Settlement",
           "version": "2",
           "chainId": 46630,
-          "verifyingContract": "0x1eDb0E45747cfEf778bDB4f4418319efc0DD814f"
+          "verifyingContract": "0xE68A6E2810027dB5da48c2110bd3993eD8177115"
         },
         "types": {
           "Voucher": [
@@ -217,17 +217,17 @@
           "expiresAt": "1786000240"
         }
       },
-      "domainSeparator": "0x6b92d11542bfd0b27b5a709df504eda6ac40a27dd7ed72c02980e9aa96f0c452",
+      "domainSeparator": "0x17e82dd9654d6e12230e7cdc837c0cbf7acedd561758472412cd695752a48d9e",
       "structHash": "0xbffa904d3a77124016e6349f6b23c26390cc22a1eba9da2fd85fe1da18833bc6",
-      "digest": "0xb5f45b3410f2f39b8fc82290db4f034b2e0069f4be62b013d014a3df23227f46",
-      "signature": "0xc096116950ce77411fe8b5086733f78f48a0ad4bbc0c23915af41048c4fa55a5323de9726c692aa96a20d26408e3eb47bd766c61161a6ad44f9499cfd9608a331c"
+      "digest": "0x8620c95e479743bad91c658cca84e67e736fd8714bad570c0af4090cd416a56e",
+      "signature": "0xa056b576531c80651390226c6fa917278431e9ab004787cf476ce422972e80f75a5598a346db63ad35fc96f032a47c05029b1539e5f972cc81f526b6000e991b1c"
     },
     {
       "name": "short-timeout-utf8-max-safe-seq",
       "note": "maxTimeoutSeconds 60 caps the lifetime; a non-ASCII resource is hashed as UTF-8; seq is 2^53-1; requestHash in upper case is signed as the same bytes.",
       "network": {
         "caip2": "eip155:46630",
-        "escrow": "eip155:46630:0x1eDb0E45747cfEf778bDB4f4418319efc0DD814f",
+        "escrow": "eip155:46630:0xE68A6E2810027dB5da48c2110bd3993eD8177115",
         "asset": "eip155:46630/erc20:0xDbbC156dD414f43f2c952C1Be0f16A0B9a826Cd3",
         "decimals": 6
       },
@@ -236,7 +236,7 @@
         "scheme": "voucher",
         "network": "eip155:46630",
         "payer": "eip155:46630:0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
-        "payTo": "eip155:46630:0x1eDb0E45747cfEf778bDB4f4418319efc0DD814f",
+        "payTo": "eip155:46630:0xE68A6E2810027dB5da48c2110bd3993eD8177115",
         "provider": "eip155:46630:0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
         "providerId": "00000000-0000-4000-8000-000000000001",
         "amount": {
@@ -257,7 +257,7 @@
       "issuedAt": 1786000123,
       "wire": {
         "payer": "eip155:46630:0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
-        "payTo": "eip155:46630:0x1eDb0E45747cfEf778bDB4f4418319efc0DD814f",
+        "payTo": "eip155:46630:0xE68A6E2810027dB5da48c2110bd3993eD8177115",
         "provider": "eip155:46630:0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
         "amount": {
           "amount": "18446744073709551615",
@@ -275,7 +275,7 @@
           "name": "Assay Settlement",
           "version": "2",
           "chainId": 46630,
-          "verifyingContract": "0x1eDb0E45747cfEf778bDB4f4418319efc0DD814f"
+          "verifyingContract": "0xE68A6E2810027dB5da48c2110bd3993eD8177115"
         },
         "types": {
           "Voucher": [
@@ -325,10 +325,10 @@
           "expiresAt": "1786000183"
         }
       },
-      "domainSeparator": "0x6b92d11542bfd0b27b5a709df504eda6ac40a27dd7ed72c02980e9aa96f0c452",
+      "domainSeparator": "0x17e82dd9654d6e12230e7cdc837c0cbf7acedd561758472412cd695752a48d9e",
       "structHash": "0x99cd0ad11c8bfb21b9c4e1804b8f45e0fc1bcb9794ccfc64ef37e11e277ad375",
-      "digest": "0x8235332ff5b96641a884bf01837d97982f0bafe367a9b0e3e58e6550e4e888a4",
-      "signature": "0xef740f008783abd96c50778a878c9f2187d983c368580fda2b96a9772dd4b46b09fb69518a703305c8dfcb2fa9723ff254a18fc27c41169cf9a3ed4ffca38fac1b"
+      "digest": "0x55930846a785a925f40f595992779c7f9f92e7b135ea0cd81a18f26ac021831e",
+      "signature": "0x7a90a94fb80df63b17917a009697f03f2106f76fed099380f28b5edf721c9dbd22da7ffa64775c02666ebcc0cd17894cda521c4f956bbec95cfd8924dd837f4c1c"
     }
   ]
 }

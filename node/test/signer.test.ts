@@ -216,16 +216,34 @@ describe("buildVoucher", () => {
     expect(hashTypedData(typedData)).toBe("0xb50bc1d1af99579d1bdef9a5531e5a4114abe8c0d6352c4956bb66bc439241e1");
   });
 
-  it.each(["production", "e2e", "anvil"] as const)("uses the built-in chain id and escrow (%s)", (env) => {
+  it("uses the built-in chain id and escrow (production)", () => {
     for (const c of cases.filter((v) => v.network.escrow === builtIn.network.escrow)) {
-      const { typedData } = buildVoucher(c.requirement as VoucherRequirement, c.issuedAt, env);
+      const { typedData } = buildVoucher(c.requirement as VoucherRequirement, c.issuedAt, "production");
       expect(typedData.domain).toEqual({
         name: "Assay Settlement",
         version: "2",
         chainId: 46630,
-        verifyingContract: "0x1eDb0E45747cfEf778bDB4f4418319efc0DD814f",
+        verifyingContract: "0xE68A6E2810027dB5da48c2110bd3993eD8177115",
       });
       expect(hashTypedData(typedData)).toBe(c.digest);
+    }
+  });
+
+  // e2e and anvil sign for the develop stack's own escrow, a separate deploy on the same chain:
+  // the same message under another domain, so never the production digest.
+  it.each(["e2e", "anvil"] as const)("uses the built-in chain id and the dev escrow (%s)", (env) => {
+    for (const c of cases.filter((v) => v.network.escrow === builtIn.network.escrow)) {
+      const req = { ...(c.requirement as VoucherRequirement), payTo: "eip155:46630:0x343606d8Db3872EEC5Ea56cb43b9F4606Bfdf71f" };
+      const { typedData } = buildVoucher(req, c.issuedAt, env);
+      expect(typedData.domain).toEqual({
+        name: "Assay Settlement",
+        version: "2",
+        chainId: 46630,
+        verifyingContract: "0x343606d8Db3872EEC5Ea56cb43b9F4606Bfdf71f",
+      });
+      expect(typedData.message).toEqual(buildVoucher(c.requirement as VoucherRequirement, c.issuedAt, "production").typedData.message);
+      expect(hashTypedData(typedData)).not.toBe(c.digest);
+      expect(refusalField(() => buildVoucher(c.requirement as VoucherRequirement, c.issuedAt, env))).toBe("payTo");
     }
   });
 
@@ -250,9 +268,9 @@ describe("buildVoucher", () => {
       (table as Record<string, unknown>).production = table.e2e;
     }).toThrow(TypeError);
     expect(() => Object.assign(table.production, { api: "https://api.example.com" })).toThrow(TypeError);
-    expect(net.escrow).toBe("eip155:46630:0x1eDb0E45747cfEf778bDB4f4418319efc0DD814f");
+    expect(net.escrow).toBe("eip155:46630:0xE68A6E2810027dB5da48c2110bd3993eD8177115");
     const { typedData } = buildVoucher(req, builtIn.issuedAt, "production");
-    expect(typedData.domain.verifyingContract).toBe("0x1eDb0E45747cfEf778bDB4f4418319efc0DD814f");
+    expect(typedData.domain.verifyingContract).toBe("0xE68A6E2810027dB5da48c2110bd3993eD8177115");
     expect(refusalField(() => buildVoucher(golden.requirement as VoucherRequirement, golden.issuedAt, "production"))).toBe(
       "payTo",
     );
@@ -285,7 +303,7 @@ describe("buildVoucher", () => {
     const n = builtIn.network;
     const field = (over: Partial<VectorNetwork>) =>
       refusalField(() => resolved({ ...n, ...over }));
-    expect(field({ escrow: "eip155:1:0x1eDb0E45747cfEf778bDB4f4418319efc0DD814f" })).toBe("network.escrow");
+    expect(field({ escrow: "eip155:1:0xE68A6E2810027dB5da48c2110bd3993eD8177115" })).toBe("network.escrow");
     expect(field({ asset: "eip155:1/erc20:0xDbbC156dD414f43f2c952C1Be0f16A0B9a826Cd3" })).toBe("network.asset");
     expect(field({ escrow: "<escrow>" })).toBe("network.escrow");
     expect(field({ asset: "<asset>" })).toBe("network.asset");

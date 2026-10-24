@@ -13,7 +13,10 @@ import {
 } from "../src/deployments.js";
 
 const table = builtInDeployments();
-const ESCROW = "eip155:46630:0x1eDb0E45747cfEf778bDB4f4418319efc0DD814f";
+/** The production stack's escrow. */
+const ESCROW = "eip155:46630:0xE68A6E2810027dB5da48c2110bd3993eD8177115";
+/** The develop and local stacks' escrow (e2e, anvil): a separate deploy on the same chain. */
+const DEV_ESCROW = "eip155:46630:0x343606d8Db3872EEC5Ea56cb43b9F4606Bfdf71f";
 const ASSET = "eip155:46630/erc20:0xDbbC156dD414f43f2c952C1Be0f16A0B9a826Cd3";
 
 function hostOf(url: string): string {
@@ -51,10 +54,10 @@ describe("deployments.json", () => {
     }
   });
 
-  it("production, e2e and anvil use the 46630 escrow and asset; staging is still to be filled", () => {
+  it("production uses its own 46630 escrow, e2e and anvil the dev one, all the same asset; staging is still to be filled", () => {
     for (const env of ["production", "e2e", "anvil"] as const) {
       const n = table[env].networks["eip155:46630"]!;
-      expect(n.escrow).toBe(ESCROW);
+      expect(n.escrow).toBe(env === "production" ? ESCROW : DEV_ESCROW);
       expect(n.asset).toBe(ASSET);
     }
     const staging = table.staging.networks["eip155:46630"]!;
@@ -146,16 +149,16 @@ describe("deployments.json", () => {
 
 describe("CAIP parsing", () => {
   it("refuses wrong forms and bad checksums", () => {
-    expect(parseCaip10("0x1eDb0E45747cfEf778bDB4f4418319efc0DD814f")).toBeNull();
-    expect(parseCaip10("eip155:46630:0x1edb0e45747cfef778bdb4f4418319efc0dd814")).toBeNull();
-    expect(parseCaip10("eip155:46630:0x1eDb0E45747cfEf778bDB4f4418319efc0DD814F")).toBeNull();
+    expect(parseCaip10("0xE68A6E2810027dB5da48c2110bd3993eD8177115")).toBeNull();
+    expect(parseCaip10("eip155:46630:0xe68a6e2810027db5da48c2110bd3993ed817711")).toBeNull();
+    expect(parseCaip10("eip155:46630:0xE68a6E2810027dB5da48c2110bd3993eD8177115")).toBeNull();
     expect(parseCaip19Erc20("eip155:46630:0xDbbC156dD414f43f2c952C1Be0f16A0B9a826Cd3")).toBeNull();
     expect(parseCaip19Erc20("eip155:46630/erc721:0xDbbC156dD414f43f2c952C1Be0f16A0B9a826Cd3")).toBeNull();
   });
 
   it("refuses an escrow on another chain than its network key", () => {
     const d = structuredClone(table.e2e);
-    d.networks["eip155:46630"]!.escrow = "eip155:1:0x1eDb0E45747cfEf778bDB4f4418319efc0DD814f";
+    d.networks["eip155:46630"]!.escrow = "eip155:1:0x343606d8Db3872EEC5Ea56cb43b9F4606Bfdf71f";
     expect(validateDeployment("e2e", d)).toContain("e2e.networks.eip155:46630.escrow: chain does not match eip155:46630");
   });
 

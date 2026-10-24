@@ -52,7 +52,7 @@ describe("redact", () => {
   });
 
   it("keeps addresses, short hashes and credential prefixes", () => {
-    const address = "0x1eDb0E45747cfEf778bDB4f4418319efc0DD814f";
+    const address = "0xE68A6E2810027dB5da48c2110bd3993eD8177115";
     expect(redact(`payer=${address} id=3f2a1b9c`)).toBe(`payer=${address} id=3f2a1b9c`);
   });
 

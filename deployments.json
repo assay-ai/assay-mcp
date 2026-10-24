@@ -6,7 +6,7 @@
     "web": "<WEB from ops config>",
     "networks": {
       "eip155:46630": {
-        "escrow": "eip155:46630:0x1eDb0E45747cfEf778bDB4f4418319efc0DD814f",
+        "escrow": "eip155:46630:0xE68A6E2810027dB5da48c2110bd3993eD8177115",
         "asset": "eip155:46630/erc20:0xDbbC156dD414f43f2c952C1Be0f16A0B9a826Cd3",
         "decimals": 6,
         "rpc": ["<operator RPC>", "<public RPC>"]
@@ -34,7 +34,7 @@
     "web": "http://localhost:4000",
     "networks": {
       "eip155:46630": {
-        "escrow": "eip155:46630:0x1eDb0E45747cfEf778bDB4f4418319efc0DD814f",
+        "escrow": "eip155:46630:0x343606d8Db3872EEC5Ea56cb43b9F4606Bfdf71f",
         "asset": "eip155:46630/erc20:0xDbbC156dD414f43f2c952C1Be0f16A0B9a826Cd3",
         "decimals": 6,
         "rpc": ["https://rpc.testnet.chain.robinhood.com"]
@@ -48,7 +48,7 @@
     "web": "http://localhost:4000",
     "networks": {
       "eip155:46630": {
-        "escrow": "eip155:46630:0x1eDb0E45747cfEf778bDB4f4418319efc0DD814f",
+        "escrow": "eip155:46630:0x343606d8Db3872EEC5Ea56cb43b9F4606Bfdf71f",
         "asset": "eip155:46630/erc20:0xDbbC156dD414f43f2c952C1Be0f16A0B9a826Cd3",
         "decimals": 6,
         "rpc": ["http://127.0.0.1:8547", "http://localhost:8547"]
