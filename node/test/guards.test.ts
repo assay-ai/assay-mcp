@@ -271,9 +271,10 @@ describe("guardAndBuild (M1)", () => {
   });
 
   it("checks the requirement against the built-in entry of the environment it signs for", () => {
-    // The vectors pay the dev escrow: staging shares it, production has its own and refuses.
+    // The vectors pay the local fixture escrow: e2e shares it; production and staging have their own and refuse.
     expect(guardAndBuild(ctx, base.nowSeconds, "production")).toMatchObject({ ok: false, guard: "G2", code: "G2_PAY_TO" });
-    expect(guardAndBuild(ctx, base.nowSeconds, "staging")).toMatchObject({ ok: true });
+    expect(guardAndBuild(ctx, base.nowSeconds, "staging")).toMatchObject({ ok: false, guard: "G2", code: "G2_PAY_TO" });
+    expect(guardAndBuild(ctx, base.nowSeconds, "e2e")).toMatchObject({ ok: true });
   });
 
   it("works on a frozen copy and leaves the caller's requirement alone", () => {

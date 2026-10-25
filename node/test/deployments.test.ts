@@ -15,6 +15,7 @@ import { sdkNetworkErrors } from "../src/guards/sign.js";
 
 const table = builtInDeployments();
 const ESCROW = "eip155:46630:0x1eDb0E45747cfEf778bDB4f4418319efc0DD814f";
+const STAGING_ESCROW = "eip155:46630:0x343606d8Db3872EEC5Ea56cb43b9F4606Bfdf71f";
 const PROD_ESCROW = "eip155:46630:0xE68A6E2810027dB5da48c2110bd3993eD8177115";
 const ASSET = "eip155:46630/erc20:0xDbbC156dD414f43f2c952C1Be0f16A0B9a826Cd3";
 
@@ -48,9 +49,10 @@ describe("deployments.json", () => {
     }
   });
 
-  it("production has its own 46630 escrow; staging, e2e and anvil share the dev escrow; all use the same asset", () => {
+  it("production and staging each have their own 46630 escrow; e2e and anvil share the local fixture escrow; all use the same asset", () => {
     expect(table.production.networks["eip155:46630"]!.escrow).toBe(PROD_ESCROW);
-    for (const env of ["staging", "e2e", "anvil"] as const) {
+    expect(table.staging.networks["eip155:46630"]!.escrow).toBe(STAGING_ESCROW);
+    for (const env of ["e2e", "anvil"] as const) {
       expect(table[env].networks["eip155:46630"]!.escrow).toBe(ESCROW);
     }
     for (const env of ENVIRONMENTS) expect(table[env].networks["eip155:46630"]!.asset).toBe(ASSET);

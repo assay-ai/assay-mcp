@@ -34,8 +34,8 @@ const golden = cases.find((v) => v.name === "backend-cast-golden")!;
 const req = builtIn.requirement as VoucherRequirement;
 
 describe("vouchers for the built-in networks", () => {
-  // The vectors are signed for the dev escrow, which staging, e2e and anvil use; production has its own.
-  it.each(["staging", "e2e", "anvil"] as const)("uses the built-in chain id and escrow (%s)", (env) => {
+  // The vectors are signed for the local fixture escrow, which e2e and anvil use; production and staging have their own.
+  it.each(["e2e", "anvil"] as const)("uses the built-in chain id and escrow (%s)", (env) => {
     for (const c of cases.filter((v) => v.network.escrow === builtIn.network.escrow)) {
       const { typedData } = build(c.requirement as VoucherRequirement, c.issuedAt, env);
       expect(typedData.domain).toEqual({
