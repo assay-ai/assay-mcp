@@ -50,10 +50,10 @@ describe("vouchers for the built-in networks", () => {
 
   it("production signs only for its own escrow, never the vectors' dev escrow", () => {
     const prodEscrow = builtInDeployments().production.networks["eip155:46630"]!.escrow;
-    expect(prodEscrow).toBe("eip155:46630:0x2723AD1fEC053Fe05305e4D0c874B0402959Ce18");
+    expect(prodEscrow).toBe("eip155:46630:0xE68A6E2810027dB5da48c2110bd3993eD8177115");
     expect(refusalField(() => build(req, builtIn.issuedAt, "production"))).toBe("payTo");
     const { typedData } = build({ ...req, payTo: prodEscrow }, builtIn.issuedAt, "production");
-    expect(typedData.domain.verifyingContract).toBe("0x2723AD1fEC053Fe05305e4D0c874B0402959Ce18");
+    expect(typedData.domain.verifyingContract).toBe("0xE68A6E2810027dB5da48c2110bd3993eD8177115");
   });
 
   it("the built-in table is deep-frozen: a write throws and vouchers keep the built-in escrow", () => {
