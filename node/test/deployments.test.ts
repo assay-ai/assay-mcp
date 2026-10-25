@@ -15,7 +15,7 @@ import { sdkNetworkErrors } from "../src/guards/sign.js";
 
 const table = builtInDeployments();
 const ESCROW = "eip155:46630:0x1eDb0E45747cfEf778bDB4f4418319efc0DD814f";
-const PROD_ESCROW = "eip155:46630:0x2723AD1fEC053Fe05305e4D0c874B0402959Ce18";
+const PROD_ESCROW = "eip155:46630:0xE68A6E2810027dB5da48c2110bd3993eD8177115";
 const ASSET = "eip155:46630/erc20:0xDbbC156dD414f43f2c952C1Be0f16A0B9a826Cd3";
 
 function hostOf(url: string): string {
