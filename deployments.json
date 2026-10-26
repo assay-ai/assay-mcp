@@ -5,11 +5,11 @@
     "api": "https://api.goassay.ai/api/v1",
     "web": "https://portal.goassay.ai",
     "networks": {
-      "eip155:46630": {
-        "escrow": "eip155:46630:0xE68A6E2810027dB5da48c2110bd3993eD8177115",
-        "asset": "eip155:46630/erc20:0xDbbC156dD414f43f2c952C1Be0f16A0B9a826Cd3",
+      "eip155:4663": {
+        "escrow": "eip155:4663:0xe54E0142b1D0d34226498D563A16074C81Bc9A5e",
+        "asset": "eip155:4663/erc20:0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
         "decimals": 6,
-        "rpc": ["https://rpc.testnet.chain.robinhood.com", "https://robinhood-sepolia-rpc.publicnode.com"]
+        "rpc": ["https://rpc.mainnet.chain.robinhood.com", "https://robinhood-rpc.publicnode.com"]
       }
     }
   },
