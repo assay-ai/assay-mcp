@@ -8,9 +8,16 @@
  * - The escrow and the RPCs come from the selected entry of `deployments.json`, never from the
  *   server or from code.
  * - Every listed RPC is read, and each must answer the same chain id and the same bytes. All
- *   reads run at one pinned block `B = min(heights) - 1`, so RPCs a block apart still agree; heights
- *   more than `MAX_BLOCK_SPREAD` apart refuse. A failure, a timeout or any disagreement gives
+ *   reads run at one pinned block `B = min(heights) - 1`, so RPCs some blocks apart still agree;
+ *   heights more than `MAX_BLOCK_SPREAD` apart refuse. A failure, a timeout or any disagreement gives
  *   `CHAIN_UNCONFIRMED`, which guards treat as "no read" (fail closed).
+ * - A transient failure (an RPC error or timeout, or heights too far apart) runs the whole read
+ *   again, at most `READ_ATTEMPTS` times in all, after `RETRY_DELAYS_MS`; no new attempt starts
+ *   once `RETRY_WINDOW_MS` has passed. Each attempt pins its own block and needs every RPC again.
+ *   A disagreement at the pinned block is never retried: two RPCs serving different bytes for the
+ *   same block is a real conflict, and a later attempt that happens to agree would hide it. Other
+ *   final answers (another chain, no block to pin, a malformed answer, configuration) are not
+ *   retried either.
  * - An agreed result is cached for 10 minutes per profile, payer and delegate. Failures are not
  *   cached.
  */
@@ -28,8 +35,18 @@ import { DEFAULT_TIMEOUT_MS, ethBlockNumber, ethCall, ethChainId } from "./rpc.j
 
 /** How long an agreed read stands (G4: "at most every 10 minutes"). */
 export const CACHE_TTL_MS = 10 * 60 * 1000;
-/** The most two RPCs' latest block heights may differ before the read refuses. */
-export const MAX_BLOCK_SPREAD = 5n;
+/**
+ * The most two RPCs' latest block heights may differ before the read refuses. About 20 s on
+ * Robinhood Chain (~6 blocks/s), whose public RPCs are often 10 to 40 blocks apart. It only
+ * bounds how stale the pinned block can be; agreement comes from reading one explicit block.
+ */
+export const MAX_BLOCK_SPREAD = 120n;
+/** Attempts of the whole read, including the first, when an attempt fails transiently. */
+export const READ_ATTEMPTS = 3;
+/** The wait before the second and the third attempt. */
+export const RETRY_DELAYS_MS: readonly number[] = [300, 1000];
+/** No new attempt starts once this long has passed since the first one started. */
+export const RETRY_WINDOW_MS = 5000;
 /** Cached entries per reader; the oldest is dropped beyond this. */
 const MAX_CACHE_ENTRIES = 64;
 
@@ -113,6 +130,8 @@ export interface ChainReaderOptions {
   now?: () => number;
   /** Tests only: a table in place of the built-in one. The CLI never passes this. */
   deployments?: Deployments;
+  /** Tests only: the wait between attempts. Default `setTimeout`. */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 export interface ChainReader {
@@ -134,6 +153,11 @@ export interface ChainReader {
 
 function unconfirmed(reason: string): DelegationResult {
   return { ok: false, code: "CHAIN_UNCONFIRMED", reason };
+}
+
+/** One attempt that failed in a way another attempt may not (an RPC error, heights apart). */
+interface Transient {
+  transient: string;
 }
 
 /** A bare `0x` address in any case, or a CAIP-10 account on `chainId`; checksummed, or null. */
@@ -160,6 +184,7 @@ export function createChainReader(options: ChainReaderOptions): ChainReader {
   const table = options.deployments ?? builtInDeployments();
   const now = options.now ?? Date.now;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const dev = DEV_ENVIRONMENTS.includes(options.environment);
   // `gen` orders reads: a result is stored only when no newer read or invalidation came first,
   // so a slow, older read never overwrites a newer one.
@@ -177,7 +202,19 @@ export function createChainReader(options: ChainReaderOptions): ChainReader {
     return JSON.stringify([options.profile, String(network), norm(payer), norm(delegate)]);
   }
 
-  async function readOnce(network: string, payerIn: string, delegateIn: string, readAt: number): Promise<DelegationResult> {
+  /** The whole read, run again on a transient failure (see the module comment). */
+  async function readWithRetry(network: string, payerIn: string, delegateIn: string, readAt: number): Promise<DelegationResult> {
+    const started = performance.now();
+    for (let attempt = 1; ; attempt++) {
+      const res = await readOnce(network, payerIn, delegateIn, readAt);
+      if (!("transient" in res)) return res;
+      const delay = RETRY_DELAYS_MS[attempt - 1] ?? 0;
+      if (attempt >= READ_ATTEMPTS || performance.now() - started + delay > RETRY_WINDOW_MS) return unconfirmed(res.transient);
+      await sleep(delay);
+    }
+  }
+
+  async function readOnce(network: string, payerIn: string, delegateIn: string, readAt: number): Promise<DelegationResult | Transient> {
     const entry = table[options.environment];
     const n = entry && Object.hasOwn(entry.networks, network) ? entry.networks[network] : undefined;
     const chain = /^eip155:([1-9][0-9]*)$/.exec(network);
@@ -214,18 +251,18 @@ export function createChainReader(options: ChainReaderOptions): ChainReader {
     );
     const heights: bigint[] = [];
     for (const [i, h] of heads.entries()) {
-      if (h.status === "rejected") return unconfirmed(`rpc[${i}] ${errorMessage(h.reason)}`);
+      if (h.status === "rejected") return { transient: `rpc[${i}] ${errorMessage(h.reason)}` };
       if (h.value.id !== chainId) return unconfirmed("an RPC is on another chain");
       heights.push(h.value.height);
     }
     const low = heights.reduce((x, y) => (y < x ? y : x));
     const high = heights.reduce((x, y) => (y > x ? y : x));
-    if (high - low > MAX_BLOCK_SPREAD) return unconfirmed("RPCs are too far apart");
+    if (high - low > MAX_BLOCK_SPREAD) return { transient: "RPCs are too far apart" };
     if (low < 1n) return unconfirmed("no block to pin");
     // One block behind the lowest head, so every RPC has it.
     const block = low - 1n;
 
-    // Round 2: every read at the pinned block on every RPC.
+    // Round 2: every read at the pinned block on every RPC. A disagreement here is final.
     const settled = await Promise.allSettled(
       rpcs.map(async (url): Promise<RawRead> => {
         const [delegation, caps, escrowRaw] = await Promise.all([
@@ -239,7 +276,7 @@ export function createChainReader(options: ChainReaderOptions): ChainReader {
 
     const reads: RawRead[] = [];
     for (const [i, s] of settled.entries()) {
-      if (s.status === "rejected") return unconfirmed(`rpc[${i}] ${errorMessage(s.reason)}`);
+      if (s.status === "rejected") return { transient: `rpc[${i}] ${errorMessage(s.reason)}` };
       reads.push(s.value);
     }
     const first = reads[0]!;
@@ -285,7 +322,7 @@ export function createChainReader(options: ChainReaderOptions): ChainReader {
       }
       const myGen = ++gen;
       const started = now();
-      const promise = readOnce(network, payer, delegate, Math.floor(started / 1000))
+      const promise = readWithRetry(network, payer, delegate, Math.floor(started / 1000))
         .catch(() => unconfirmed("read failed"))
         .then((res) => {
           const current = cache.get(key);
