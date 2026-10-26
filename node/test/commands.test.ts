@@ -740,6 +740,9 @@ describe("limits", () => {
     const provider = `0x${"ab".repeat(20)}`;
     expect(await runLimits(["set", "--per-call", "1", "--per-day", "$10", "--confirm-above", "0.75", "--providers", provider], t)).toBe(0);
     expect(readLimits(ref())).toMatchObject({ perCall: "1", perDay: "10", confirmAbove: "0.75", providers: [getAddress(provider)] });
+    const upper = `0x${"AB".repeat(20)}`;
+    expect(await runLimits(["set", "--per-call", "1", "--per-day", "10", "--providers", `${getAddress(provider)},${upper}`], t)).toBe(0);
+    expect(readLimits(ref())).toMatchObject({ providers: [getAddress(provider)] });
     expect(await runLimits(["set", "--per-call", "0.5", "--per-day", "5"], t)).toBe(0);
     expect(readLimits(ref())).toMatchObject({ perCall: "0.5", perDay: "5", confirmAbove: "0.75" });
     expect(await runLimits(["set", "--per-call", "0.5", "--per-day", "5", "--confirm-above", "off", "--providers", "off"], t)).toBe(0);
@@ -753,6 +756,7 @@ describe("limits", () => {
     [["set", "--per-call", "abc", "--per-day", "5"]],
     [["set", "--per-call", "6", "--per-day", "5"]],
     [["set", "--per-call", "1", "--per-day", "5", "--providers", "evil"]],
+    [["set", "--per-call", "1", "--per-day", "5", "--providers", "0x286D1F2620d741243AE3aC39F2803DD06F83089b"]],
     [["set", "--per-call", "1", "--per-day", "5", "--confirm-above", "-1"]],
     [["set", "--per-call", "1", "--per-day", "5", "--per-day", "6"]],
   ])("refuses bad input %j without writing", async (args) => {
