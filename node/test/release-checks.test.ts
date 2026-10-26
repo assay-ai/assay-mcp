@@ -131,7 +131,7 @@ describe("check-deployments (release)", () => {
   const filled = () => {
     const t = structuredClone(table);
     Object.assign(t.production, { api: "https://api.example.com/api/v1", web: "https://app.example.com" });
-    t.production.networks["eip155:46630"]!.rpc = ["https://rpc-a.example.com", "https://rpc-b.example.net"];
+    t.production.networks["eip155:4663"]!.rpc = ["https://rpc-a.example.com", "https://rpc-b.example.net"];
     Object.assign(t.staging, {
       mcp: "https://mcp.staging.example.com",
       issuer: "https://mcp.staging.example.com",
@@ -152,11 +152,11 @@ describe("check-deployments (release)", () => {
 
   it("refuses placeholders, in every entry", () => {
     const t = structuredClone(table);
-    t.production.networks["eip155:46630"]!.rpc = ["<operator RPC>", "<public RPC>"];
+    t.production.networks["eip155:4663"]!.rpc = ["<operator RPC>", "<public RPC>"];
     t.staging.networks["eip155:46630"]!.escrow = "<staging escrow CAIP-10>";
     t.staging.networks["eip155:46630"]!.rpc = ["<staging operator RPC>", "<staging public RPC>"];
     const errors = checkReleaseDeployments(t);
-    expect(errors).toContain("production.networks.eip155:46630.rpc[0] is a placeholder: <operator RPC>");
+    expect(errors).toContain("production.networks.eip155:4663.rpc[0] is a placeholder: <operator RPC>");
     expect(errors).toContain("staging.networks.eip155:46630.escrow is a placeholder: <staging escrow CAIP-10>");
     expect(errors).toContain("staging.networks.eip155:46630.rpc[0] is a placeholder: <staging operator RPC>");
     expect(errors.some((e) => /^(production|staging)\.(mcp|issuer|api|web) /.test(e))).toBe(false);
@@ -168,11 +168,11 @@ describe("check-deployments (release)", () => {
 
   it("refuses two RPCs on one host, and a single RPC", () => {
     const same = filled();
-    same.production.networks["eip155:46630"]!.rpc = ["https://rpc.example.com/a", "https://RPC.example.com/b"];
-    expect(checkReleaseDeployments(same)).toEqual(["production.networks.eip155:46630.rpc needs two distinct hosts"]);
+    same.production.networks["eip155:4663"]!.rpc = ["https://rpc.example.com/a", "https://RPC.example.com/b"];
+    expect(checkReleaseDeployments(same)).toEqual(["production.networks.eip155:4663.rpc needs two distinct hosts"]);
     const one = filled();
-    one.production.networks["eip155:46630"]!.rpc = ["https://rpc.example.com"];
-    expect(checkReleaseDeployments(one)).toEqual(["production.networks.eip155:46630.rpc needs two distinct hosts"]);
+    one.production.networks["eip155:4663"]!.rpc = ["https://rpc.example.com"];
+    expect(checkReleaseDeployments(one)).toEqual(["production.networks.eip155:4663.rpc needs two distinct hosts"]);
   });
 
   it("refuses an http production URL and an http production RPC", () => {
@@ -180,23 +180,26 @@ describe("check-deployments (release)", () => {
     url.production.web = "http://app.example.com";
     expect(checkReleaseDeployments(url)).toEqual(["production.web must be https"]);
     const rpc = filled();
-    rpc.production.networks["eip155:46630"]!.rpc = ["http://rpc-a.example.com", "https://rpc-b.example.net"];
+    rpc.production.networks["eip155:4663"]!.rpc = ["http://rpc-a.example.com", "https://rpc-b.example.net"];
     expect(checkReleaseDeployments(rpc)).toEqual([
-      "production.networks.eip155:46630.rpc entry is not an https URL",
-      "production.networks.eip155:46630.rpc needs two distinct hosts",
+      "production.networks.eip155:4663.rpc entry is not an https URL",
+      "production.networks.eip155:4663.rpc needs two distinct hosts",
     ]);
   });
 
   it("refuses a staging escrow equal to the production escrow", () => {
     const shared = filled();
-    shared.staging.networks["eip155:46630"]!.escrow = table.production.networks["eip155:46630"]!.escrow!;
-    expect(checkReleaseDeployments(shared)).toEqual(["staging.networks.eip155:46630.escrow must differ from the production escrow"]);
+    shared.staging.networks["eip155:4663"] = { ...shared.production.networks["eip155:4663"]!, rpc: ["https://rpc-c.example.com", "https://rpc-d.example.net"] };
+    expect(checkReleaseDeployments(shared)).toEqual(["staging.networks.eip155:4663.escrow must differ from the production escrow"]);
   });
 
-  it("refuses a production network other than eip155:46630", () => {
+  it("refuses a production network other than eip155:4663 (Robinhood Chain mainnet)", () => {
     const extra = filled();
     extra.production.networks["eip155:1"] = { rpc: ["https://a.example.com", "https://b.example.com"] };
-    expect(checkReleaseDeployments(extra)).toContain("production networks are [eip155:46630, eip155:1], expected [eip155:46630]");
+    expect(checkReleaseDeployments(extra)).toContain("production networks are [eip155:4663, eip155:1], expected [eip155:4663]");
+    const testnet = filled();
+    testnet.production.networks = { "eip155:46630": testnet.staging.networks["eip155:46630"]! };
+    expect(checkReleaseDeployments(testnet)).toContain("production networks are [eip155:46630], expected [eip155:4663]");
   });
 
   it("agrees with the runtime on what a placeholder is", () => {

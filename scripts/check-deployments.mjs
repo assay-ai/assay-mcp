@@ -8,7 +8,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** Networks the production backend enables today. */
-export const PRODUCTION_NETWORKS = ["eip155:46630"];
+export const PRODUCTION_NETWORKS = ["eip155:4663"];
 
 export function isPlaceholder(value) {
   return typeof value === "string" && /^<[^<>]+>$/.test(value);

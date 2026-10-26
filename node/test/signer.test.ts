@@ -1,6 +1,6 @@
 import { inspect } from "node:util";
 import { describe, expect, it } from "vitest";
-import { hashTypedData } from "viem";
+import { domainSeparator, hashTypedData } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { buildVoucher, SignerRefusal, type VoucherRequirement } from "@goassay-ai/sdk/core";
 import voucherVectors from "../../vectors/vouchers.json" with { type: "json" };
@@ -33,6 +33,22 @@ const builtIn = cases.find((v) => v.name === "built-in-escrow")!;
 const golden = cases.find((v) => v.name === "backend-cast-golden")!;
 const req = builtIn.requirement as VoucherRequirement;
 
+/** Robinhood Chain mainnet, the production network. */
+const MAINNET = "eip155:4663";
+const MAINNET_ESCROW = "0xe54E0142b1D0d34226498D563A16074C81Bc9A5e";
+const MAINNET_USDG = "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168";
+const MAINNET_DOMAIN_SEPARATOR = "0x8af355df3c16d2a6ba6b83f787f6886d63b19cd54f241cb88203121fdd9e4010";
+
+/** The vector's requirement moved to mainnet: same accounts, the mainnet escrow and USDG. */
+function onMainnet(r: VoucherRequirement): VoucherRequirement {
+  const moved = JSON.parse(JSON.stringify(r).replaceAll('"eip155:46630', `"${MAINNET}`)) as VoucherRequirement;
+  return {
+    ...moved,
+    payTo: `${MAINNET}:${MAINNET_ESCROW}`,
+    amount: { ...moved.amount, asset: `${MAINNET}/erc20:${MAINNET_USDG}` },
+  };
+}
+
 describe("vouchers for the built-in networks", () => {
   // The vectors are signed for the local fixture escrow, which e2e and anvil use; production and staging have their own.
   it.each(["e2e", "anvil"] as const)("uses the built-in chain id and escrow (%s)", (env) => {
@@ -48,17 +64,27 @@ describe("vouchers for the built-in networks", () => {
     }
   });
 
-  it("production signs only for its own escrow, never the vectors' dev escrow", () => {
-    const prodEscrow = builtInDeployments().production.networks["eip155:46630"]!.escrow;
-    expect(prodEscrow).toBe("eip155:46630:0xE68A6E2810027dB5da48c2110bd3993eD8177115");
-    expect(refusalField(() => build(req, builtIn.issuedAt, "production"))).toBe("payTo");
-    const { typedData } = build({ ...req, payTo: prodEscrow }, builtIn.issuedAt, "production");
-    expect(typedData.domain.verifyingContract).toBe("0xE68A6E2810027dB5da48c2110bd3993eD8177115");
+  it("production signs only for the mainnet escrow, never the vectors' testnet dev escrow", () => {
+    const prod = builtInDeployments().production.networks[MAINNET]!;
+    expect(prod.escrow).toBe(`${MAINNET}:${MAINNET_ESCROW}`);
+    expect(prod.asset).toBe(`${MAINNET}/erc20:${MAINNET_USDG}`);
+    // A testnet requirement is not a production network at all.
+    expect(refusalField(() => build(req, builtIn.issuedAt, "production"))).toBe("network");
+    const mainnetReq = onMainnet(req);
+    expect(refusalField(() => build({ ...mainnetReq, payTo: `${MAINNET}:0x1eDb0E45747cfEf778bDB4f4418319efc0DD814f` }, builtIn.issuedAt, "production"))).toBe("payTo");
+    const { typedData } = build(mainnetReq, builtIn.issuedAt, "production");
+    expect(typedData.domain).toEqual({ name: "Assay Settlement", version: "2", chainId: 4663, verifyingContract: MAINNET_ESCROW });
+    // Read from the mainnet escrow with `cast call <escrow> "DOMAIN_SEPARATOR()(bytes32)"`.
+    expect(domainSeparator({ domain: typedData.domain })).toBe(MAINNET_DOMAIN_SEPARATOR);
+    // The testnet entries never sign for mainnet.
+    for (const env of ["staging", "e2e", "anvil"] as const) {
+      expect(refusalField(() => build(mainnetReq, builtIn.issuedAt, env)), env).toBe("network");
+    }
   });
 
   it("the built-in table is deep-frozen: a write throws and vouchers keep the built-in escrow", () => {
     const table = builtInDeployments();
-    const net = table.production.networks["eip155:46630"]!;
+    const net = table.production.networks[MAINNET]!;
     expect(Object.isFrozen(table)).toBe(true);
     expect(() => {
       (net as { escrow: string }).escrow = golden.network.escrow;
@@ -69,7 +95,9 @@ describe("vouchers for the built-in networks", () => {
     expect(() => {
       (table as Record<string, unknown>).production = table.e2e;
     }).toThrow(TypeError);
-    expect(refusalField(() => build(golden.requirement as VoucherRequirement, golden.issuedAt, "production"))).toBe("payTo");
+    const goldenEscrow = golden.network.escrow.split(":")[2]!;
+    const onGolden = { ...onMainnet(golden.requirement as VoucherRequirement), payTo: `${MAINNET}:${goldenEscrow}` };
+    expect(refusalField(() => build(onGolden, golden.issuedAt, "production"))).toBe("payTo");
   });
 
   it("knows no network that is not built in, or not own", () => {
