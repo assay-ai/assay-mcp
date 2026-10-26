@@ -32,6 +32,7 @@ import {
   enablePaidLink,
   errorResult,
   GET_TOOL,
+  noChainReadText,
   notAllowedText,
   notEnabledText,
   paidToolOf,
@@ -367,7 +368,8 @@ export class PaidPath {
         continue;
       }
       if ((step.guard === "G4" || step.guard === "G6") && payer !== null) this.o.chain.invalidate(payer, localAddress, network.id);
-      return this.refused(response, result, new Refusal(step.guard, step.reason));
+      const text = step.code === "G4_NO_CHAIN_READ" ? noChainReadText() : refusedText(step.reason);
+      return this.refused(response, result, new Refusal(step.guard, step.reason, text));
     }
     return this.refused(response, result, new Refusal("G7", "the confirmation was for another payment"));
   }

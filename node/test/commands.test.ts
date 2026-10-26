@@ -300,7 +300,7 @@ describe("status", () => {
     await seedProfile("production", { delegate: true, payer: true });
     const keyLine = async () => (await statusText([], deps())).split("\n")[3];
     chainResult = { ok: false, code: "CHAIN_UNCONFIRMED", reason: "RPCs disagree" };
-    expect(await keyLine()).toBe("Payment key 1A2B 9F3C · can't confirm on chain right now");
+    expect(await keyLine()).toBe("Payment key 1A2B 9F3C · can't confirm on chain right now, try again in a minute");
     const v = { payer: PAYER, delegate: DELEGATE, maxVoucherAmount: "1", maxPerWindow: "1", delegateMaxVoucherAmount: "1", delegateMaxPerWindow: "1", readAt: NOW };
     chainResult = { ok: true, value: { ...v, active: false, validUntil: String(UNTIL) } };
     expect(await keyLine()).toBe(`Payment key 1A2B 9F3C · stopped (read from chain) · run \`${RUN} enable-paid\``);

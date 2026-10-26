@@ -132,7 +132,7 @@ async function paymentKeyLine(
   const isLocal = (pending: PendingKey): boolean => pending.address === getAddress(delegate);
   if (record?.payer && network !== null) {
     const read = await deps.chain(deployment.environment, profile).readDelegation(network, record.payer, delegate, { fresh: true });
-    if (!read.ok) return `${fp} · can't confirm on chain right now`;
+    if (!read.ok) return `${fp} · can't confirm on chain right now, try again in a minute`;
     const d = read.value;
     const now = deps.nowSeconds();
     const live = BigInt(d.validUntil) !== 0n && d.active && BigInt(d.validUntil) > BigInt(now);

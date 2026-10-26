@@ -366,6 +366,31 @@ describe("paid path (SDK client → proxy → fake Assay)", () => {
     expect(readProfile(profile())!.payer).toBe(PAYER);
   });
 
+  it("no agreed chain read after every attempt → G4 refused with 'try again in a minute'; the next call reads again", async () => {
+    await enabled();
+    const { client } = await connect();
+    fake.rpcFailNext = Number.POSITIVE_INFINITY;
+    const r = await client.callTool({ name: "weather", arguments: {} });
+    expect(r.isError).toBe(true);
+    expect(textOf(r)).toBe(
+      "Assay asked for a payment this app refused: the payment key's grant could not be read from the chain. Try again in a minute.",
+    );
+    expect(metaOf(r)["assay-mcp/refused"]).toMatchObject({ guard: "G4" });
+    expect(fake.accepted).toHaveLength(0);
+    fake.rpcFailNext = 0;
+    expect((await client.callTool({ name: "weather", arguments: {} })).isError).toBeFalsy();
+    expect(fake.accepted).toHaveLength(1);
+  });
+
+  it("an RPC failing on the first attempt only → the paid call goes through", async () => {
+    await enabled();
+    const { client } = await connect();
+    fake.rpcFailNext = 1;
+    expect((await client.callTool({ name: "weather", arguments: {} })).isError).toBeFalsy();
+    expect(fake.accepted).toHaveLength(1);
+    expect(fake.rpcFailNext).toBe(0);
+  });
+
   it("a bind answer naming another key → an error, no link, no browser", async () => {
     await seedProfile(false);
     fake.bindAnswerDelegate = OTHER_PAYER;

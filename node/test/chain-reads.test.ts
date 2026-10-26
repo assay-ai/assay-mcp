@@ -1,12 +1,15 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { decodeFunctionData, encodeFunctionResult, parseAbi, type Hex } from "viem";
 import { builtInDeployments, type Deployments } from "../src/deployments.js";
 import {
   CACHE_TTL_MS,
   ESCROW_READ_ABI,
   MAX_BLOCK_SPREAD,
+  READ_ATTEMPTS,
+  RETRY_DELAYS_MS,
+  RETRY_WINDOW_MS,
   createChainReader,
   toGuardChain,
   type ChainReaderOptions,
@@ -110,18 +113,25 @@ interface FakeRpc {
   url: string;
   view: ChainView;
   behaviour: Behaviour;
+  /** The next this many requests answer HTTP 503 (a transient failure), whatever `behaviour` says. */
+  failNext: number;
   calls: { method: string; fn?: string; to?: string; block?: unknown }[];
   close(): Promise<void>;
 }
 
 async function fakeRpc(): Promise<FakeRpc> {
-  const fake: Omit<FakeRpc, "url" | "close"> = { view: baseView(), behaviour: { kind: "ok" }, calls: [] };
+  const fake: Omit<FakeRpc, "url" | "close"> = { view: baseView(), behaviour: { kind: "ok" }, failNext: 0, calls: [] };
   const sockets = new Set<import("node:net").Socket>();
   const server: Server = createServer((req: IncomingMessage, res: ServerResponse) => {
     let body = "";
     req.on("data", (c: Buffer) => (body += c.toString("utf8")));
     req.on("end", () => {
       const b = fake.behaviour;
+      if (fake.failNext > 0) {
+        fake.failNext--;
+        res.writeHead(503, { "content-type": "application/json" }).end("{}");
+        return;
+      }
       if (b.kind === "down") {
         req.socket.destroy();
         return;
@@ -216,9 +226,21 @@ afterEach(() => {
   for (const f of [a, b]) {
     f.view = baseView();
     f.behaviour = { kind: "ok" };
+    f.failNext = 0;
     f.calls = [];
   }
+  slept = [];
+  onSleep = () => {};
 });
+
+/** The waits between attempts, recorded instead of slept; `onSleep` runs at each. */
+let slept: number[] = [];
+let onSleep: () => void = () => {};
+const sleep = async (ms: number): Promise<void> => {
+  slept.push(ms);
+  onSleep();
+};
+const rounds = (f: FakeRpc): number => f.calls.filter((c) => c.method === "eth_blockNumber").length;
 
 /**
  * The built-in table with `env`'s RPCs replaced. The fake servers are plain http on loopback,
@@ -238,6 +260,7 @@ function reader(extra: Partial<ChainReaderOptions> = {}, rpc = [a.url, b.url]) {
     deployments: tableWith(rpc),
     timeoutMs: 300,
     now: () => now,
+    sleep,
     ...extra,
   });
   return { r, advance: (ms: number) => (now += ms) };
@@ -418,8 +441,8 @@ describe("readDelegation", () => {
   it("the cache is per profile, payer and delegate; a failure is not cached", async () => {
     const t = tableWith([a.url, b.url]);
     const now = () => 5;
-    const one = createChainReader({ environment: "anvil", profile: "one", deployments: t, now });
-    const two = createChainReader({ environment: "anvil", profile: "two", deployments: t, now });
+    const one = createChainReader({ environment: "anvil", profile: "one", deployments: t, now, sleep });
+    const two = createChainReader({ environment: "anvil", profile: "two", deployments: t, now, sleep });
     await one.readDelegation(NETWORK, PAYER, DELEGATE);
     const n = a.calls.length;
     await two.readDelegation(NETWORK, PAYER, DELEGATE);
@@ -650,12 +673,106 @@ describe("readDelegation", () => {
     expect(await r.readDelegation(NETWORK, PAYER, DELEGATE)).toMatchObject({ ok: true });
   });
 
-  it("RPCs more than MAX_BLOCK_SPREAD apart → CHAIN_UNCONFIRMED, with no eth_call", async () => {
-    expect(MAX_BLOCK_SPREAD).toBe(5n);
+  it("RPCs more than MAX_BLOCK_SPREAD apart → CHAIN_UNCONFIRMED after every attempt, with no eth_call", async () => {
+    expect(MAX_BLOCK_SPREAD).toBe(120n);
     a.view.height = 1000n + MAX_BLOCK_SPREAD + 1n;
     const { r } = reader();
-    expect(await r.readDelegation(NETWORK, PAYER, DELEGATE)).toMatchObject({ ok: false, code: "CHAIN_UNCONFIRMED" });
+    expect(await r.readDelegation(NETWORK, PAYER, DELEGATE)).toEqual({ ok: false, code: "CHAIN_UNCONFIRMED", reason: "RPCs are too far apart" });
     for (const f of [a, b]) expect(f.calls.filter((c) => c.method === "eth_call")).toEqual([]);
+    expect(rounds(a)).toBe(READ_ATTEMPTS);
+    expect(slept).toEqual([...RETRY_DELAYS_MS]);
+  });
+
+  it("RPCs 100 blocks apart read at min(heights) - 1 and agree", async () => {
+    a.view.height = 1100n;
+    const { r } = reader();
+    expect(await r.readDelegation(NETWORK, PAYER, DELEGATE)).toEqual({ ok: true, value: AGREED });
+    for (const f of [a, b]) {
+      expect([...new Set(f.calls.filter((c) => c.method === "eth_call").map((c) => c.block))]).toEqual([`0x${(999n).toString(16)}`]);
+    }
+    expect(slept).toEqual([]);
+  });
+
+  it("the retry budget is 3 attempts after 300 ms and 1 s, within a 5 s window", () => {
+    expect(READ_ATTEMPTS).toBe(3);
+    expect(RETRY_DELAYS_MS).toEqual([300, 1000]);
+    expect(RETRY_WINDOW_MS).toBe(5000);
+  });
+
+  it("an RPC failing on attempt 1 and answering on attempt 2 → the agreed read", async () => {
+    b.failNext = 1;
+    const { r } = reader();
+    expect(await r.readDelegation(NETWORK, PAYER, DELEGATE)).toEqual({ ok: true, value: AGREED });
+    expect(slept).toEqual([300]);
+    expect(rounds(a)).toBe(2);
+  });
+
+  it("RPCs too far apart on attempt 1 that catch up by attempt 2 → a read at the new pinned block", async () => {
+    a.view.height = 1000n + MAX_BLOCK_SPREAD + 30n;
+    onSleep = () => {
+      b.view.height = 1100n;
+    };
+    const { r } = reader();
+    expect(await r.readDelegation(NETWORK, PAYER, DELEGATE)).toMatchObject({ ok: true });
+    expect(slept).toEqual([300]);
+    for (const f of [a, b]) {
+      expect([...new Set(f.calls.filter((c) => c.method === "eth_call").map((c) => c.block))]).toEqual([`0x${(1099n).toString(16)}`]);
+    }
+  });
+
+  it("an eth_call timing out on attempt 1 reruns the whole read, heights included", async () => {
+    // Round 1 on `b` answers at once; its eth_calls pass the 300 ms timeout until the first wait.
+    b.behaviour = { kind: "slowCalls", ms: 400 };
+    onSleep = () => {
+      b.behaviour = { kind: "ok" };
+    };
+    const { r } = reader();
+    expect(await r.readDelegation(NETWORK, PAYER, DELEGATE)).toEqual({ ok: true, value: AGREED });
+    expect(slept).toEqual([300]);
+    expect(rounds(a)).toBe(2);
+    expect(rounds(b)).toBe(2);
+  });
+
+  it("an RPC failing on every attempt → CHAIN_UNCONFIRMED after 3 attempts; the failure is not cached", async () => {
+    b.failNext = READ_ATTEMPTS * 2;
+    const { r } = reader();
+    expect(await r.readDelegation(NETWORK, PAYER, DELEGATE)).toMatchObject({ ok: false, code: "CHAIN_UNCONFIRMED" });
+    expect(slept).toEqual([300, 1000]);
+    expect(rounds(a)).toBe(READ_ATTEMPTS);
+    expect(await r.readDelegation(NETWORK, PAYER, DELEGATE)).toEqual({ ok: true, value: AGREED });
+  });
+
+  it("no new attempt starts once the retry window has passed", async () => {
+    a.behaviour = { kind: "hang" };
+    const { r } = reader({ timeoutMs: 100, sleep: async (ms) => void slept.push(ms) });
+    const realNow = performance.now.bind(performance);
+    let shift = 0;
+    const spy = vi.spyOn(performance, "now").mockImplementation(() => realNow() + shift);
+    onSleep = () => {};
+    try {
+      // The first attempt "takes" longer than the window: the clock jumps while it runs.
+      setTimeout(() => (shift = RETRY_WINDOW_MS), 20);
+      expect(await r.readDelegation(NETWORK, PAYER, DELEGATE)).toMatchObject({ ok: false, code: "CHAIN_UNCONFIRMED" });
+      expect(slept).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("a disagreement at the pinned block is final: no retry", async () => {
+    b.view.caps = [1000000n, 10000000n, 900000n, 5000000n];
+    const { r } = reader();
+    expect(await r.readDelegation(NETWORK, PAYER, DELEGATE)).toEqual({ ok: false, code: "CHAIN_UNCONFIRMED", reason: "RPCs disagree" });
+    expect(slept).toEqual([]);
+    expect(rounds(a)).toBe(1);
+    expect(rounds(b)).toBe(1);
+  });
+
+  it("an RPC on another chain is final: no retry", async () => {
+    b.view.chainId = "0x1";
+    const { r } = reader();
+    expect(await r.readDelegation(NETWORK, PAYER, DELEGATE)).toMatchObject({ ok: false, reason: "an RPC is on another chain" });
+    expect(slept).toEqual([]);
   });
 
   it("a chain at block 0 has no block to pin → CHAIN_UNCONFIRMED", async () => {
