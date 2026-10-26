@@ -33,6 +33,9 @@ function providerList(value: string): string[] | null {
   for (const item of items) {
     if (!/^0x[0-9a-fA-F]{40}$/.test(item) || !isAddress(item, { strict: false })) throw new UsageError(`--providers: "${item}" is not an address (0x…)`);
     const a = getAddress(item);
+    // Mixed case carries an EIP-55 checksum: a wrong one is a typo, not an address to normalise.
+    const hex = item.slice(2);
+    if (hex !== hex.toLowerCase() && hex !== hex.toUpperCase() && item !== a) throw new UsageError(`--providers: "${item}" has a wrong checksum; copy the address again`);
     if (!out.includes(a)) out.push(a);
   }
   return out;
