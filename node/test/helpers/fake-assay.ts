@@ -191,6 +191,8 @@ export class FakeAssay {
   payToOverride: string | null = null;
   /** Runs before the challenge is answered (tests hold the binder in its network phase). */
   beforeChallenge: (() => Promise<void>) | null = null;
+  /** The next this many chain RPC requests answer HTTP 503 (a lagging or rate-limited RPC). */
+  rpcFailNext = 0;
   /** Delay before every MCP answer, ms. */
   delayMs = 0;
   /** `GET /agents/me/delegate/status` exists (false: an older backend, which answers 404). */
@@ -547,6 +549,10 @@ export class FakeAssay {
     const ok = (result: unknown): void => void res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ jsonrpc: "2.0", id, result }));
     const method = String(json.method);
     this.rpcCalls.push(method);
+    if (this.rpcFailNext > 0) {
+      this.rpcFailNext--;
+      return void res.writeHead(503, { "content-type": "application/json" }).end("{}");
+    }
     if (method === "eth_chainId") return ok(`0x${this.chainId.toString(16)}`);
     if (method === "eth_blockNumber") return ok("0x3e8");
     if (method !== "eth_call") return ok(null);

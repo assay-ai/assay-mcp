@@ -77,6 +77,14 @@ export function notAllowedText(url: string, profile: string = DEFAULT_PROFILE): 
   return `Paid calls through this server are off. To allow them, run in a terminal: npx -y @goassay-ai/mcp@${VERSION} allow-paid ${shellQuote(shown)}${flag}${note}`;
 }
 
+/**
+ * G4 with no agreed chain read: the RPCs may catch up in a moment, so the text says to try again.
+ * The fixed reason keeps the text the same whatever the SDK's reason says.
+ */
+export function noChainReadText(): string {
+  return `${refusedText("the payment key's grant could not be read from the chain")} Try again in a minute.`;
+}
+
 /** §7.7 step 6. */
 export function notEnabledText(link: string, address: string): string {
   return `This tool is paid, and paid calls are off for this agent. Open ${link} to turn them on (about a minute), then ask again. The page must show this payment key: ${fingerprint(address)}.`;
