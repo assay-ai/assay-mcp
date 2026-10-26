@@ -58,7 +58,7 @@ services:
       PRIVY_APP_SECRET: ci-placeholder
       PRIVY_DEFAULT_CHAIN_ID: solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1
       PRIVY_USER_LOOKUP_ENABLED: "false"
-      # The public testnet USDG token (deployments.json, production); `yarn demo:seed` seeds the
+      # The public testnet USDG token (deployments.json, dev entries); `yarn demo:seed` seeds the
       # demo bindings in it.
       ROBINHOOD_TESTNET_USDG_ADDRESS: "0xDbbC156dD414f43f2c952C1Be0f16A0B9a826Cd3"
       MCP_CREDENTIALS_FILE: /app/scripts/mcp/seed/credentials.json

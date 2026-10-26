@@ -23,6 +23,8 @@ const DELEGATE = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
 const NETWORK = "eip155:46630";
 const CHAIN_ID_HEX = "0xb626"; // 46630
 const ESCROW = "0x1eDb0E45747cfEf778bDB4f4418319efc0DD814f";
+/** Production runs on Robinhood Chain mainnet; the dev entries above stay on testnet. */
+const PROD_NETWORK = "eip155:4663";
 
 const ABI = parseAbi([
   "struct Delegation { uint64 maxVoucherAmount; uint64 maxPerWindow; uint64 spentInWindow; uint64 windowStartedAt; uint64 validUntil; uint32 listPosition; bool revoked; }",
@@ -248,7 +250,7 @@ const rounds = (f: FakeRpc): number => f.calls.filter((c) => c.method === "eth_b
  */
 function tableWith(rpc: string[], env: "anvil" | "production" = "anvil"): Deployments {
   const t = structuredClone(builtInDeployments());
-  t[env].networks[NETWORK]!.rpc = rpc;
+  t[env].networks[env === "production" ? PROD_NETWORK : NETWORK]!.rpc = rpc;
   return t;
 }
 
@@ -591,7 +593,7 @@ describe("readDelegation", () => {
     ["two RPCs on one host", ["https://rpc.example.com/a", "https://RPC.example.com/b"], "RPCs share a host"],
   ])("production refuses %s", async (_name, rpc, reason) => {
     const r = createChainReader({ environment: "production", profile: "default", deployments: tableWith(rpc, "production") });
-    expect(await r.readDelegation(NETWORK, PAYER, DELEGATE)).toEqual({ ok: false, code: "CHAIN_UNCONFIRMED", reason });
+    expect(await r.readDelegation(PROD_NETWORK, PAYER, DELEGATE)).toEqual({ ok: false, code: "CHAIN_UNCONFIRMED", reason });
   });
 
   it("production refuses the fake loopback servers even though they would agree", async () => {
@@ -600,7 +602,7 @@ describe("readDelegation", () => {
       profile: "default",
       deployments: tableWith([a.url, b.url], "production"),
     });
-    expect(await r.readDelegation(NETWORK, PAYER, DELEGATE)).toMatchObject({ ok: false, reason: "RPC not usable" });
+    expect(await r.readDelegation(PROD_NETWORK, PAYER, DELEGATE)).toMatchObject({ ok: false, reason: "RPC not usable" });
     expect(a.calls).toEqual([]);
     expect(b.calls).toEqual([]);
   });

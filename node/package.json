@@ -1,6 +1,6 @@
 {
   "name": "@goassay-ai/mcp",
-  "version": "0.2.6",
+  "version": "1.0.0",
   "description": "Local stdio MCP proxy for Assay. Keeps the agent's payment key on your machine and signs its own payments.",
   "license": "SEE LICENSE IN LICENSE",
   "repository": {

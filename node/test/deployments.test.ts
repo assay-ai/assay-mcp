@@ -16,8 +16,11 @@ import { sdkNetworkErrors } from "../src/guards/sign.js";
 const table = builtInDeployments();
 const ESCROW = "eip155:46630:0x1eDb0E45747cfEf778bDB4f4418319efc0DD814f";
 const STAGING_ESCROW = "eip155:46630:0x343606d8Db3872EEC5Ea56cb43b9F4606Bfdf71f";
-const PROD_ESCROW = "eip155:46630:0xE68A6E2810027dB5da48c2110bd3993eD8177115";
 const ASSET = "eip155:46630/erc20:0xDbbC156dD414f43f2c952C1Be0f16A0B9a826Cd3";
+// Production runs on Robinhood Chain mainnet; staging, e2e and anvil stay on testnet.
+const PROD_NET = "eip155:4663";
+const PROD_ESCROW = "eip155:4663:0xe54E0142b1D0d34226498D563A16074C81Bc9A5e";
+const PROD_ASSET = "eip155:4663/erc20:0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168";
 
 function hostOf(url: string): string {
   return new URL(url).hostname;
@@ -29,8 +32,9 @@ describe("deployments.json", () => {
     expect(validateDeployments(table)).toEqual([]);
   });
 
-  it("production lists only eip155:46630", () => {
-    expect(Object.keys(table.production.networks)).toEqual(["eip155:46630"]);
+  it("production lists only eip155:4663 (Robinhood Chain mainnet); dev entries stay on testnet", () => {
+    expect(Object.keys(table.production.networks)).toEqual([PROD_NET]);
+    for (const env of ["staging", "e2e", "anvil"] as const) expect(Object.keys(table[env].networks)).toEqual(["eip155:46630"]);
   });
 
   it("production MCP and issuer are the public host", () => {
@@ -49,13 +53,14 @@ describe("deployments.json", () => {
     }
   });
 
-  it("production and staging each have their own 46630 escrow; e2e and anvil share the local fixture escrow; all use the same asset", () => {
-    expect(table.production.networks["eip155:46630"]!.escrow).toBe(PROD_ESCROW);
+  it("production has the mainnet escrow and USDG; staging has its own 46630 escrow; e2e and anvil share the local fixture escrow", () => {
+    expect(table.production.networks[PROD_NET]!.escrow).toBe(PROD_ESCROW);
+    expect(table.production.networks[PROD_NET]!.asset).toBe(PROD_ASSET);
     expect(table.staging.networks["eip155:46630"]!.escrow).toBe(STAGING_ESCROW);
     for (const env of ["e2e", "anvil"] as const) {
       expect(table[env].networks["eip155:46630"]!.escrow).toBe(ESCROW);
     }
-    for (const env of ENVIRONMENTS) expect(table[env].networks["eip155:46630"]!.asset).toBe(ASSET);
+    for (const env of ["staging", "e2e", "anvil"] as const) expect(table[env].networks["eip155:46630"]!.asset).toBe(ASSET);
   });
 
   it("has no placeholder left in any entry", () => {
@@ -65,28 +70,28 @@ describe("deployments.json", () => {
   // Same chain id and same verifyingContract (the escrow) mean the same EIP-712 domain: a
   // voucher or AuthorizeDelegate signed for staging would also be valid on production.
   it("staging and production escrows must differ", () => {
-    expect(table.staging.networks["eip155:46630"]!.escrow).not.toBe(table.production.networks["eip155:46630"]!.escrow);
+    expect(table.staging.networks[PROD_NET]).toBeUndefined();
     const shared = structuredClone(table);
-    shared.staging.networks["eip155:46630"]!.escrow = PROD_ESCROW;
+    shared.staging.networks[PROD_NET] = { ...table.production.networks[PROD_NET]!, rpc: [...table.production.networks[PROD_NET]!.rpc] };
     expect(sharedProductionEscrows(shared)).toEqual([
-      "staging.networks.eip155:46630.escrow: must differ from the production escrow (same EIP-712 domain)",
+      "staging.networks.eip155:4663.escrow: must differ from the production escrow (same EIP-712 domain)",
     ]);
     expect(validateDeployments(shared)).toContain(
-      "staging.networks.eip155:46630.escrow: must differ from the production escrow (same EIP-712 domain)",
+      "staging.networks.eip155:4663.escrow: must differ from the production escrow (same EIP-712 domain)",
     );
-    const distinct = structuredClone(table);
-    distinct.staging.networks["eip155:46630"]!.escrow = "eip155:46630:0x000000000000000000000000000000000000dEaD";
+    const distinct = structuredClone(shared);
+    distinct.staging.networks[PROD_NET]!.escrow = "eip155:4663:0x000000000000000000000000000000000000dEaD";
     expect(sharedProductionEscrows(distinct)).toEqual([]);
     expect(sharedProductionEscrows(table)).toEqual([]);
   });
 
   it("accepts contract placeholders outside production only", () => {
     const prod = structuredClone(table.production);
-    prod.networks["eip155:46630"]!.escrow = "<escrow>";
-    prod.networks["eip155:46630"]!.asset = "<asset>";
+    prod.networks[PROD_NET]!.escrow = "<escrow>";
+    prod.networks[PROD_NET]!.asset = "<asset>";
     expect(validateDeployment("production", prod)).toEqual([
-      "production.networks.eip155:46630.escrow: not a checksummed CAIP-10 account",
-      "production.networks.eip155:46630.asset: not a checksummed CAIP-19 erc20 asset",
+      "production.networks.eip155:4663.escrow: not a checksummed CAIP-10 account",
+      "production.networks.eip155:4663.asset: not a checksummed CAIP-19 erc20 asset",
     ]);
     const staging = structuredClone(table.staging);
     staging.networks["eip155:46630"]!.escrow = "<escrow>";
@@ -96,7 +101,7 @@ describe("deployments.json", () => {
   });
 
   it("production rpc has 2 distinct hosts", () => {
-    const rpc = table.production.networks["eip155:46630"]!.rpc;
+    const rpc = table.production.networks[PROD_NET]!.rpc;
     expect(rpc).toHaveLength(2);
     expect(rpc.every((r) => r.startsWith("https://") && !isPlaceholder(r))).toBe(true);
     expect(new Set(rpc.map(hostOf)).size).toBe(2);
@@ -113,11 +118,11 @@ describe("deployments.json", () => {
   it("allows a single RPC in dev entries only, and the dev warning says so", () => {
     const one = (d: Deployment): Deployment => ({
       ...d,
-      networks: { "eip155:46630": { ...d.networks["eip155:46630"]!, rpc: ["https://rpc.example.com"] } },
+      networks: Object.fromEntries(Object.entries(d.networks).map(([id, n]) => [id, { ...n, rpc: ["https://rpc.example.com"] }])),
     });
     expect(validateDeployment("e2e", one(table.e2e))).toEqual([]);
     expect(validateDeployment("staging", one(table.staging))).toContain("staging.networks.eip155:46630.rpc: needs at least 2");
-    expect(validateDeployment("production", one(table.production))).toContain("production.networks.eip155:46630.rpc: needs at least 2");
+    expect(validateDeployment("production", one(table.production))).toContain("production.networks.eip155:4663.rpc: needs at least 2");
     expect(devModeWarning("e2e")).toMatch(/single RPC.*dev entries only/);
     expect(devModeWarning("anvil")).not.toMatch(/single RPC/);
   });
@@ -125,10 +130,10 @@ describe("deployments.json", () => {
   it("outside dev, RPCs must be https on distinct hosts; dev entries may use loopback http", () => {
     const withRpc = (d: Deployment, rpc: string[]): Deployment => ({
       ...d,
-      networks: { "eip155:46630": { ...d.networks["eip155:46630"]!, rpc } },
+      networks: Object.fromEntries(Object.entries(d.networks).map(([id, n]) => [id, { ...n, rpc }])),
     });
     for (const env of ["production", "staging"] as const) {
-      const where = `${env}.networks.eip155:46630.rpc`;
+      const where = `${env}.networks.${env === "production" ? PROD_NET : "eip155:46630"}.rpc`;
       expect(validateDeployment(env, withRpc(table[env], ["https://a.example.com", "http://localhost:8547"]))).toContain(
         `${where}: http://localhost:8547 must be https`,
       );
@@ -208,7 +213,7 @@ describe("CAIP parsing", () => {
     expect(isPlaceholder("<operator RPC>")).toBe(true);
     expect(isPlaceholder("https://example.com")).toBe(false);
     const prod = structuredClone(table.production);
-    prod.networks["eip155:46630"]!.rpc = ["<operator RPC>", "<public RPC>"];
+    prod.networks[PROD_NET]!.rpc = ["<operator RPC>", "<public RPC>"];
     expect(validateDeployment("production", prod, false).some((e) => e.includes("placeholder"))).toBe(true);
     expect(validateDeployment("production", table.production, false)).toEqual([]);
   });

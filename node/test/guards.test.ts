@@ -271,8 +271,9 @@ describe("guardAndBuild (M1)", () => {
   });
 
   it("checks the requirement against the built-in entry of the environment it signs for", () => {
-    // The vectors pay the local fixture escrow: e2e shares it; production and staging have their own and refuse.
-    expect(guardAndBuild(ctx, base.nowSeconds, "production")).toMatchObject({ ok: false, guard: "G2", code: "G2_PAY_TO" });
+    // The vectors pay the local fixture escrow on testnet: e2e shares it; staging has its own escrow and
+    // refuses; production is on mainnet (eip155:4663) and does not know the testnet chain at all.
+    expect(guardAndBuild(ctx, base.nowSeconds, "production")).toMatchObject({ ok: false, guard: "G2", code: "G2_NETWORK" });
     expect(guardAndBuild(ctx, base.nowSeconds, "staging")).toMatchObject({ ok: false, guard: "G2", code: "G2_PAY_TO" });
     expect(guardAndBuild(ctx, base.nowSeconds, "e2e")).toMatchObject({ ok: true });
   });
@@ -287,7 +288,15 @@ describe("guardAndBuild (M1)", () => {
 
 describe("builtInNetwork", () => {
   it("returns the entry with its id, or null", () => {
-    expect(builtInNetwork("production", "eip155:46630")).toMatchObject({ id: "eip155:46630", decimals: 6 });
+    expect(builtInNetwork("production", "eip155:4663")).toMatchObject({
+      id: "eip155:4663",
+      escrow: "eip155:4663:0xe54E0142b1D0d34226498D563A16074C81Bc9A5e",
+      asset: "eip155:4663/erc20:0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
+      decimals: 6,
+    });
+    // Production is mainnet only: the testnet chain is a dev network.
+    expect(builtInNetwork("production", "eip155:46630")).toBeNull();
+    expect(builtInNetwork("staging", "eip155:46630")).toMatchObject({ id: "eip155:46630", decimals: 6 });
     expect(builtInNetwork("production", "eip155:1")).toBeNull();
     expect(builtInNetwork("production", "__proto__")).toBeNull();
     expect(builtInNetwork("production", "toString")).toBeNull();
