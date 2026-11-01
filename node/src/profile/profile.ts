@@ -1,5 +1,5 @@
 import { ENVIRONMENTS, type Environment } from "../deployments.js";
-import { DEFAULT_LIMITS as GUARD_DEFAULT_LIMITS, type LocalLimits, type SignedVoucher } from "@goassay-ai/sdk/core";
+import { DEFAULT_LIMITS as GUARD_DEFAULT_LIMITS, parseBook, type ChannelBook, type LocalLimits, type SignedVoucher } from "@goassay-ai/sdk/core";
 import type { ResolvedDeployment } from "./deployments.js";
 import type { LockHandle, ProfileRef } from "./lock.js";
 import { canonicalPath, canonicalQuery, parseMcpUrl } from "./mcp-url.js";
@@ -72,6 +72,11 @@ export interface ProfileState {
   signed: SpendEntry[];
   /** Unix seconds, or `null`. */
   lastBrowserOpen: number | null;
+  /**
+   * Channel lanes (`channel-v1`): the only record of the totals this computer signed on each lane,
+   * written under the profile lock before every channel voucher is signed. Absent: no lane yet.
+   */
+  channels?: ChannelBook;
 }
 
 function assertLock(profile: ProfileRef, lock: LockHandle): void {
@@ -187,7 +192,15 @@ export function validateState(v: unknown): ProfileState {
     signed.push({ at: e.at, amount: e.amount });
   }
   if (v.lastBrowserOpen !== null && !isSeconds(v.lastBrowserOpen)) throw bad("lastBrowserOpen");
-  return { version: PROFILE_VERSION, signed, lastBrowserOpen: v.lastBrowserOpen };
+  if (v.channels === undefined) return { version: PROFILE_VERSION, signed, lastBrowserOpen: v.lastBrowserOpen };
+  let channels: ChannelBook;
+  try {
+    // A damaged lane record is never reset (a lane forgotten could be signed again from a lower total).
+    channels = parseBook(v.channels);
+  } catch {
+    throw bad("channels");
+  }
+  return { version: PROFILE_VERSION, signed, lastBrowserOpen: v.lastBrowserOpen, channels };
 }
 
 // ---- profile.json --------------------------------------------------------------------

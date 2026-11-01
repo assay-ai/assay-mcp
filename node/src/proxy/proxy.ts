@@ -70,6 +70,8 @@ export interface PaidHooks {
   observeList(pairs: ReturnType<typeof quotesFromList>): void;
   /** Stops the enable-paid wait; called at process end, on sign-out and on a credential change. */
   stop(): void;
+  /** `_meta` the proxy adds to every forwarded `tools/call` (`assay/paymentSchemes`), after the host's own were dropped. */
+  callMeta?(): Record<string, unknown>;
 }
 
 export interface ProxyOptions {
@@ -544,7 +546,9 @@ export class Proxy {
       const original = name === null ? null : this.aliases.original(name);
       // §7.7 step 1: a host voucher or rail is dropped, the idempotency key kept or added.
       // A call on an alias goes out with the exact original name.
-      const prepared = prepareCallParams(original !== null && original !== name ? { ...(req.params ?? {}), name: original } : (req.params ?? {}));
+      const cleaned = prepareCallParams(original !== null && original !== name ? { ...(req.params ?? {}), name: original } : (req.params ?? {}));
+      const extra = this.paid?.callMeta?.() ?? {};
+      const prepared = Object.keys(extra).length === 0 ? cleaned : { ...cleaned, _meta: { ...(cleaned._meta as Record<string, unknown>), ...extra } };
       body = JSON.stringify({ ...req, params: prepared });
       call = this.calls.begin(req.id, original ?? "", prepared);
       if (call === null) return errorResponse(req.id, INVALID_REQUEST, "A request with this id is already in flight.");

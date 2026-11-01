@@ -13,6 +13,12 @@ export interface Network {
   asset: string;
   decimals: number;
   rpc: string[];
+  /**
+   * The escrow has the channel door (`channel-v1`): only then does the proxy offer channel
+   * vouchers on this network. Absent is `false`. Set it in a release only once that escrow is
+   * upgraded and the backend serves channels on it.
+   */
+  channels?: boolean;
 }
 
 export interface Deployment {
@@ -122,6 +128,7 @@ export function validateDeployment(env: Environment, d: Deployment, allowPlaceho
       else if (asset.chainId !== chainId) errors.push(`${where}.asset: chain does not match ${caip2}`);
     }
     if (!Number.isInteger(n.decimals) || n.decimals < 0 || n.decimals > 36) errors.push(`${where}.decimals: invalid`);
+    if (n.channels !== undefined && typeof n.channels !== "boolean") errors.push(`${where}.channels: must be a boolean`);
     const minRpc = DEV_ENVIRONMENTS.includes(env) ? 1 : 2;
     if (!Array.isArray(n.rpc) || n.rpc.length < minRpc) errors.push(`${where}.rpc: needs at least ${minRpc}`);
     else {
