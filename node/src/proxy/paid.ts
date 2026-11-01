@@ -577,7 +577,8 @@ export class PaidPath {
         if (step.channelId) {
           const code = "result" in answer ? answerCode(answer.result) : NO_ANSWER;
           // A JSON-RPC error with no result is no answer too: `unknown`, never a refusal.
-          const outcome = code === NO_ANSWER ? "unknown" : laneOutcomeOf(code);
+          // The reason tells a pre-store spend-policy refusal (re-armed) from one that may not be.
+          const outcome = code === NO_ANSWER ? "unknown" : laneOutcomeOf(code, "result" in answer ? assayErrorOf(answer.result)?.reason : undefined);
           await finishPlannedLane(profile, step.channelId, outcome, this.o.lockOptions).catch(() => undefined);
           // One voucher per host call (R-MCP-9): a channel refusal is answered with a text, and the
           // next call opens a new lane (CHANNEL_ROTATE) or pays per call while channels pause.

@@ -349,6 +349,53 @@ describe("proxy: channel lane", () => {
     expect(s[1]!.voucher.channelId).toBe(s[0]!.voucher.channelId);
   });
 
+  it("a DUPLICATE_REQUEST refusal re-arms the lane: the retry signs the same pair on the same lane", async () => {
+    const u = await unit({
+      answer: (_m, n) => (n === 1 ? refusal("MCP_VELOCITY_LIMIT_EXCEEDED", { reason: "DUPLICATE_REQUEST", retryAfter: 19 }) : undefined),
+    });
+    await u.call();
+    await u.call();
+    await u.call();
+    const s = u.channelSent();
+    expect(u.pairs()).toEqual([
+      ["100000", 1],
+      ["200000", 2],
+      ["200000", 2],
+    ]);
+    expect(new Set(s.map((e) => e.voucher.channelId)).size).toBe(1);
+    // The re-signed pair adds nothing to the spend record.
+    expect(readState(profile()).signed.map((e) => e.amount)).toEqual([PRICE, PRICE]);
+  });
+
+  it("the other pre-store spend-policy refusals re-arm the lane; reason UNAVAILABLE or an unknown reason retires it", async () => {
+    const cases: [Record<string, unknown>, boolean][] = [
+      [{ code: "MCP_VELOCITY_LIMIT_EXCEEDED", reason: "CALLS_PER_MINUTE" }, true],
+      [{ code: "MCP_VELOCITY_LIMIT_EXCEEDED", reason: "CALLS_PER_HOUR" }, true],
+      [{ code: "MCP_VELOCITY_LIMIT_EXCEEDED", reason: "SPEND_PER_HOUR" }, true],
+      [{ code: "MCP_SPEND_LIMIT_EXCEEDED", limitType: "daily" }, true],
+      [{ code: "MCP_POLICY_AGENT_PAUSED" }, true],
+      [{ code: "MCP_APPROVAL_REQUIRED" }, true],
+      [{ code: "MCP_VELOCITY_LIMIT_EXCEEDED", reason: "UNAVAILABLE" }, false],
+      [{ code: "MCP_VELOCITY_LIMIT_EXCEEDED", reason: "SOMETHING_NEW" }, false],
+      [{ code: "MCP_VELOCITY_LIMIT_EXCEEDED" }, false],
+    ];
+    for (const [{ code, ...extra }, rearmed] of cases) {
+      // A fresh profile (lanes and spend record) per case.
+      rmSync(dir, { recursive: true, force: true });
+      dir = mkdtempSync(join(tmpdir(), "assay-mcp-channel-"));
+      addDevOrigin(dir, E2E_MCP);
+      const u = await unit({ answer: (_m, n) => (n === 0 ? refusal(code as string, extra) : undefined) });
+      await u.call();
+      await u.call();
+      const s = u.channelSent();
+      expect(u.pairs()).toEqual([
+        ["100000", 1],
+        ["100000", 1],
+      ]);
+      expect(s[1]!.voucher.channelId === s[0]!.voucher.channelId).toBe(rearmed);
+    }
+  });
+
   it("any other refusal retires the lane", async () => {
     const u = await unit({ answer: (_m, n) => (n === 0 ? refusal("CHANNEL_DESYNC") : undefined) });
     await u.call();
