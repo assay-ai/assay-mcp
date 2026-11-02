@@ -2,11 +2,9 @@
 
 Notable changes to `@goassay-ai/mcp`. Earlier releases are described in their release commits.
 
-## Unreleased
+## 1.1.0 - 2026-11-02
 
-Off until a release marks a network as channel-capable in `deployments.json`: nothing changes for a user of 1.0.0. Needs `@goassay-ai/sdk` with channel vouchers (the release after 1.0.0) as its payment core; not to be released before the escrow's channel door (assay-evm W1) and the backend's channel lane (W2) are live on that network.
-
-> **Release blocker: bump the SDK pin first.** `package.json` still pins `@goassay-ai/sdk` to `0.2.1`, but this code imports the channel APIs (`@goassay-ai/sdk/core`: `pickLane`, `advanceLane`, `finishLane`, `checkChannelOffer`, `buildChannelVoucher`, `renewChannelDebts` and the rest) that exist only in the unreleased SDK (its "Unreleased" changelog section). Local builds and tests resolve the SDK from a linked checkout, so they pass; an install from npm would not. Release order: (1) publish the SDK release that contains the channel APIs; (2) change the pin here to exactly that published version and run the full suite against the installed package (no link); (3) only then release this package. Never pin an unpublished version.
+Off until a release marks a network as channel-capable in `deployments.json` (none is in this release): nothing changes for a user of 1.0.0. The payment core is `@goassay-ai/sdk` 1.1.0, which adds channel vouchers.
 
 ### Added
 
