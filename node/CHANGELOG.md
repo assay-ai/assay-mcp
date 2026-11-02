@@ -2,6 +2,16 @@
 
 Notable changes to `@goassay-ai/mcp`. Earlier releases are described in their release commits.
 
+## 1.2.0 - 2026-11-02
+
+Channels are now used by default: `deployments.json` marks `production` (`eip155:4663`) and `staging` (`eip155:46630`) with `"channels": true`. The lanes live in the profile's state file, `{dir}/profiles/<profile>.state.json` (`{dir}` is `~/Library/Application Support/assay-mcp` on macOS, `~/.config/assay-mcp` on Linux, `%USERPROFILE%\AppData\Roaming\assay-mcp` on Windows), created on the first channel payment. The payment core is still `@goassay-ai/sdk` 1.1.0.
+
+### Changed
+
+- **Channel vouchers on.** Every forwarded `tools/call` now carries `assay/paymentSchemes: ["channel-v1", "voucher"]` (except with `--no-paid`), and a paid call signs a channel voucher whenever Assay offers a channel on the built-in escrow. There is no switch to turn channels off.
+- A call is still paid per call when no channel can be used: Assay offers none, channels are paused for an hour after `CHANNEL_LIMIT`, `CHANNEL_SIGNER_EXPIRING`, `CHANNEL_NOT_OFFERED` or five `CHANNEL_ROTATE` within an hour, the offer does not match the requirement or the built-in entry, no lane is free, the lane record cannot be read or written, or the chain read of a lane is not agreed.
+- The local `e2e` and `anvil` entries stay without channels (their fixture escrow has no channel door).
+
 ## 1.1.0 - 2026-11-02
 
 Off until a release marks a network as channel-capable in `deployments.json` (none is in this release): nothing changes for a user of 1.0.0. The payment core is `@goassay-ai/sdk` 1.1.0, which adds channel vouchers.
