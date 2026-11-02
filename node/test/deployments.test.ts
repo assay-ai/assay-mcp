@@ -37,6 +37,12 @@ describe("deployments.json", () => {
     for (const env of ["staging", "e2e", "anvil"] as const) expect(Object.keys(table[env].networks)).toEqual(["eip155:46630"]);
   });
 
+  it("channels are on for production and staging only (their escrows have the channel door)", () => {
+    expect(table.production.networks[PROD_NET]!.channels).toBe(true);
+    expect(table.staging.networks["eip155:46630"]!.channels).toBe(true);
+    for (const env of ["e2e", "anvil"] as const) expect(table[env].networks["eip155:46630"]!.channels).toBeUndefined();
+  });
+
   it("production MCP and issuer are the public host", () => {
     expect(table.production.mcp).toBe("https://mcp.goassay.ai");
     expect(table.production.issuer).toBe("https://mcp.goassay.ai");

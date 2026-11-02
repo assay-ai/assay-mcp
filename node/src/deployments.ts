@@ -15,8 +15,9 @@ export interface Network {
   rpc: string[];
   /**
    * The escrow has the channel door (`channel-v1`): only then does the proxy offer channel
-   * vouchers on this network. Absent is `false`. Set it in a release only once that escrow is
-   * upgraded and the backend serves channels on it.
+   * vouchers on this network. Absent is `false`. Set only for an escrow that is upgraded and on
+   * which the backend serves channels: `production` (eip155:4663) and `staging` (eip155:46630)
+   * since 1.2.0. The local `e2e` and `anvil` fixture escrow has no channel door.
    */
   channels?: boolean;
 }
