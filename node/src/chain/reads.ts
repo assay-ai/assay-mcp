@@ -57,6 +57,7 @@ export const ESCROW_READ_ABI = parseAbi([
   "function escrowOf(address buyer) view returns (Escrow)",
   "function delegationOf(address payer, address delegate) view returns (Delegation)",
   "function effectiveCapsOf(address payer, address delegate) view returns (uint64 maxVoucherAmount, uint64 maxPerWindow, uint64 delegateMaxVoucherAmount, uint64 delegateMaxPerWindow)",
+  "function channelBooks(bytes32 key, address to) view returns (uint256 state, uint128 unpaid, uint128 totalUnpaid, uint128 held)",
 ]);
 
 /** ABI-encoded return sizes: static tuples of 7 and 12 words, and 4 words. */
@@ -117,8 +118,12 @@ export function toGuardChain(result: DelegationResult, localKey: string): ChainS
     validUntil: v.validUntil,
     maxVoucherAmount: v.maxVoucherAmount,
     delegateMaxVoucherAmount: v.delegateMaxVoucherAmount,
+    delegateMaxPerWindow: v.delegateMaxPerWindow,
   };
 }
+
+/** One channel's packed slot (`channelBooks(key, payer).state`), or no agreed read. */
+export type ChannelResult = { ok: true; state: bigint } | { ok: false; code: "CHAIN_UNCONFIRMED"; reason: string };
 
 export interface ChainReaderOptions {
   environment: Environment;
@@ -149,9 +154,14 @@ export interface ChainReader {
   invalidate(payer: string, delegate: string, network: string): void;
   /** Drops every cached read of this reader. */
   clear(): void;
+  /**
+   * The packed state of one channel key, `channelBooks(key, payer)`, read like the grant (every
+   * RPC, one pinned block, byte-identical answers, the same retries). Never cached.
+   */
+  readChannel?(network: string, key: string, payer: string): Promise<ChannelResult>;
 }
 
-function unconfirmed(reason: string): DelegationResult {
+function unconfirmed(reason: string): { ok: false; code: "CHAIN_UNCONFIRMED"; reason: string } {
   return { ok: false, code: "CHAIN_UNCONFIRMED", reason };
 }
 
@@ -214,7 +224,11 @@ export function createChainReader(options: ChainReaderOptions): ChainReader {
     }
   }
 
-  async function readOnce(network: string, payerIn: string, delegateIn: string, readAt: number): Promise<DelegationResult | Transient> {
+  /**
+   * `eth_call` of each of `datas` on the network's escrow at one pinned block on every RPC: the
+   * answers when every RPC returned the same bytes, else a final refusal or a transient failure.
+   */
+  async function agreedOnce(network: string, datas: readonly `0x${string}`[]): Promise<{ ok: true; answers: `0x${string}`[] } | { ok: false; code: "CHAIN_UNCONFIRMED"; reason: string } | Transient> {
     const entry = table[options.environment];
     const n = entry && Object.hasOwn(entry.networks, network) ? entry.networks[network] : undefined;
     const chain = /^eip155:([1-9][0-9]*)$/.exec(network);
@@ -223,9 +237,6 @@ export function createChainReader(options: ChainReaderOptions): ChainReader {
 
     const escrow = parseCaip10(n.escrow);
     if (!escrow || escrow.chainId !== chainId) return unconfirmed("escrow not configured");
-    const payer = account(payerIn, chainId);
-    const delegate = account(delegateIn, chainId);
-    if (!payer || !delegate) return unconfirmed("bad payer or delegate");
 
     const rpcs = Array.isArray(n.rpc) ? n.rpc : [];
     if (rpcs.length < (dev ? 1 : 2) || new Set(rpcs).size !== rpcs.length) return unconfirmed("not enough RPCs");
@@ -236,11 +247,7 @@ export function createChainReader(options: ChainReaderOptions): ChainReader {
     }
 
     const to = getAddress(escrow.address);
-    const delegationData = encodeFunctionData({ abi: ESCROW_READ_ABI, functionName: "delegationOf", args: [payer, delegate] });
-    const capsData = encodeFunctionData({ abi: ESCROW_READ_ABI, functionName: "effectiveCapsOf", args: [payer, delegate] });
     const rpcOpts = { allowed: rpcs, timeoutMs, allowLoopbackHttp: dev };
-
-    const escrowData = encodeFunctionData({ abi: ESCROW_READ_ABI, functionName: "escrowOf", args: [payer] });
 
     // Round 1: chain id and latest height from every RPC.
     const heads = await Promise.allSettled(
@@ -263,32 +270,35 @@ export function createChainReader(options: ChainReaderOptions): ChainReader {
     const block = low - 1n;
 
     // Round 2: every read at the pinned block on every RPC. A disagreement here is final.
-    const settled = await Promise.allSettled(
-      rpcs.map(async (url): Promise<RawRead> => {
-        const [delegation, caps, escrowRaw] = await Promise.all([
-          ethCall(url, { to, data: delegationData }, block, rpcOpts),
-          ethCall(url, { to, data: capsData }, block, rpcOpts),
-          ethCall(url, { to, data: escrowData }, block, rpcOpts),
-        ]);
-        return { delegation, caps, escrow: escrowRaw };
-      }),
-    );
-
-    const reads: RawRead[] = [];
-    for (const [i, s] of settled.entries()) {
-      if (s.status === "rejected") return { transient: `rpc[${i}] ${errorMessage(s.reason)}` };
-      reads.push(s.value);
+    const settled = await Promise.allSettled(rpcs.map((url) => Promise.all(datas.map((data) => ethCall(url, { to, data }, block, rpcOpts)))));
+    const reads: `0x${string}`[][] = [];
+    for (const [i, r] of settled.entries()) {
+      if (r.status === "rejected") return { transient: `rpc[${i}] ${errorMessage(r.reason)}` };
+      reads.push(r.value);
     }
     const first = reads[0]!;
-    for (const r of reads) {
-      if (r.delegation !== first.delegation || r.caps !== first.caps || r.escrow !== first.escrow) {
-        return unconfirmed("RPCs disagree");
-      }
-    }
+    if (reads.some((r) => r.some((x, i) => x !== first[i]))) return unconfirmed("RPCs disagree");
+    return { ok: true, answers: first };
+  }
 
-    const decoded = decode(first);
+  async function readOnce(network: string, payerIn: string, delegateIn: string, readAt: number): Promise<DelegationResult | Transient> {
+    const chain = /^eip155:([1-9][0-9]*)$/.exec(network);
+    if (!chain) return unconfirmed("network not in the deployment entry");
+    const chainId = Number(chain[1]);
+    const payer = account(payerIn, chainId);
+    const delegate = account(delegateIn, chainId);
+    if (!payer || !delegate) return unconfirmed("bad payer or delegate");
+
+    const delegationData = encodeFunctionData({ abi: ESCROW_READ_ABI, functionName: "delegationOf", args: [payer, delegate] });
+    const capsData = encodeFunctionData({ abi: ESCROW_READ_ABI, functionName: "effectiveCapsOf", args: [payer, delegate] });
+    const escrowData = encodeFunctionData({ abi: ESCROW_READ_ABI, functionName: "escrowOf", args: [payer] });
+    const agreed = await agreedOnce(network, [delegationData, capsData, escrowData]);
+    if (!("ok" in agreed) || !agreed.ok) return agreed;
+    const [delegation, caps, escrowRaw] = agreed.answers as [`0x${string}`, `0x${string}`, `0x${string}`];
+
+    const decoded = decode({ delegation, caps, escrow: escrowRaw });
     if (!decoded) return unconfirmed("malformed escrow answer");
-    const { d, caps, e } = decoded;
+    const { d, caps: c, e } = decoded;
     return {
       ok: true,
       value: {
@@ -296,13 +306,32 @@ export function createChainReader(options: ChainReaderOptions): ChainReader {
         delegate,
         active: d.validUntil !== 0n && !d.revoked,
         validUntil: d.validUntil.toString(),
-        maxVoucherAmount: min(caps[0], e.maxVoucherAmount).toString(),
-        maxPerWindow: min(caps[1], e.maxPerWindow).toString(),
-        delegateMaxVoucherAmount: min(caps[2], d.maxVoucherAmount).toString(),
-        delegateMaxPerWindow: min(caps[3], d.maxPerWindow).toString(),
+        maxVoucherAmount: min(c[0], e.maxVoucherAmount).toString(),
+        maxPerWindow: min(c[1], e.maxPerWindow).toString(),
+        delegateMaxVoucherAmount: min(c[2], d.maxVoucherAmount).toString(),
+        delegateMaxPerWindow: min(c[3], d.maxPerWindow).toString(),
         readAt,
       },
     };
+  }
+
+  async function readChannelOnce(network: string, key: string, payerIn: string): Promise<ChannelResult | Transient> {
+    const chain = /^eip155:([1-9][0-9]*)$/.exec(network);
+    const payer = chain ? account(payerIn, Number(chain[1])) : null;
+    if (!payer || !/^0x[0-9a-fA-F]{64}$/.test(key)) return unconfirmed("bad channel key or payer");
+    const data = encodeFunctionData({ abi: ESCROW_READ_ABI, functionName: "channelBooks", args: [key as `0x${string}`, payer] });
+    const agreed = await agreedOnce(network, [data]);
+    if (!("ok" in agreed) || !agreed.ok) return agreed;
+    const raw = agreed.answers[0]!;
+    if (raw.length !== 2 + 4 * 64) return unconfirmed("malformed escrow answer");
+    try {
+      const [state, unpaid, totalUnpaid, held] = decodeFunctionResult({ abi: ESCROW_READ_ABI, functionName: "channelBooks", data: raw });
+      const again = encodeFunctionResult({ abi: ESCROW_READ_ABI, functionName: "channelBooks", result: [state, unpaid, totalUnpaid, held] });
+      if (again.toLowerCase() !== raw.toLowerCase()) return unconfirmed("malformed escrow answer");
+      return { ok: true, state };
+    } catch {
+      return unconfirmed("malformed escrow answer");
+    }
   }
 
   /** The newest generation an invalidation or clear has passed for `key`. */
@@ -360,6 +389,21 @@ export function createChainReader(options: ChainReaderOptions): ChainReader {
       cache.clear();
       floors.clear();
       inFlight.clear();
+    },
+    async readChannel(network, key, payer) {
+      const started = performance.now();
+      for (let attempt = 1; ; attempt++) {
+        let res: ChannelResult | Transient;
+        try {
+          res = await readChannelOnce(network, key, payer);
+        } catch {
+          res = { transient: "read failed" };
+        }
+        if (!("transient" in res)) return res;
+        const delay = RETRY_DELAYS_MS[attempt - 1] ?? 0;
+        if (attempt >= READ_ATTEMPTS || performance.now() - started + delay > RETRY_WINDOW_MS) return unconfirmed(res.transient);
+        await sleep(delay);
+      }
     },
   };
 }

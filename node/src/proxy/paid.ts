@@ -2,26 +2,53 @@ import { privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
 import { getAddress, type Hex } from "viem";
 import { toGuardChain, type ChainReader, type ChainState } from "../chain/reads.js";
 import {
+  channelDebtAnswer,
+  CHANNEL_CODES,
+  CHANNEL_REQUIRED_META,
+  CHANNEL_VOUCHER_META,
+  channelVoucherEnvelope,
   confirmationFor,
   correctedNow,
+  PAYMENT_SCHEMES_META,
   type BuiltInNetwork,
+  type Eip155NetworkEntry,
   type Confirmation,
+  type DebtRenewal,
   type GuardId,
   type Quote,
 } from "@goassay-ai/sdk/core";
 import { parseCaip10 } from "../deployments.js";
 import type { QuoteCache } from "../guards/quote-cache.js";
-import { builtInNetwork, guardAndBuild, type ProxyGuardContext } from "../guards/sign.js";
+import { builtInNetwork, builtInNetworks, guardAndBuild, type ProxyGuardContext } from "../guards/sign.js";
+import {
+  answerCode,
+  CHANNEL_RETRY_CODES,
+  CHANNEL_RETRY_TEXT,
+  channelNetworkOf,
+  checkChannelOffer,
+  checkLanes,
+  finishPlannedLane,
+  laneOutcomeOf,
+  NO_ANSWER,
+  offeredSchemes,
+  planLane,
+  poolOf,
+  unsettledText,
+  writePlan,
+  type LaneLimits,
+  type LanePlan,
+} from "./channel-lane.js";
 import { recordHeld, SpendLimitError } from "../guards/spend-record.js";
 import { silentLogger, type Logger } from "../log/logger.js";
 import { identifyCredential } from "../oauth/flow.js";
 import type { ResolvedDeployment } from "../profile/deployments.js";
 import type { Keychain } from "../profile/keychain.js";
 import { withLock, type LockHandle, type LockOptions, type ProfileRef } from "../profile/lock.js";
-import { createProfile, paidUrlKey, readLimits, readPaidUrls, readProfileFor, readState, updateProfile } from "../profile/profile.js";
+import { createProfile, paidUrlKey, readLimits, readPaidUrls, readProfileFor, readState, updateProfile, usdToUnits } from "../profile/profile.js";
 import { generate } from "../signer/keygen.js";
 import { openThroughGate } from "./browser-gate.js";
-import { apiGet, apiRequest, BindError, bindDelegateKey, type BindResult } from "./delegate-bind.js";
+import { apiExchange, apiGet, apiRequest, BindError, bindDelegateKey, type BindResult } from "./delegate-bind.js";
+import { hasLanes, renewProfileDebts } from "./channel-debt.js";
 import { DELEGATE_STATUS_PATH, startEnablePoll } from "./enable-poll.js";
 import { CONFIRMATION_TTL_MS, type CallRegistry, type ForwardedCall } from "./calls.js";
 import { scopeMissingText, toolScopeMissingOf, type FetchLike } from "./forwarder.js";
@@ -56,7 +83,11 @@ import type { JsonRpcResponse } from "./protocol.js";
  * On each `tools/call` answer the proxy forwarded:
  * - quotes in `get_tool` and `search_tools` results go to the G3 cache (the proxy fills it from
  *   `tools/list` itself);
- * - `PAYMENT_DEBT_OUTSTANDING`: the answer, with " Settle it at {WEB}/funding";
+ * - `PAYMENT_DEBT_OUTSTANDING`: when `state.json` holds a channel lane, the channel debts this
+ *   computer signed are renewed once (`channel-debt.ts`; at most once a minute, within it only
+ *   listed; never with `--no-paid`) and the agent reads what to do (`channelDebtAnswer`): being
+ *   collected, no payment record here (settle in the app once offered), or call again soon; with
+ *   a per-call debt (or no lane here) the answer, with " Settle it at {WEB}/funding";
  * - `AUTH_SCOPE_MISSING` (a free-only key on a paid tool, before or after a voucher): the scope
  *   text ("This key cannot pay. ..." for `payments`); nothing is signed, re-signed or resent;
  * - `PAYMENT_REQUIRED` with `--no-paid`: the answer unchanged;
@@ -71,8 +102,9 @@ import type { JsonRpcResponse } from "./protocol.js";
  *   the call is sent again with the same params, the same idempotency key and
  *   `_meta["assay/voucher"]`, and that answer goes to the host unchanged.
  *
- * At most one voucher per host call (`ForwardedCall.claimVoucher`). Nothing here calls
- * `/escrow/debts/*` or `/escrow/next-seq`. No key, signature or token reaches a log line.
+ * At most one voucher per host call (`ForwardedCall.claimVoucher`). `/escrow/debts` is called only
+ * for a channel-debt renew (a lane in `state.json`), `/escrow/next-seq` never. No key, signature or
+ * token reaches a log line.
  */
 
 /** What the paid path needs from the proxy. */
@@ -111,6 +143,11 @@ export interface PaidOptions {
   readonly now?: () => number;
   /** The enable-paid wait: every 5 s (15 s after 2 minutes), for up to 15 minutes. */
   readonly pollMs?: number;
+  /**
+   * Tests only (the CLI never passes this): network ids of the built-in table treated as having the
+   * channel door. It changes no escrow, asset or RPC: those still come from `deployments.json`.
+   */
+  readonly channelNetworks?: readonly string[];
   readonly pollMaxMs?: number;
 }
 
@@ -165,10 +202,51 @@ export function confirmationMessage(c: Confirmation, decimals: number, chainId: 
   return `Pay ${usdText(BigInt(c.amount), decimals)} to ${provider} for ${c.tool}?`;
 }
 
+/** How long channels are not offered after a channel refusal the next call cannot fix (`CHANNEL_LIMIT` and the like). */
+export const CHANNEL_PAUSE_MS = 60 * 60 * 1000;
+/** This many `CHANNEL_ROTATE` within {@link CHANNEL_PAUSE_MS} pause channels as well. */
+export const CHANNEL_ROTATE_PAUSE_COUNT = 5;
+/** After a paid call refused for a debt, channel debts are renewed at most this often. */
+export const DEBT_RENEW_INTERVAL_MS = 60_000;
+
+/** The `assay/error` of a result, or `null`. */
+function assayErrorOf(result: unknown): Record<string, unknown> | null {
+  const meta = isObject(result) ? result._meta : undefined;
+  const e = isObject(meta) ? meta["assay/error"] : undefined;
+  return isObject(e) && typeof e.code === "string" ? e : null;
+}
+
+/** What one channel voucher for this call may use: the offer passed its checks against the requirement. */
+interface ChannelSetup {
+  net: ReturnType<typeof channelNetworkOf>;
+  pool: NonNullable<ReturnType<typeof poolOf>>;
+  limits: LaneLimits;
+  lifetimeSeconds: number;
+}
+
 export class PaidPath {
   private readonly log: Logger;
   private readonly now: () => number;
   private poll: { stop: () => void; network: string; payer: string; address: string } | null = null;
+  /** Until when (ms) the proxy offers no channel. */
+  private channelPausedUntil = 0;
+  /** When Assay rotated a lane (ms); a burst of rotations pauses channels too. */
+  private rotations: number[] = [];
+  /** Before when (ms) a debt refusal does not renew channel debts again. */
+  private debtRenewNotBefore = 0;
+  /** The results of the last renewing run, by intent (what a throttled run reports). */
+  private lastRenewals = new Map<string, DebtRenewal>();
+
+  /** LIMIT-like codes pause channel offers for an hour; so do {@link CHANNEL_ROTATE_PAUSE_COUNT} rotations within an hour. */
+  private channelRefused(code: string): void {
+    const now = this.now();
+    if (code === CHANNEL_CODES.CHANNEL_ROTATE) {
+      this.rotations = [...this.rotations.filter((t) => now - t < CHANNEL_PAUSE_MS), now];
+      if (this.rotations.length < CHANNEL_ROTATE_PAUSE_COUNT) return;
+      this.rotations = [];
+    }
+    this.channelPausedUntil = now + CHANNEL_PAUSE_MS;
+  }
 
   constructor(
     private readonly o: PaidOptions,
@@ -176,6 +254,21 @@ export class PaidPath {
   ) {
     this.log = (o.log ?? silentLogger).child("paid");
     this.now = o.now ?? Date.now;
+  }
+
+  /** `assay/paymentSchemes` on every forwarded call, when this environment has a channel-capable network. */
+  callMeta(): Record<string, unknown> {
+    if (this.o.noPaid || this.now() < this.channelPausedUntil) return {};
+    const offered = offeredSchemes(this.channelCapable());
+    return offered === null ? {} : { [PAYMENT_SCHEMES_META]: offered };
+  }
+
+  /** The built-in networks of this environment, with the channel door as `deployments.json` (or a test) says. */
+  private channelCapable(): ReadonlyMap<string, Eip155NetworkEntry> {
+    const networks = builtInNetworks(this.o.deployment.environment);
+    const extra = this.o.channelNetworks ?? [];
+    if (extra.length === 0) return networks;
+    return new Map([...networks].map(([id, e]) => [id, extra.includes(id) ? { ...e, channels: true } : e]));
   }
 
   /** Quotes from a remote `tools/list` result (before alias rewriting). */
@@ -191,7 +284,8 @@ export class PaidPath {
     const scoped = this.scopeRefused(response);
     if (scoped !== null) return scoped;
     const state = paymentState(result);
-    if (state.kind === "debt") return { ...response, result: appendText(result, debtSuffix(this.o.deployment.web)) };
+    if (state.kind === "debt") return this.debtAnswer(response, result);
+    if (state.kind === "error" && state.code === CHANNEL_CODES.PAYMENT_UNSETTLED_LIMIT) return this.unsettled(response, result);
     if (state.kind !== "payment-required" || this.o.noPaid) return response;
     try {
       return await this.pay(call, response, result, state.requirement);
@@ -218,6 +312,88 @@ export class PaidPath {
     if (missing === undefined) return null;
     this.log.info("scope missing", { scope: missing.scope ?? "unnamed" });
     return { ...response, result: errorResult(scopeMissingText(missing.scope), response.result) };
+  }
+
+  /**
+   * `PAYMENT_DEBT_OUTSTANDING`: the channel debts this computer signed are renewed once (within a
+   * minute of the last renew only listed), and the agent reads what to do (`channelDebtAnswer`,
+   * the server's `_meta` kept): being collected, no payment record here (settle in the app once
+   * offered), or call again soon. A per-call debt, no lane here or no debt list: the answer with
+   * " Settle it at {WEB}/funding", as before. Never throws.
+   */
+  private async debtAnswer(response: JsonRpcResponse, result: Record<string, unknown>): Promise<JsonRpcResponse> {
+    try {
+      const answer = channelDebtAnswer(await this.renewDebts(), this.o.deployment.web);
+      if (answer !== null) return { ...response, result: errorResult(answer.text, result) };
+    } catch (err) {
+      this.log.warn("channel debt renew not completed", { error: err instanceof Error ? err.name : "error" });
+    }
+    return { ...response, result: appendText(result, debtSuffix(this.o.deployment.web)) };
+  }
+
+  /**
+   * One renew of this computer's channel debts, or `null` when there is nothing it could renew
+   * (`--no-paid`, no channel-capable network, no lane in `state.json`, no payment key, signed out).
+   * At most one renewing run a minute; within it the debts are only listed (nothing signed) and a
+   * debt reads as the last run left it. The API is called outside the profile lock.
+   */
+  private async renewDebts(): Promise<DebtRenewal[] | null> {
+    if (this.o.noPaid) return null;
+    const networks = new Map([...this.channelCapable()].filter(([, e]) => e.channels === true).map(([id, e]) => [id, channelNetworkOf(e)]));
+    if (networks.size === 0 || !hasLanes(this.o.profile)) return null;
+    const account = await this.account();
+    if (account === null) return null;
+    const bearer = await this.host.bearer();
+    if (bearer === null) return null;
+    const now = this.now();
+    const throttled = now < this.debtRenewNotBefore;
+    if (!throttled) this.debtRenewNotBefore = now + DEBT_RENEW_INTERVAL_MS;
+    const renewals = await renewProfileDebts(
+      {
+        profile: this.o.profile,
+        ...(this.o.lockOptions !== undefined ? { lockOptions: this.o.lockOptions } : {}),
+        networks,
+        account,
+        api: (method, path, body) => apiExchange(this.o.fetch, this.o.deployment.api, bearer, method, path, body, this.log),
+        now: this.now,
+        dateOffset: () => this.host.dateOffset(),
+      },
+      throttled ? { renew: false, retryAfterMs: this.debtRenewNotBefore - now, previous: this.lastRenewals } : {},
+    );
+    if (!throttled) this.lastRenewals = new Map(renewals.map((r) => [r.intentId, r]));
+    this.log.info("channel debts", { renewed: renewals.filter((r) => r.status === "renewed").length, debts: renewals.length, listOnly: throttled });
+    return renewals;
+  }
+
+  /** `PAYMENT_UNSETTLED_LIMIT` with the text the agent reads; the server's `_meta` is kept. */
+  private unsettled(response: JsonRpcResponse, result: Record<string, unknown>): JsonRpcResponse {
+    return { ...response, result: errorResult(unsettledText(assayErrorOf(result)?.retryAfter), result) };
+  }
+
+  /**
+   * The channel lane for this payment, when the server offered one and this environment's entry for
+   * the network has the channel door: the offer is checked against the requirement and the built-in
+   * entry (an offer for any other escrow is refused, never signed). `null`: pay per call.
+   */
+  private channelSetup(requirement: Record<string, unknown>, network: BuiltInNetwork, localAddress: string, chain: ChainState | null, offer: unknown): ChannelSetup | null {
+    if (offer === undefined || offer === null || this.now() < this.channelPausedUntil) return null;
+    const entry = this.channelCapable().get(network.id);
+    if (entry?.channels !== true) return null;
+    const net = channelNetworkOf(entry);
+    const checked = checkChannelOffer(offer, requirement, net);
+    const pool = poolOf(net, requirement, localAddress);
+    if (!checked.ok || pool === null) {
+      if (!checked.ok) this.log.info("channel offer refused", { reason: checked.reason });
+      return null;
+    }
+    const perDay = usdToUnits(readLimits(this.o.profile).perDay, entry.decimals);
+    const window = chain?.delegateMaxPerWindow !== undefined ? BigInt(chain.delegateMaxPerWindow) : perDay;
+    return {
+      net,
+      pool,
+      limits: { price: checked.offer.price, maxLanes: checked.offer.maxLanes, rotateAt: window < perDay ? window : perDay },
+      lifetimeSeconds: checked.offer.lifetimeSeconds,
+    };
   }
 
   private refused(response: JsonRpcResponse, result: Record<string, unknown>, r: Refusal): JsonRpcResponse {
@@ -269,7 +445,9 @@ export class PaidPath {
 
     // G3: the cached quote, or a `get_tool` sent just now on the same URL.
     const quote = this.o.quotes.get(tool) ?? (await this.fetchQuote(tool));
-    return this.guardSignRetry(call, response, result, requirement, network, tool, local.address, chain, quote, urlKey, payer);
+    const meta = isObject(result._meta) ? result._meta : {};
+    const offer = Object.keys(this.callMeta()).length > 0 ? meta[CHANNEL_REQUIRED_META] : undefined;
+    return this.guardSignRetry(call, response, result, requirement, network, tool, local.address, chain, quote, urlKey, payer, offer);
   }
 
   // ---- step 7 ---------------------------------------------------------------------------
@@ -286,17 +464,21 @@ export class PaidPath {
     quote: Quote | null,
     urlKey: string,
     payer: string | null,
+    offer: unknown,
   ): Promise<JsonRpcResponse> {
     const { deployment, profile } = this.o;
     const env = deployment.environment;
     const forwardedCall = { tool, at: Math.floor(call.startedAt / 1000) };
     let confirmation: Confirmation | null = null;
+    // A channel lane: a lane that needs a chain check gets it now, outside the paid lock.
+    const lane = this.channelSetup(requirement, network, localAddress, chain, offer);
+    if (lane !== null) await checkLanes(profile, this.o.chain, lane.pool, lane.limits, this.now, this.o.lockOptions).catch(() => undefined);
 
     for (let pass = 0; pass < 2; pass++) {
       type Step =
         | { kind: "refused"; guard: GuardId; code: string; reason: string }
         | { kind: "again" }
-        | { kind: "signed"; envelope: VoucherEnvelope };
+        | { kind: "signed"; envelope: VoucherEnvelope; metaKey?: string; channelId?: string };
       const step = await withLock(
         profile,
         async (lock): Promise<Step> => {
@@ -333,17 +515,39 @@ export class PaidPath {
           // The host cancelled the call (review M2): nobody would receive the paid answer.
           if (call.cancelled) return { kind: "refused", guard: "G1", code: "G1_NOT_FORWARDED", reason: "the call was cancelled" };
           if (!call.claimVoucher()) return { kind: "again" };
+          // The channel step, from the lane record in state.json only; `null` pays per call.
+          let plan: LanePlan | null = null;
+          if (lane !== null) {
+            try {
+              const perDay = usdToUnits(limits.perDay, network.decimals);
+              const rotateAt = perDay < lane.limits.rotateAt ? perDay : lane.limits.rotateAt;
+              const issuedAt = correctedNow(nowSeconds, this.host.dateOffset());
+              plan = planLane(profile, lock, lane.net, lane.pool, { ...lane.limits, rotateAt }, issuedAt, lane.lifetimeSeconds, nowSeconds);
+            } catch {
+              plan = null;
+            }
+          }
+          // Only what the voucher adds counts toward the daily limit: the price, or nothing when a
+          // channel voucher signs the same total again.
+          const spend = plan !== null ? plan.increase : built.typedData.message.amount;
           try {
-            recordHeld(profile, lock, built.typedData.message.amount, { limits, decimals: network.decimals, now: this.now });
+            if (spend > 0n) recordHeld(profile, lock, spend, { limits, decimals: network.decimals, now: this.now });
           } catch (err) {
             if (err instanceof SpendLimitError) return { kind: "refused", guard: "G7", code: "G7_PER_DAY", reason: "the daily limit set for this computer would be passed" };
             throw err;
           }
+          // Write-ahead: the lane's new total is on disk before it is signed.
+          if (plan !== null) writePlan(profile, lock, plan);
           if (record !== null && record.payer === null && payer !== null) {
             // G4: the payer is recorded once the chain confirmed its grant to this key.
             updateProfile(profile, lock, (current) => ({ ...current, payer, network: network.id }));
           }
           lock.assertHeld();
+          if (plan !== null) {
+            const signature = await account.signTypedData(plan.typedData as never);
+            const envelope = channelVoucherEnvelope(plan.wire, signature, providerId, requirement.contractVersion) as unknown as VoucherEnvelope;
+            return { kind: "signed", envelope, metaKey: CHANNEL_VOUCHER_META, channelId: plan.channelId };
+          }
           const signature = await account.signTypedData(built.typedData);
           return { kind: "signed", envelope: voucherEnvelope(built.wire, signature, providerId, requirement.contractVersion) };
         },
@@ -352,12 +556,40 @@ export class PaidPath {
 
       if (step.kind === "again") return response; // R-MCP-9: a second PAYMENT_REQUIRED goes back unsigned
       if (step.kind === "signed") {
-        this.log.info("voucher signed", { tool, amount: (requirement.amount as { amount: string }).amount });
-        const answer = await this.host.resend(call, withVoucher(call.params, step.envelope));
+        this.log.info(step.channelId ? "channel voucher signed" : "voucher signed", { tool, amount: (requirement.amount as { amount: string }).amount });
+        const params =
+          step.metaKey === undefined
+            ? withVoucher(call.params, step.envelope)
+            : { ...call.params, _meta: { ...(isObject(call.params._meta) ? call.params._meta : {}), [step.metaKey]: step.envelope } };
+        let answer: JsonRpcResponse;
+        try {
+          answer = await this.host.resend(call, params);
+        } catch (err) {
+          // No answer: what the server did with the voucher is unknown, so the lane is never reused
+          // and its pair stays renewable (it may have been stored; spec 12.4).
+          if (step.channelId) await finishPlannedLane(profile, step.channelId, "unknown", this.o.lockOptions).catch(() => undefined);
+          throw err;
+        }
         const after = "result" in answer ? paymentState(answer.result) : { kind: "none" as const };
         if (after.kind === "error" && after.code === DELEGATE_INACTIVE_CODE && payer !== null) {
           this.o.chain.invalidate(payer, localAddress, network.id);
         }
+        if (step.channelId) {
+          const code = "result" in answer ? answerCode(answer.result) : NO_ANSWER;
+          // A JSON-RPC error with no result is no answer too: `unknown`, never a refusal.
+          // The reason tells a pre-store spend-policy refusal (re-armed) from one that may not be.
+          const outcome = code === NO_ANSWER ? "unknown" : laneOutcomeOf(code, "result" in answer ? assayErrorOf(answer.result)?.reason : undefined);
+          await finishPlannedLane(profile, step.channelId, outcome, this.o.lockOptions).catch(() => undefined);
+          // One voucher per host call (R-MCP-9): a channel refusal is answered with a text, and the
+          // next call opens a new lane (CHANNEL_ROTATE) or pays per call while channels pause.
+          if (code !== null && CHANNEL_RETRY_CODES.has(code) && "result" in answer) {
+            this.channelRefused(code);
+            return { ...answer, result: errorResult(CHANNEL_RETRY_TEXT, answer.result) };
+          }
+          // A debt that refused the channel voucher (nothing stored; the lane is re-armed).
+          if (after.kind === "debt" && "result" in answer) return this.debtAnswer(answer, answer.result);
+        }
+        if (after.kind === "error" && after.code === CHANNEL_CODES.PAYMENT_UNSETTLED_LIMIT && "result" in answer) return this.unsettled(answer, answer.result);
         // A key that may not pay is refused even with the voucher: say so, and sign nothing more.
         return this.scopeRefused(answer) ?? answer;
       }
@@ -455,7 +687,7 @@ export class PaidPath {
         const again = await this.host.resend(call, call.params);
         if (!("result" in again)) return again;
         const state = paymentState(again.result);
-        if (state.kind !== "payment-required") return this.onPlainAnswer(again);
+        if (state.kind !== "payment-required") return await this.onPlainAnswer(again);
         return this.pay(call, again, again.result, state.requirement, true);
       }
     }
@@ -469,11 +701,11 @@ export class PaidPath {
     return { ...response, result: errorResult(notEnabledText(link, address), result) };
   }
 
-  private onPlainAnswer(answer: JsonRpcResponse): JsonRpcResponse {
+  private async onPlainAnswer(answer: JsonRpcResponse): Promise<JsonRpcResponse> {
     if (!("result" in answer)) return answer;
     const scoped = this.scopeRefused(answer);
     if (scoped !== null) return scoped;
-    return paymentState(answer.result).kind === "debt" ? { ...answer, result: appendText(answer.result, debtSuffix(this.o.deployment.web)) } : answer;
+    return paymentState(answer.result).kind === "debt" ? this.debtAnswer(answer, answer.result) : answer;
   }
 
   /**

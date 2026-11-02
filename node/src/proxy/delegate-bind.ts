@@ -169,6 +169,39 @@ async function request(
   }
 }
 
+/**
+ * One API request whose refusal the caller reads (the channel-debt renew): the HTTP status, the
+ * parsed body (`{data}` or `{error}`) and the `Date` header; `null` on no answer, a timeout, or an
+ * oversized or unparsable body. Logs the path prefix and the status only.
+ */
+export async function apiExchange(
+  fetch: FetchLike,
+  apiBase: string,
+  bearer: string,
+  method: "GET" | "POST",
+  path: string,
+  body?: unknown,
+  log: Logger = silentLogger,
+): Promise<{ status: number; body: unknown; date: string | null } | null> {
+  try {
+    const signal = requestSignal(API_TIMEOUT_MS);
+    const res = await fetch(`${apiBase.replace(/\/+$/, "")}${path}`, {
+      method,
+      headers: { accept: "application/json", ...(body !== undefined ? { "content-type": "application/json" } : {}) },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      bearer,
+      log,
+      signal,
+    });
+    if (res.status < 200 || res.status > 299) log.info("API refused", { path: path.split("/").slice(0, 3).join("/"), status: res.status });
+    const text = await readCapped(res, MAX_BODY_BYTES, signal);
+    if (text === null) return null;
+    return { status: res.status, body: text === "" ? null : (JSON.parse(text) as unknown), date: res.headers.get("date") };
+  } catch {
+    return null;
+  }
+}
+
 export interface BindInputs {
   readonly account: TypedDataSigner;
   readonly api: ApiCall;
