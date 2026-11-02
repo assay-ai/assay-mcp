@@ -394,7 +394,7 @@ describe("proxy: channel lane", () => {
       ]);
       expect(s[1]!.voucher.channelId === s[0]!.voucher.channelId).toBe(rearmed);
     }
-  });
+  }, 30_000); // several full proxy round trips; slow Windows runners took over 5 s
 
   it("any other refusal retires the lane", async () => {
     const u = await unit({ answer: (_m, n) => (n === 0 ? refusal("CHANNEL_DESYNC") : undefined) });
