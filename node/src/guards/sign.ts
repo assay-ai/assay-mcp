@@ -31,7 +31,8 @@ const NETWORKS = new Map<Environment, ReadonlyMap<string, Eip155NetworkEntry>>()
 export function networkEntriesOf(table: Deployments, env: Environment): ReadonlyMap<string, Eip155NetworkEntry> {
   if (!Object.hasOwn(table, env)) return new Map();
   const entries = Object.entries(table[env].networks).map(
-    ([id, n]) => [id, { escrow: n.escrow, asset: n.asset, decimals: n.decimals, rpcUrls: n.rpc.filter((r) => !isPlaceholder(r)) }] as const,
+    ([id, n]) =>
+      [id, { escrow: n.escrow, asset: n.asset, decimals: n.decimals, rpcUrls: n.rpc.filter((r) => !isPlaceholder(r)), ...(n.channels === true ? { channels: true } : {}) }] as const,
   );
   return networkEntriesFrom(Object.fromEntries(entries), {
     skip: (_id, n) => isPlaceholder(n.escrow) || isPlaceholder(n.asset),

@@ -303,6 +303,7 @@ describe("readDelegation", () => {
       validUntil: "1788591800",
       maxVoucherAmount: "1000000",
       delegateMaxVoucherAmount: "500000",
+      delegateMaxPerWindow: AGREED.delegateMaxPerWindow,
     });
   });
 
@@ -624,8 +625,9 @@ describe("readDelegation", () => {
     }
   });
 
-  it("the read ABI is exactly the backend's three views", () => {
+  it("the read ABI is exactly the backend's three views and the channel view", () => {
     expect(ESCROW_READ_ABI.map((f) => ("name" in f ? f.name : "")).sort()).toEqual([
+      "channelBooks",
       "delegationOf",
       "effectiveCapsOf",
       "escrowOf",
