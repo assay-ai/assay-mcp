@@ -2,6 +2,11 @@
 
 Notable changes to `@goassay-ai/mcp`. Earlier releases are described in their release commits.
 
+## Unreleased
+
+- `limits set` asks you to type the profile name, and `dev allow` asks you to type the origin, like `allow-paid`. A plain yes no longer changes the caps or allows dev mode.
+- The payment confirmation shows the tool name without control, bidi or zero-width characters, capped at 128 characters.
+
 ## 1.2.0 - 2026-11-02
 
 Channels are now used by default: `deployments.json` marks `production` (`eip155:4663`) and `staging` (`eip155:46630`) with `"channels": true`. The lanes live in the profile's state file, `{dir}/profiles/<profile>.state.json` (`{dir}` is `~/Library/Application Support/assay-mcp` on macOS, `~/.config/assay-mcp` on Linux, `%USERPROFILE%\AppData\Roaming\assay-mcp` on Windows), created on the first channel payment. The payment core is still `@goassay-ai/sdk` 1.1.0.

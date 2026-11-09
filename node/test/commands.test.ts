@@ -736,6 +736,7 @@ describe("limits", () => {
   });
 
   it("limits set on a TTY writes under the lock and keeps unspecified options", async () => {
+    confirmAnswer = true;
     const t = deps({ isTTY: true });
     const provider = `0x${"ab".repeat(20)}`;
     expect(await runLimits(["set", "--per-call", "1", "--per-day", "$10", "--confirm-above", "0.75", "--providers", provider], t)).toBe(0);
@@ -749,6 +750,15 @@ describe("limits", () => {
     expect(readLimits(ref())).toMatchObject({ confirmAbove: null, providers: null });
     const st = lstatSync(join(dir, profileFile("default", "limits")));
     if (process.platform !== "win32") expect(st.mode & 0o777).toBe(0o600);
+  });
+
+  it("limits set needs the profile name typed: a plain yes changes nothing", async () => {
+    confirmAnswer = false; // the prompt answers "y"
+    expect(await runLimits(["set", "--per-call", "40", "--per-day", "400"], deps({ isTTY: true }))).toBe(0);
+    expect(output()).toContain("Nothing changed.");
+    expect(confirmAsked[0]).toContain("Type the profile name (default)");
+    expect(confirmAsked[0]).toContain("$40 a call");
+    expect(existsSync(dir)).toBe(false);
   });
 
   it.each([
@@ -808,18 +818,23 @@ describe("allow-paid / disallow-paid", () => {
 });
 
 describe("dev allow", () => {
-  it("writes dev-origins.json on a TTY after a yes", async () => {
+  it("writes dev-origins.json on a TTY after the origin is typed", async () => {
     confirmAnswer = true;
+    typedAnswer = E2E_MCP;
     expect(await runDevAllow([E2E_MCP], deps({ isTTY: true }))).toBe(0);
     expect(confirmAsked).toHaveLength(1);
+    expect(confirmAsked[0]).toContain(`Type the origin (${E2E_MCP})`);
     expect(readDevOrigins(dir)).toEqual([E2E_MCP]);
     if (process.platform !== "win32") expect(lstatSync(join(dir, "dev-origins.json")).mode & 0o777).toBe(0o600);
   });
 
-  it("writes nothing on a no (exit 0), and refuses origins of no built-in dev entry", async () => {
+  it("writes nothing on a no or a plain yes (exit 0), and refuses origins of no built-in dev entry", async () => {
     confirmAnswer = false;
     expect(await runDevAllow([E2E_MCP], deps({ isTTY: true }))).toBe(0);
     expect(output()).toContain("Nothing changed.");
+    expect(existsSync(dir)).toBe(false);
+    confirmAnswer = true; // types the profile name, not the origin
+    expect(await runDevAllow([E2E_MCP], deps({ isTTY: true }))).toBe(0);
     expect(existsSync(dir)).toBe(false);
     confirmAnswer = true;
     expect(await runDevAllow(["https://evil.example"], deps({ isTTY: true }))).toBe(2);
@@ -831,6 +846,7 @@ describe("dev allow", () => {
 describe("dev allow (lock and unreadable file, review M7)", () => {
   it("writes under the dev-origins lock and refuses to replace an unreadable file", async () => {
     confirmAnswer = true;
+    typedAnswer = E2E_MCP;
     // A held dev-origins lock blocks the write until the timeout.
     let release!: () => void;
     const held = new Promise<void>((r) => (release = r));
