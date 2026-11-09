@@ -195,11 +195,26 @@ export function usdText(amount: bigint, decimals: number): string {
   return `$${whole}${fraction ? `.${fraction}` : ""}`;
 }
 
-/** The G7 prompt, from the guards' own parsed values only (never server text). */
+/** Longest tool name shown in a payment prompt, in code points. */
+export const MAX_PROMPT_TOOL_NAME = 128;
+
+/**
+ * A tool name as shown in a payment prompt: the name comes from the server's `tools/list`, so
+ * control, bidi and zero-width characters are removed and the length is capped, and a name
+ * cannot fake or hide the rest of the prompt.
+ */
+export function promptToolName(name: string): string {
+  // eslint-disable-next-line no-control-regex
+  const clean = [...name.replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]/g, "")];
+  if (clean.length === 0) return "(unnamed tool)";
+  return clean.length > MAX_PROMPT_TOOL_NAME ? `${clean.slice(0, MAX_PROMPT_TOOL_NAME).join("")}…` : clean.join("");
+}
+
+/** The G7 prompt, from the guards' own parsed values only; the tool name is made printable. */
 export function confirmationMessage(c: Confirmation, decimals: number, chainId: number): string | null {
   const provider = accountOn(c.provider, chainId);
   if (provider === null || !/^(0|[1-9][0-9]*)$/.test(c.amount)) return null;
-  return `Pay ${usdText(BigInt(c.amount), decimals)} to ${provider} for ${c.tool}?`;
+  return `Pay ${usdText(BigInt(c.amount), decimals)} to ${provider} for ${promptToolName(c.tool)}?`;
 }
 
 /** How long channels are not offered after a channel refusal the next call cannot fix (`CHANNEL_LIMIT` and the like). */

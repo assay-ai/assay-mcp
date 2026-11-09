@@ -150,10 +150,15 @@ export function reportFailure(command: string, err: unknown, deps: Pick<ProfileD
 /**
  * A typed confirmation: the user must type `expected` (the profile name) exactly. A shell an
  * agent drives in a pseudo-terminal passes the TTY check, so a yes/no is not enough for the
- * settings that loosen a guard (`settings set ... on`, `allow-paid`).
+ * settings that loosen a guard (`settings set ... on`, `allow-paid`, `limits set`, `dev allow`).
  */
-export async function typedConfirm(deps: Pick<ProfileDeps, "prompt">, question: string, expected: string): Promise<boolean> {
-  const answer = await deps.prompt(`${question}\nType the profile name (${expected}) to confirm, or press Enter to cancel:`);
+export async function typedConfirm(
+  deps: Pick<ProfileDeps, "prompt">,
+  question: string,
+  expected: string,
+  what = "the profile name",
+): Promise<boolean> {
+  const answer = await deps.prompt(`${question}\nType ${what} (${expected}) to confirm, or press Enter to cancel:`);
   return answer === expected;
 }
 

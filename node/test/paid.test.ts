@@ -31,7 +31,7 @@ import {
   quotesFromList,
   quotesFromSearch,
 } from "../src/proxy/meta.js";
-import { PaidPath, usdText, type PaidHost } from "../src/proxy/paid.js";
+import { confirmationMessage, MAX_PROMPT_TOOL_NAME, PaidPath, promptToolName, usdText, type PaidHost } from "../src/proxy/paid.js";
 import { currentAccess } from "../src/oauth/tokens.js";
 import { FakeAs, rerouteFetch } from "./helpers/fake-as.js";
 
@@ -791,6 +791,21 @@ describe("meta", () => {
     expect(usdText(250_000n, 6)).toBe("$0.25");
     expect(usdText(5_000_000n, 6)).toBe("$5");
     expect(usdText(1n, 6)).toBe("$0.000001");
+  });
+
+  it("the payment prompt shows a printable, capped tool name", () => {
+    expect(promptToolName("get_weather")).toBe("get_weather");
+    expect(promptToolName("a\u0000b\nc\u001b[2Jd\u202ee\u200bf\u2028g")).toBe("abc[2Jdefg");
+    expect(promptToolName("\u0007\u202e")).toBe("(unnamed tool)");
+    const long = "x".repeat(MAX_PROMPT_TOOL_NAME + 50);
+    expect(promptToolName(long)).toBe(`${"x".repeat(MAX_PROMPT_TOOL_NAME)}…`);
+    const provider = "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC";
+    const msg = confirmationMessage(
+      { tool: "evil\nPay $0.01 to 0xabc for x?", provider: `eip155:31337:${provider}`, amount: "250000", asset: "a", network: "eip155:31337", payTo: "p", seq: "1" },
+      6,
+      31337,
+    );
+    expect(msg).toBe(`Pay $0.25 to ${provider} for evilPay $0.01 to 0xabc for x??`);
   });
 
   it("payment state", () => {
