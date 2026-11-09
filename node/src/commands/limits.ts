@@ -2,7 +2,7 @@
  * `assay-mcp limits [--profile <name>]` shows the local caps (G7, G8);
  * `assay-mcp limits set --per-call <usd> --per-day <usd> [--confirm-above <usd>|off]
  * [--providers <0x…,…>|off] [--profile <name>]` changes them, only on a TTY (spec §7.3) and
- * under the profile lock. No server response, web page, project config or flag of `serve`
+ * under the profile lock after a typed confirmation (the profile name). No server response, web page, project config or flag of `serve`
  * can change them.
  */
 import { getAddress, isAddress } from "viem";
@@ -12,7 +12,7 @@ import { readLimits, USD_RE, usdToUnits, writeLimits, type Limits } from "../pro
 import { requireTty } from "../tty.js";
 import { parseFlags, UsageError } from "./context.js";
 import { usd } from "./format.js";
-import { checkProfileName, defaultProfileDeps, profileRef, reportFailure, type ProfileDeps } from "./profile-context.js";
+import { checkProfileName, DECLINED_TEXT, defaultProfileDeps, profileRef, reportFailure, typedConfirm, type ProfileDeps } from "./profile-context.js";
 
 export function limitsLine(l: Omit<Limits, "version">): string {
   const providers = l.providers === null ? "any" : l.providers.join(", ");
@@ -71,6 +71,19 @@ export async function limits(args: readonly string[], deps: ProfileDeps): Promis
   const confirmAbove = confirmRaw === undefined ? undefined : confirmRaw.trim() === "off" ? null : dollars("confirm-above", confirmRaw);
   const providers = providersRaw === undefined ? undefined : providerList(providersRaw);
 
+  // A pseudo-terminal passes the TTY check, so a typed confirmation, like allow-paid.
+  const asked = [`${usd(perCall)} a call`, `${usd(perDay)} per 24 h`];
+  if (confirmAbove !== undefined) asked.push(`confirm above: ${confirmAbove === null ? "off" : usd(confirmAbove)}`);
+  if (providers !== undefined) asked.push(`providers: ${providers === null ? "any" : providers.join(", ")}`);
+  const yes = await typedConfirm(
+    deps,
+    `Change the local spending caps of profile "${profile}" to ${asked.join(" · ")}? Tools can then spend within these caps.`,
+    profile,
+  );
+  if (!yes) {
+    deps.print(`${DECLINED_TEXT}\n`);
+    return EXIT_OK;
+  }
   const ref = profileRef(deps, profile);
   const next = await withLock(
     ref,
