@@ -2,7 +2,7 @@
 
 Notable changes to `@goassay-ai/mcp`. Earlier releases are described in their release commits.
 
-## Unreleased
+## 1.2.1 - 2026-11-10
 
 - `limits set` asks you to type the profile name, and `dev allow` asks you to type the origin, like `allow-paid`. A plain yes no longer changes the caps or allows dev mode.
 - The payment confirmation shows the tool name without control, bidi or zero-width characters, capped at 128 characters.
